@@ -202,9 +202,11 @@ def _decode_opcode(r, op, seg_override):
         if reg != 3:
             return None  # the CPU only knows NEG here
         return f"neg {'word ' if is_mem else ''}{rm}"
-    if op == Op.SHIFT_RM16_CL:
-        reg, rm, is_mem = _modrm(r, seg_override, 16)
-        return f"{SHIFTS[reg]} {'word ' if is_mem else ''}{rm}, cl"
+    if Op.SHIFT_RM <= op < Op.SHIFT_RM + 4:
+        bits = 16 if op & 1 else 8
+        reg, rm, is_mem = _modrm(r, seg_override, bits)
+        size = ("word " if bits == 16 else "byte ") if is_mem else ""
+        return f"{SHIFTS[reg]} {size}{rm}, {'cl' if op & 2 else '1'}"
     if op == Op.INT:
         return f"int {r.u8():02X}"
     if op in LOOPS:

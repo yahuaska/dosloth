@@ -62,7 +62,6 @@ class CPU:
             Op.LODSW: self.lods,
             Op.SCASB: self.scas,
             Op.SCASW: self.scas,
-            Op.SHIFT_RM16_CL: self.shift_rm16_cl,
             Op.LOOPNE: self.loopne,
             Op.LOOPE: self.loope,
             Op.LOOP: self.loop,
@@ -108,6 +107,8 @@ class CPU:
             self.ops[Op.MOV_RM_REG + form] = self.mov_rm_reg
         for size in range(2):
             self.ops[Op.MOV_RM_IMM + size] = self.mov_rm_imm
+        for form in range(4):
+            self.ops[Op.SHIFT_RM + form] = self.shift_rm
 
         for i in range(8):
             self.ops[Op.INC_R16 + i] = self.inc_r16
@@ -865,16 +866,21 @@ class CPU:
         """Stop the CPU (opcode F4). We treat it as the end of the program, with exit code 0."""
         raise Exit(0)
 
-    def shift_rm16_cl(self, op):
-        """Shift or rotate a register or memory word by the number of bits in CL (opcode D3 + ModRM).
+    def shift_rm(self, op):
+        """Shift or rotate a register or memory operand, by 1 or by the number in CL (opcodes D0-D3 + ModRM).
 
-        The 'reg' field of the ModRM byte says which of the eight operations; see shift_with_flags.
-        Compilers use it for multiplying and dividing by powers of two when the amount is not known
-        in advance: `mov cx, 2` then `shl bx, cl` is bx * 4.
+        Two bits of the opcode say what kind:
+            bit 0: the size of the operand, 0 = byte, 1 = word (as in opcodes 88 and 89)
+            bit 1: how far, 0 = by one bit, 1 = by as many bits as CL says
+        so D0 is "byte, by 1", D1 "word, by 1", D2 "byte, by CL" and D3 "word, by CL". The 'reg' field
+        of the ModRM byte says which of the eight operations; see shift_with_flags. Compilers use it
+        for multiplying and dividing by powers of two: `shl bx, 1` is bx * 2, and
+        `mov cx, 2` then `shl bx, cl` is bx * 4.
         """
         m = modrm.decode(self, self.seg_override)
-        count = self.get8(1)  # 8-bit register 1 is CL
-        m.write16(self, self.shift_with_flags(m.reg, m.read16(self), count, 16))
+        bits = 16 if op & 1 else 8
+        count = self.get8(1) if op & 2 else 1  # 8-bit register 1 is CL
+        m.write(self, bits, self.shift_with_flags(m.reg, m.read(self, bits), count, bits))
 
     def group3_rm16(self, op):
         """Opcode F7: one of several single-operand operations on a register or memory word.

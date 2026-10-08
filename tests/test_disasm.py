@@ -82,6 +82,10 @@ class TestText(unittest.TestCase):
             (b"\xC6\xC1\x05", "mov cl, 05"),
             (b"\xC7\xC3\x34\x12", "mov bx, 1234"),
             (b"\xD3\xE3", "shl bx, cl"),
+            (b"\xD1\xE3", "shl bx, 1"),   # from esetup.exe
+            (b"\xD0\x0F", "ror byte [bx], 1"),
+            (b"\xD2\xE0", "shl al, cl"),
+            (b"\xD2\x3F", "sar byte [bx], cl"),
             (b"\xD3\x2F", "shr word [bx], cl"),
             (b"\xF7\x1F", "neg word [bx]"),
         ]

@@ -53,7 +53,7 @@ class Op(IntEnum):
     RET_NEAR = 0xC3      # pops IP from the stack
     MOV_RM_IMM = 0xC6    # C6 (byte) and C7 (word) + ModRM (reg field 0) + the constant: r/m <- imm
     INT = 0xCD           # followed by the interrupt number
-    SHIFT_RM16_CL = 0xD3  # + ModRM: shift or rotate r/m16 by CL bits; the 'reg' field picks which
+    SHIFT_RM = 0xD0      # D0..D3 + ModRM: shift or rotate r/m by 1 or by CL, the 'reg' field picks how (CPU.shift_rm)
     LOOPNE = 0xE0        # followed by a signed 8-bit displacement
     LOOPE = 0xE1         # followed by a signed 8-bit displacement
     LOOP = 0xE2          # followed by a signed 8-bit displacement

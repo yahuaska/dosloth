@@ -396,5 +396,121 @@ class TestGroups4And5(unittest.TestCase):
                 self.assertEqual(cpu.get_flag(flags.CF), cf)
 
 
+def reference_shift(kind, value, count, cf, bits):
+    """What a shift or rotate must give: (result, CF). Worked out with whole-number arithmetic.
+
+    This does not move one bit at a time as the CPU code does, so the two cannot share a mistake.
+    """
+    mask = (1 << bits) - 1
+    sv = signed(value, bits)
+    if kind in (4, 6):  # SHL
+        return (value << count) & mask, bool((value >> (bits - count)) & 1) if count <= bits else False
+    if kind == 5:  # SHR
+        return (value >> count if count < bits else 0), bool((value >> (count - 1)) & 1) if count <= bits else False
+    if kind == 7:  # SAR
+        return (sv >> count) & mask, bool((sv >> (count - 1)) & 1)
+    if kind == 0:  # ROL
+        n = count % bits
+        result = ((value << n) | (value >> (bits - n))) & mask
+        return result, bool(result & 1)
+    if kind == 1:  # ROR
+        n = count % bits
+        result = ((value >> n) | (value << (bits - n))) & mask
+        return result, bool(result >> (bits - 1))
+    ring = (1 << (bits + 1)) - 1  # RCL and RCR turn a ring that is one bit wider: the value and CF
+    full = (int(cf) << bits) | value
+    n = count % (bits + 1)
+    if kind == 2:  # RCL
+        full = ((full << n) | (full >> (bits + 1 - n))) & ring
+    else:  # RCR
+        full = ((full >> n) | (full << (bits + 1 - n))) & ring
+    return full & mask, bool(full >> bits)
+
+
+def reference_overflow(kind, value, result, cf_out, bits):
+    """OF after a shift by exactly one bit."""
+    top = bool(result >> (bits - 1))
+    if kind in (4, 6, 0, 2):
+        return top != cf_out
+    if kind == 5:
+        return bool(value >> (bits - 1))
+    if kind == 7:
+        return False
+    return top != bool((result >> (bits - 2)) & 1)  # ROR, RCR
+
+
+class TestShiftsAndRotates(unittest.TestCase):
+    """D0 (byte, by 1), D1 (word, by 1), D2 (byte, by CL), D3 (word, by CL)."""
+
+    VALUES = {8: [0x00, 0x01, 0x80, 0x81, 0x7F, 0xFF, 0xA5, 0x5A],
+              16: [0x0000, 0x0001, 0x8000, 0x8001, 0x7FFF, 0xFFFF, 0xA55A, 0x1234]}
+    COUNTS = [0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 32, 255]
+
+    def test_register_operand(self):
+        for op in (0xD0, 0xD1, 0xD2, 0xD3):
+            bits = 16 if op & 1 else 8
+            counts = self.COUNTS if op & 2 else [1]
+            for kind in range(8):
+                for value in self.VALUES[bits]:
+                    for count in counts:
+                        for cf in (False, True):
+                            label = f"{op:02X} kind {kind} value {value:X} count {count} cf {cf}"
+                            cpu = machine(bytes([op, 0xC0 | kind << 3 | 3]), cf)  # BX, or BL for the byte forms
+                            cpu.r[CPU.BX] = value if bits == 16 else 0xA500 | value  # BH must stay untouched
+                            cpu.r[CPU.CX] = 0x7F00 | count  # only CL counts
+                            start_flags = cpu.flags
+                            cpu.step()
+                            self.assertEqual(cpu.ip, 2, label)
+                            self.assertEqual(cpu.r[CPU.CX], 0x7F00 | count, label)
+                            if count == 0:  # nothing changes, flags included
+                                self.assertEqual(cpu.flags, start_flags, label)
+                                self.assertEqual(cpu.r[CPU.BX] & mask(bits), value, label)
+                                continue
+                            result, cf_out = reference_shift(kind, value, count, cf, bits)
+                            got = cpu.r[CPU.BX] if bits == 16 else cpu.r[CPU.BX] & 0xFF
+                            self.assertEqual(got, result, label)
+                            if bits == 8:
+                                self.assertEqual(cpu.r[CPU.BX] >> 8, 0xA5, label)
+                            self.assertEqual(cpu.get_flag(flags.CF), cf_out, label)
+                            if count == 1:
+                                want_of = reference_overflow(kind, value, result, cf_out, bits)
+                                self.assertEqual(cpu.get_flag(flags.OF), want_of, label)
+                            if kind in (4, 5, 6, 7):  # shifts set SF, ZF, PF; rotations leave them alone
+                                self.assertEqual({"Z": cpu.get_flag(flags.ZF), "S": cpu.get_flag(flags.SF),
+                                                  "P": cpu.get_flag(flags.PF)}, szp(result, bits), label)
+                            else:
+                                for flag in (flags.ZF, flags.SF, flags.PF):
+                                    self.assertEqual(cpu.flags & flag, start_flags & flag, label)
+
+    def test_memory_operand(self):
+        """[bx] with BX = MEM_ADDR, and the bytes around it must stay as they were."""
+        for op in (0xD0, 0xD1, 0xD2, 0xD3):
+            bits = 16 if op & 1 else 8
+            size = bits // 8
+            for kind in range(8):
+                for value in self.VALUES[bits]:
+                    for count in ([1] if not op & 2 else [1, 4, 9, 17]):
+                        label = f"{op:02X} kind {kind} value {value:X} count {count}"
+                        cpu = machine(bytes([op, kind << 3 | 7]), False)
+                        cpu.r[CPU.CX] = count
+                        # a guard byte on each side of the operand
+                        around = b"\xDD" + value.to_bytes(size, "little") + b"\xEE\x77"[:3 - size]
+                        cpu.mem[0x20000 + MEM_ADDR - 1:0x20000 + MEM_ADDR + 3] = around
+                        cpu.step()
+                        result, _ = reference_shift(kind, value, count, False, bits)
+                        mem = cpu.mem[0x20000 + MEM_ADDR - 1:0x20000 + MEM_ADDR + 3]
+                        self.assertEqual(mem[0], 0xDD, label)
+                        self.assertEqual(int.from_bytes(mem[1:1 + size], "little"), result, label)
+                        if size == 1:
+                            self.assertEqual(mem[2], 0xEE, label)
+
+    def test_shl_by_one_from_esetup(self):
+        """D1 E3 = shl bx, 1 turns an index into a byte offset into a table of words."""
+        cpu = machine(bytes([0xD1, 0xE3]), False)
+        cpu.r[CPU.BX] = 5
+        cpu.step()
+        self.assertEqual(cpu.r[CPU.BX], 10)
+
+
 if __name__ == "__main__":
     unittest.main()
