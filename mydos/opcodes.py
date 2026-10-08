@@ -22,12 +22,6 @@ class Op(IntEnum):
     SS_PREFIX = 0x36
     DS_PREFIX = 0x3E
 
-    XOR_RM8_R8 = 0x30    # followed by ModRM: r/m8 ^= r8
-    XOR_RM16_R16 = 0x31  # followed by ModRM: r/m16 ^= r16
-    XOR_R8_RM8 = 0x32    # followed by ModRM: r8 ^= r/m8
-    XOR_R16_RM16 = 0x33  # followed by ModRM: r16 ^= r/m16
-    XOR_AL_IMM8 = 0x34   # followed by imm8: AL ^= imm8
-    XOR_AX_IMM16 = 0x35  # followed by imm16: AX ^= imm16
     INC_R16 = 0x40       # 40..47: add 1 to AX CX DX BX SP BP SI DI
     DEC_R16 = 0x48       # 48..4F: subtract 1 from AX CX DX BX SP BP SI DI
     PUSH_R16 = 0x50      # 50..57: push AX CX DX BX SP BP SI DI
@@ -61,3 +55,24 @@ class Op(IntEnum):
     STI = 0xFB
     CLD = 0xFC
     STD = 0xFD
+
+
+class Alu(IntEnum):
+    """The eight two-operand arithmetic/logic operations that share opcodes 00-3D.
+
+    Each operation owns a block of 8 opcodes: opcode = (operation << 3) | form, and the forms are
+        0: r/m8,  r8        3: r16, r/m16
+        1: r/m16, r16       4: AL,  imm8
+        2: r8,    r/m8      5: AX,  imm16
+    (forms 6 and 7 are other instructions: push/pop of a segment register, prefixes, BCD adjusts).
+    For example XOR is 6, so XOR AX, imm16 is (6 << 3) | 5 = 0x35. Only the operations that are
+    implemented get an entry in CPU.alu_ops.
+    """
+    ADD = 0
+    OR = 1
+    ADC = 2
+    SBB = 3
+    AND = 4
+    SUB = 5
+    XOR = 6
+    CMP = 7

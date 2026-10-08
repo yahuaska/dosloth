@@ -1,5 +1,5 @@
 from . import flags, modrm
-from .opcodes import Op
+from .opcodes import Alu, Op
 
 
 class Exit(Exception):
@@ -53,12 +53,6 @@ class CPU:
             Op.POP_ES: self.pop_sreg,
             Op.POP_SS: self.pop_sreg,
             Op.POP_DS: self.pop_sreg,
-            Op.XOR_RM8_R8: self.xor_rm8_r8,
-            Op.XOR_RM16_R16: self.xor_rm16_r16,
-            Op.XOR_R8_RM8: self.xor_r8_rm8,
-            Op.XOR_R16_RM16: self.xor_r16_rm16,
-            Op.XOR_AL_IMM8: self.xor_al_imm8,
-            Op.XOR_AX_IMM16: self.xor_ax_imm16,
             Op.SCASB: self.scas,
             Op.SCASW: self.scas,
             Op.LOOPNE: self.loopne,
@@ -77,6 +71,16 @@ class CPU:
             Op.CLD: self.cld,
             Op.STD: self.std,
         }
+
+        # Arithmetic/logic operations: operation -> fn(a, b, bits) that sets the flags and returns the
+        # result. Each one gets its whole block of 6 opcodes (see the Alu enum).
+        self.alu_ops = {
+            Alu.XOR: self.alu_xor,
+        }
+        for operation in self.alu_ops:
+            for form in range(6):
+                self.ops[(operation << 3) | form] = self.alu
+
         for i in range(8):
             self.ops[Op.INC_R16 + i] = self.inc_r16
             self.ops[Op.DEC_R16 + i] = self.dec_r16
@@ -407,59 +411,40 @@ class CPU:
         """
         self.r[op - Op.MOV_R16_IMM16] = self.fetch16()
 
-    def xor_rm8_r8(self, op):
-        """XOR an 8-bit register into a register or memory byte (opcode 30 + ModRM).
+    def alu(self, op):
+        """Run one of the arithmetic/logic instructions in opcodes 00-3D (XOR so far).
 
-        XOR flips every bit of the destination that is 1 in the other operand. The result is stored in
-        the first operand of the assembly line, e.g. `xor [bx], al`.
+        The opcode says which operation (bits 3-5) and where the operands come from (bits 0-2): a
+        register and a register-or-memory operand given by a ModRM byte, in either direction, or
+        AL/AX and a constant that follows the opcode. See the Alu enum for the table. The result goes
+        into the first operand, the one written first in assembly.
         """
-        m = modrm.decode(self, self.seg_override)
-        result = m.read8(self) ^ self.get8(m.reg)
-        m.write8(self, result)
-        self.set_logic_flags(result, 8)
+        fn = self.alu_ops[op >> 3]
+        form = op & 7
+        if form <= 3:
+            m = modrm.decode(self, self.seg_override)
+        if form == 0:  # r/m8, r8
+            m.write8(self, fn(m.read8(self), self.get8(m.reg), 8))
+        elif form == 1:  # r/m16, r16
+            m.write16(self, fn(m.read16(self), self.r[m.reg], 16))
+        elif form == 2:  # r8, r/m8
+            self.set8(m.reg, fn(self.get8(m.reg), m.read8(self), 8))
+        elif form == 3:  # r16, r/m16
+            self.r[m.reg] = fn(self.r[m.reg], m.read16(self), 16)
+        elif form == 4:  # AL, imm8 (8-bit register 0 is AL)
+            self.set8(0, fn(self.get8(0), self.fetch8(), 8))
+        else:  # form 5: AX, imm16
+            self.r[self.AX] = fn(self.r[self.AX], self.fetch16(), 16)
 
-    def xor_rm16_r16(self, op):
-        """XOR a 16-bit register into a register or memory word (opcode 31 + ModRM).
+    def alu_xor(self, a, b, bits):
+        """XOR: flip every bit of a that is 1 in b.
 
-        The same as opcode 30 for 16-bit values.
+        Most often seen as `xor ax, ax` (33 C0): XOR-ing a value with itself always gives 0, so it is
+        the short way to clear a register.
         """
-        m = modrm.decode(self, self.seg_override)
-        result = m.read16(self) ^ self.r[m.reg]
-        m.write16(self, result)
-        self.set_logic_flags(result, 16)
-
-    def xor_r8_rm8(self, op):
-        """XOR a register or memory byte into an 8-bit register (opcode 32 + ModRM).
-
-        The same as opcode 30 with the direction reversed: the result lands in the register.
-        """
-        m = modrm.decode(self, self.seg_override)
-        result = self.get8(m.reg) ^ m.read8(self)
-        self.set8(m.reg, result)
-        self.set_logic_flags(result, 8)
-
-    def xor_r16_rm16(self, op):
-        """XOR a register or memory word into a 16-bit register (opcode 33 + ModRM).
-
-        Most often seen as `xor ax, ax` (33 C0): XOR-ing a value with itself always gives 0, so this
-        is the short way to clear a register.
-        """
-        m = modrm.decode(self, self.seg_override)
-        result = self.r[m.reg] ^ m.read16(self)
-        self.r[m.reg] = result
-        self.set_logic_flags(result, 16)
-
-    def xor_al_imm8(self, op):
-        """XOR AL with a constant that follows the opcode (opcode 34)."""
-        result = self.get8(0) ^ self.fetch8()  # 8-bit register 0 is AL
-        self.set8(0, result)
-        self.set_logic_flags(result, 8)
-
-    def xor_ax_imm16(self, op):
-        """XOR AX with a 16-bit constant that follows the opcode (opcode 35)."""
-        result = self.r[self.AX] ^ self.fetch16()
-        self.r[self.AX] = result
-        self.set_logic_flags(result, 16)
+        result = a ^ b
+        self.set_logic_flags(result, bits)
+        return result
 
     def scas(self, op):
         """Compare AL (opcode AE) or AX (opcode AF) with the byte or word at ES:DI, then step DI.
