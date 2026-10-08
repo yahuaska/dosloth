@@ -31,6 +31,7 @@ class CPU:
         self.ops = {
             Op.NOP: self.nop,
             Op.MOV_RM16_R16: self.mov_rm16_r16,
+            Op.MOV_R16_RM16: self.mov_r16_rm16,
             Op.JMP_SHORT: self.jmp_short,
             Op.INT: self.int_,
             Op.HLT: self.hlt,
@@ -109,6 +110,10 @@ class CPU:
     def mov_rm16_r16(self, op):
         m = modrm.decode(self, self.seg_override)
         m.write16(self, self.r[m.reg])
+
+    def mov_r16_rm16(self, op):
+        m = modrm.decode(self, self.seg_override)
+        self.r[m.reg] = m.read16(self)
 
     def mov_r8_imm8(self, op):
         self.set8(op - Op.MOV_R8_IMM8, self.fetch8())
