@@ -33,6 +33,7 @@ class CPU:
         self.int_handlers = {}  # int number -> fn(cpu)
         self.start_ip = 0  # set by step(): IP of the instruction being executed
         self.seg_override = None  # set by step(): segment register from a prefix, or None
+        self.rep = None  # set by step(): the repeat prefix (Op.REPNE_PREFIX) before this instruction, or None
 
         # opcode byte -> handler(op). Groups get one entry per opcode value.
         self.ops = {
@@ -58,6 +59,8 @@ class CPU:
             Op.XOR_R16_RM16: self.xor_r16_rm16,
             Op.XOR_AL_IMM8: self.xor_al_imm8,
             Op.XOR_AX_IMM16: self.xor_ax_imm16,
+            Op.SCASB: self.scas,
+            Op.SCASW: self.scas,
             Op.CALL_NEAR: self.call_near,
             Op.RET_NEAR: self.ret_near,
             Op.JMP_SHORT: self.jmp_short,
@@ -156,6 +159,21 @@ class CPU:
         self.set_flag(flags.OF, False)
         self.set_szp(result, bits)
 
+    def sub_with_flags(self, a, b, bits):
+        """Compute a - b like the CPU's SUB and CMP do: set the flags and return the result.
+
+        CF means "a borrow was needed" (a < b as unsigned numbers). OF means the result does not
+        fit when a and b are read as signed numbers. AF is the borrow out of bit 3, used by BCD code.
+        """
+        mask = (1 << bits) - 1
+        result = (a - b) & mask
+        sign = 1 << (bits - 1)
+        self.set_flag(flags.CF, (a & mask) < (b & mask))
+        self.set_flag(flags.OF, bool((a ^ b) & (a ^ result) & sign))
+        self.set_flag(flags.AF, bool((a ^ b ^ result) & 0x10))
+        self.set_szp(result, bits)
+        return result
+
     # --- stack ---
     def push16(self, val):
         """Put a word on the stack: SP goes down by 2, then the word is stored at SS:SP.
@@ -195,9 +213,15 @@ class CPU:
         """
         self.start_ip = self.ip  # where this instruction began (for error messages)
         self.seg_override = None  # set by a prefix, applies to this instruction only
+        self.rep = None  # same for the repeat prefix
         op = self.fetch8()
-        while op in self.SEG_PREFIXES:
-            self.seg_override = self.SEG_PREFIXES[op]
+        while True:  # prefixes come before the opcode, in any order
+            if op in self.SEG_PREFIXES:
+                self.seg_override = self.SEG_PREFIXES[op]
+            elif op == Op.REPNE_PREFIX:
+                self.rep = op
+            else:
+                break
             op = self.fetch8()
         handler = self.ops.get(op)
         if handler is None:
@@ -384,6 +408,34 @@ class CPU:
         result = self.r[self.AX] ^ self.fetch16()
         self.r[self.AX] = result
         self.set_logic_flags(result, 16)
+
+    def scas(self, op):
+        """Compare AL (opcode AE) or AX (opcode AF) with the byte or word at ES:DI, then step DI.
+
+        The comparison is a subtraction that only sets flags, like CMP. DI moves forward, or backward
+        if the direction flag is set (see CLD and STD). The segment is always ES, prefixes cannot
+        change it.
+
+        With the REPNE prefix (F2) this repeats while CX is not zero, taking 1 off CX each time, and
+        stops as soon as the values are equal. The classic use is measuring a zero-terminated string:
+        AL = 0, CX = 0FFFFh, `repne scasb`, and the length can be worked out from what is left in CX.
+        """
+        bits = 16 if op & 1 else 8
+        size = bits // 8
+        step = -size if self.get_flag(flags.DF) else size
+        while True:
+            if self.rep is not None and self.r[self.CX] == 0:
+                break  # nothing (more) to repeat
+            if bits == 16:
+                self.sub_with_flags(self.r[self.AX], self.rw(self.s[self.ES], self.r[self.DI]), 16)
+            else:
+                self.sub_with_flags(self.get8(0), self.rb(self.s[self.ES], self.r[self.DI]), 8)  # 0 is AL
+            self.r[self.DI] = (self.r[self.DI] + step) & 0xFFFF
+            if self.rep is None:
+                break  # no prefix: just one comparison
+            self.r[self.CX] -= 1
+            if self.get_flag(flags.ZF):
+                break  # REPNE stops on the first match
 
     def call_near(self, op):
         """Call a procedure in the same code segment (opcode E8 + 16-bit displacement).
