@@ -17,19 +17,19 @@ and r/m picks the registers that are added up into the offset.
 """
 from dataclasses import dataclass
 
-from .cpu import CPU
+from . import regs
 
 # Base/index registers summed into the offset, by r/m value (for mod = 00, 01, 10).
 # r/m = 6 is special: BP, except with mod = 00 where it is a bare 16-bit address.
 _BASES = [
-    (CPU.BX, CPU.SI),  # 0: [bx+si]
-    (CPU.BX, CPU.DI),  # 1: [bx+di]
-    (CPU.BP, CPU.SI),  # 2: [bp+si]
-    (CPU.BP, CPU.DI),  # 3: [bp+di]
-    (CPU.SI,),         # 4: [si]
-    (CPU.DI,),         # 5: [di]
-    (CPU.BP,),         # 6: [bp]  (or [disp16] when mod = 00)
-    (CPU.BX,),         # 7: [bx]
+    (regs.BX, regs.SI),  # 0: [bx+si]
+    (regs.BX, regs.DI),  # 1: [bx+di]
+    (regs.BP, regs.SI),  # 2: [bp+si]
+    (regs.BP, regs.DI),  # 3: [bp+di]
+    (regs.SI,),          # 4: [si]
+    (regs.DI,),          # 5: [di]
+    (regs.BP,),          # 6: [bp]  (or [disp16] when mod = 00)
+    (regs.BX,),          # 7: [bx]
 ]
 
 
@@ -66,7 +66,7 @@ class ModRM:
 def decode(cpu, seg_override=None):
     """Fetch a ModRM byte (and its displacement) at CS:IP and return a ModRM.
 
-    seg_override is a segment register index (CPU.ES/CS/SS/DS) from a prefix such as
+    seg_override is a segment register index (regs.ES/CS/SS/DS) from a prefix such as
     2E, or None to use the default segment.
     """
     b = cpu.fetch8()
@@ -77,7 +77,7 @@ def decode(cpu, seg_override=None):
 
     if mod == 0 and rm == 6:  # special case: direct address [disp16]
         off = cpu.fetch16()
-        default_seg = CPU.DS
+        default_seg = regs.DS
     else:
         off = sum(cpu.r[i] for i in _BASES[rm])
         if mod == 1:  # 8-bit displacement, sign-extended
@@ -86,7 +86,7 @@ def decode(cpu, seg_override=None):
         elif mod == 2:  # 16-bit displacement
             off += cpu.fetch16()
         # Addresses based on BP default to the stack segment, all others to DS.
-        default_seg = CPU.SS if CPU.BP in _BASES[rm] else CPU.DS
+        default_seg = regs.SS if regs.BP in _BASES[rm] else regs.DS
 
     seg = cpu.s[default_seg if seg_override is None else seg_override]
     return ModRM(reg=reg, is_reg=False, seg=seg, off=off & 0xFFFF)

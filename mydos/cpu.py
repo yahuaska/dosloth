@@ -1,3 +1,6 @@
+from . import modrm
+
+
 class Exit(Exception):
     """Raised to stop the program; code is the DOS exit code."""
 
@@ -6,9 +9,11 @@ class Exit(Exception):
 
 
 class CPU:
-    # 16-bit register indexes, in x86 encoding order
-    AX, CX, DX, BX, SP, BP, SI, DI = range(8)
-    ES, CS, SS, DS = range(4)
+    # register numbers, available as CPU.AX, CPU.DS, ...
+    from .regs import AX, CX, DX, BX, SP, BP, SI, DI, ES, CS, SS, DS
+
+    # segment-override prefix byte -> segment register
+    SEG_PREFIXES = {0x26: ES, 0x2E: CS, 0x36: SS, 0x3E: DS}
 
     def __init__(self):
         """Fresh machine: 1 MB RAM, zeroed registers, no interrupt handlers."""
@@ -70,9 +75,16 @@ class CPU:
     def step(self):
         """Execute one instruction. Unknown opcodes/interrupts raise NotImplementedError."""
         start_ip = self.ip
+        seg_override = None  # set by a prefix, applies to this instruction only
         op = self.fetch8()
+        while op in self.SEG_PREFIXES:
+            seg_override = self.SEG_PREFIXES[op]
+            op = self.fetch8()
         if op == 0x90:  # NOP
             pass
+        elif op == 0x89:  # MOV r/m16, r16
+            m = modrm.decode(self, seg_override)
+            m.write16(self, self.r[m.reg])
         elif 0xB0 <= op <= 0xB7:  # MOV r8, imm8
             self.set8(op - 0xB0, self.fetch8())
         elif 0xB8 <= op <= 0xBF:  # MOV r16, imm16
