@@ -7,12 +7,23 @@ from enum import IntEnum
 
 
 class Op(IntEnum):
+    # push/pop of a segment register; the register number is (op >> 3) & 3 (ES CS SS DS)
+    PUSH_ES = 0x06
+    POP_ES = 0x07
+    PUSH_CS = 0x0E       # there is no POP CS
+    PUSH_SS = 0x16
+    POP_SS = 0x17
+    PUSH_DS = 0x1E
+    POP_DS = 0x1F
+
     # segment-override prefixes: modify the next instruction, not instructions themselves
     ES_PREFIX = 0x26
     CS_PREFIX = 0x2E
     SS_PREFIX = 0x36
     DS_PREFIX = 0x3E
 
+    PUSH_R16 = 0x50      # 50..57: push AX CX DX BX SP BP SI DI
+    POP_R16 = 0x58       # 58..5F: pop into AX CX DX BX SP BP SI DI
     MOV_RM16_R16 = 0x89  # followed by ModRM: r/m16 <- r16
     MOV_R16_RM16 = 0x8B  # followed by ModRM: r16 <- r/m16
     MOV_RM16_SREG = 0x8C  # followed by ModRM (reg = segment register): r/m16 <- sreg

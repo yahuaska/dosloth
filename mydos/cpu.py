@@ -40,6 +40,13 @@ class CPU:
             Op.MOV_AX_MOFFS16: self.mov_ax_moffs16,
             Op.MOV_MOFFS8_AL: self.mov_moffs8_al,
             Op.MOV_MOFFS16_AX: self.mov_moffs16_ax,
+            Op.PUSH_ES: self.push_sreg,
+            Op.PUSH_CS: self.push_sreg,
+            Op.PUSH_SS: self.push_sreg,
+            Op.PUSH_DS: self.push_sreg,
+            Op.POP_ES: self.pop_sreg,
+            Op.POP_SS: self.pop_sreg,
+            Op.POP_DS: self.pop_sreg,
             Op.CALL_NEAR: self.call_near,
             Op.RET_NEAR: self.ret_near,
             Op.JMP_SHORT: self.jmp_short,
@@ -47,6 +54,8 @@ class CPU:
             Op.HLT: self.hlt,
         }
         for i in range(8):
+            self.ops[Op.PUSH_R16 + i] = self.push_r16
+            self.ops[Op.POP_R16 + i] = self.pop_r16
             self.ops[Op.MOV_R8_IMM8 + i] = self.mov_r8_imm8
             self.ops[Op.MOV_R16_IMM16 + i] = self.mov_r16_imm16
 
@@ -131,6 +140,26 @@ class CPU:
     def nop(self, op):
         """90: do nothing."""
         pass
+
+    def push_r16(self, op):
+        """50..57: PUSH r16 (register = low 3 bits of op).
+
+        PUSH SP pushes SP's value from before the instruction (286+ behaviour; the 8086
+        pushed the already decremented value).
+        """
+        self.push16(self.r[op - Op.PUSH_R16])
+
+    def pop_r16(self, op):
+        """58..5F: POP r16 (register = low 3 bits of op)."""
+        self.r[op - Op.POP_R16] = self.pop16()
+
+    def push_sreg(self, op):
+        """06/0E/16/1E: PUSH ES/CS/SS/DS (segment register = bits 3-4 of op)."""
+        self.push16(self.s[(op >> 3) & 3])
+
+    def pop_sreg(self, op):
+        """07/17/1F: POP ES/SS/DS (segment register = bits 3-4 of op). 0F (POP CS) is not valid."""
+        self.s[(op >> 3) & 3] = self.pop16()
 
     def mov_rm16_r16(self, op):
         """89 /r: MOV r/m16, r16 - copy a 16-bit register into a register or memory."""
