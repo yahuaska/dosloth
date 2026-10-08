@@ -75,12 +75,20 @@ class CPU:
         # Arithmetic/logic operations: operation -> fn(a, b, bits) that sets the flags and returns the
         # result. Each one gets its whole block of 6 opcodes (see the Alu enum).
         self.alu_ops = {
+            Alu.ADD: self.alu_add,
+            Alu.OR: self.alu_or,
+            Alu.ADC: self.alu_adc,
+            Alu.SBB: self.alu_sbb,
+            Alu.AND: self.alu_and,
+            Alu.SUB: self.alu_sub,
             Alu.XOR: self.alu_xor,
             Alu.CMP: self.alu_cmp,
         }
         for operation in self.alu_ops:
             for form in range(6):
                 self.ops[(operation << 3) | form] = self.alu
+        for op in (Op.ALU_RM8_IMM8, Op.ALU_RM16_IMM16, Op.ALU_RM16_IMM8):
+            self.ops[op] = self.alu_imm
 
         for cc in range(16):
             self.ops[Op.JCC + cc] = self.jcc
@@ -183,19 +191,20 @@ class CPU:
         d = self.fetch8()
         return (self.ip + d - (256 if d & 0x80 else 0)) & 0xFFFF
 
-    def add_with_flags(self, a, b, bits):
-        """Compute a + b like the CPU's ADD does: set the flags and return the result.
+    def add_with_flags(self, a, b, bits, carry=0):
+        """Compute a + b (+ carry) like the CPU's ADD and ADC do: set the flags and return the result.
 
         CF means the sum did not fit and a 1 was carried out of the top bit. OF means the result is
         wrong when a and b are read as signed numbers (two positives gave a negative or the other
-        way round). AF is the carry out of bit 3, used by BCD code.
+        way round). AF is the carry out of bit 3, used by BCD code. `carry` is the extra 1 that ADC
+        adds when the carry flag was set; plain ADD passes 0.
         """
         mask = (1 << bits) - 1
         a &= mask
         b &= mask
-        result = (a + b) & mask
+        result = (a + b + carry) & mask
         sign = 1 << (bits - 1)
-        self.set_flag(flags.CF, a + b > mask)
+        self.set_flag(flags.CF, a + b + carry > mask)
         self.set_flag(flags.OF, bool(~(a ^ b) & (a ^ result) & sign))
         self.set_flag(flags.AF, bool((a ^ b ^ result) & 0x10))
         self.set_szp(result, bits)
@@ -219,16 +228,19 @@ class CPU:
         holds = (of, cf, zf, cf or zf, sf, self.get_flag(flags.PF), sf != of, zf or sf != of)[cc >> 1]
         return holds != bool(cc & 1)  # odd numbers are the opposite condition
 
-    def sub_with_flags(self, a, b, bits):
-        """Compute a - b like the CPU's SUB and CMP do: set the flags and return the result.
+    def sub_with_flags(self, a, b, bits, borrow=0):
+        """Compute a - b (- borrow) like the CPU's SUB, SBB and CMP do: set the flags, return the result.
 
         CF means "a borrow was needed" (a < b as unsigned numbers). OF means the result does not
         fit when a and b are read as signed numbers. AF is the borrow out of bit 3, used by BCD code.
+        `borrow` is the extra 1 that SBB takes off when the carry flag was set; SUB and CMP pass 0.
         """
         mask = (1 << bits) - 1
-        result = (a - b) & mask
+        a &= mask
+        b &= mask
+        result = (a - b - borrow) & mask
         sign = 1 << (bits - 1)
-        self.set_flag(flags.CF, (a & mask) < (b & mask))
+        self.set_flag(flags.CF, a < b + borrow)
         self.set_flag(flags.OF, bool((a ^ b) & (a ^ result) & sign))
         self.set_flag(flags.AF, bool((a ^ b ^ result) & 0x10))
         self.set_szp(result, bits)
@@ -434,7 +446,7 @@ class CPU:
         self.r[op - Op.MOV_R16_IMM16] = self.fetch16()
 
     def alu(self, op):
-        """Run one of the arithmetic/logic instructions in opcodes 00-3D (XOR so far).
+        """Run one of the arithmetic/logic instructions in opcodes 00-3D.
 
         The opcode says which operation (bits 3-5) and where the operands come from (bits 0-2): a
         register and a register-or-memory operand given by a ModRM byte, in either direction, or
@@ -457,6 +469,55 @@ class CPU:
             self.set8(0, fn(self.get8(0), self.fetch8(), 8))
         else:  # form 5: AX, imm16
             self.r[self.AX] = fn(self.r[self.AX], self.fetch16(), 16)
+
+    def alu_imm(self, op):
+        """Do an arithmetic/logic operation between a register or memory operand and a constant.
+
+        Opcodes 80 (byte), 81 (word) and 83 (word, but with a one-byte constant). The operation is
+        chosen by the 'reg' field of the ModRM byte, using the same numbers as the Alu enum: for
+        example `80 FB 05` is CMP (reg = 7) of BL (r/m = 3) with 5. The constant comes after the ModRM
+        byte and its address bytes. Opcode 83 saves space for small numbers: its constant is
+        sign-extended, so FF means -1 (FFFFh), not 255.
+        """
+        m = modrm.decode(self, self.seg_override)
+        fn = self.alu_ops[m.reg]
+        if op == Op.ALU_RM8_IMM8:
+            m.write8(self, fn(m.read8(self), self.fetch8(), 8))
+        elif op == Op.ALU_RM16_IMM16:
+            m.write16(self, fn(m.read16(self), self.fetch16(), 16))
+        else:  # ALU_RM16_IMM8
+            imm = self.fetch8()
+            if imm & 0x80:
+                imm |= 0xFF00  # sign extension
+            m.write16(self, fn(m.read16(self), imm, 16))
+
+    def alu_add(self, a, b, bits):
+        """ADD: a + b."""
+        return self.add_with_flags(a, b, bits)
+
+    def alu_adc(self, a, b, bits):
+        """ADC: a + b + the carry flag, so that long numbers can be added a word at a time."""
+        return self.add_with_flags(a, b, bits, carry=int(self.get_flag(flags.CF)))
+
+    def alu_sub(self, a, b, bits):
+        """SUB: a - b."""
+        return self.sub_with_flags(a, b, bits)
+
+    def alu_sbb(self, a, b, bits):
+        """SBB: a - b - the carry flag (the borrow from the previous word of a long subtraction)."""
+        return self.sub_with_flags(a, b, bits, borrow=int(self.get_flag(flags.CF)))
+
+    def alu_and(self, a, b, bits):
+        """AND: keep only the bits that are 1 in both a and b."""
+        result = a & b
+        self.set_logic_flags(result, bits)
+        return result
+
+    def alu_or(self, a, b, bits):
+        """OR: set every bit that is 1 in a or in b."""
+        result = a | b
+        self.set_logic_flags(result, bits)
+        return result
 
     def alu_cmp(self, a, b, bits):
         """CMP: subtract b from a only to get the flags, and throw the result away.

@@ -27,6 +27,9 @@ class Op(IntEnum):
     PUSH_R16 = 0x50      # 50..57: push AX CX DX BX SP BP SI DI
     POP_R16 = 0x58       # 58..5F: pop into AX CX DX BX SP BP SI DI
     JCC = 0x70           # 70..7F: conditional short jump, followed by a signed 8-bit displacement
+    ALU_RM8_IMM8 = 0x80    # + ModRM + imm8:  the operation is the ModRM 'reg' field (see Alu)
+    ALU_RM16_IMM16 = 0x81  # + ModRM + imm16
+    ALU_RM16_IMM8 = 0x83   # + ModRM + imm8, sign-extended to 16 bits
     MOV_RM16_R16 = 0x89  # followed by ModRM: r/m16 <- r16
     MOV_R16_RM16 = 0x8B  # followed by ModRM: r16 <- r/m16
     MOV_RM16_SREG = 0x8C  # followed by ModRM (reg = segment register): r/m16 <- sreg
@@ -66,8 +69,8 @@ class Alu(IntEnum):
         1: r/m16, r16       4: AL,  imm8
         2: r8,    r/m8      5: AX,  imm16
     (forms 6 and 7 are other instructions: push/pop of a segment register, prefixes, BCD adjusts).
-    For example XOR is 6, so XOR AX, imm16 is (6 << 3) | 5 = 0x35. Only the operations that are
-    implemented get an entry in CPU.alu_ops.
+    For example XOR is 6, so XOR AX, imm16 is (6 << 3) | 5 = 0x35. The same numbers appear
+    in the 'reg' field of the ModRM byte after opcodes 80, 81 and 83 (operation with a constant).
     """
     ADD = 0
     OR = 1
