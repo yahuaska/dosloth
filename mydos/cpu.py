@@ -78,6 +78,8 @@ class CPU:
             Op.STD: self.std,
         }
         for i in range(8):
+            self.ops[Op.INC_R16 + i] = self.inc_r16
+            self.ops[Op.DEC_R16 + i] = self.dec_r16
             self.ops[Op.PUSH_R16 + i] = self.push_r16
             self.ops[Op.POP_R16 + i] = self.pop_r16
             self.ops[Op.MOV_R8_IMM8 + i] = self.mov_r8_imm8
@@ -173,6 +175,24 @@ class CPU:
         d = self.fetch8()
         return (self.ip + d - (256 if d & 0x80 else 0)) & 0xFFFF
 
+    def add_with_flags(self, a, b, bits):
+        """Compute a + b like the CPU's ADD does: set the flags and return the result.
+
+        CF means the sum did not fit and a 1 was carried out of the top bit. OF means the result is
+        wrong when a and b are read as signed numbers (two positives gave a negative or the other
+        way round). AF is the carry out of bit 3, used by BCD code.
+        """
+        mask = (1 << bits) - 1
+        a &= mask
+        b &= mask
+        result = (a + b) & mask
+        sign = 1 << (bits - 1)
+        self.set_flag(flags.CF, a + b > mask)
+        self.set_flag(flags.OF, bool(~(a ^ b) & (a ^ result) & sign))
+        self.set_flag(flags.AF, bool((a ^ b ^ result) & 0x10))
+        self.set_szp(result, bits)
+        return result
+
     def sub_with_flags(self, a, b, bits):
         """Compute a - b like the CPU's SUB and CMP do: set the flags and return the result.
 
@@ -248,6 +268,24 @@ class CPU:
     def nop(self, op):
         """Do nothing (opcode 90)."""
         pass
+
+    def inc_r16(self, op):
+        """Add 1 to a 16-bit register (opcodes 40-47; the register is the low 3 bits of the opcode).
+
+        Sets the flags like ADD would, except that CF is left alone: INC is often used for counters in
+        the middle of multi-word arithmetic, where the carry from the previous step must survive.
+        """
+        reg = op - Op.INC_R16
+        carry = self.get_flag(flags.CF)
+        self.r[reg] = self.add_with_flags(self.r[reg], 1, 16)
+        self.set_flag(flags.CF, carry)
+
+    def dec_r16(self, op):
+        """Subtract 1 from a 16-bit register (opcodes 48-4F). Like INC, it leaves CF alone."""
+        reg = op - Op.DEC_R16
+        carry = self.get_flag(flags.CF)
+        self.r[reg] = self.sub_with_flags(self.r[reg], 1, 16)
+        self.set_flag(flags.CF, carry)
 
     def push_r16(self, op):
         """Push a 16-bit register onto the stack (opcodes 50-57).

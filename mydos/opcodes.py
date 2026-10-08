@@ -28,6 +28,8 @@ class Op(IntEnum):
     XOR_R16_RM16 = 0x33  # followed by ModRM: r16 ^= r/m16
     XOR_AL_IMM8 = 0x34   # followed by imm8: AL ^= imm8
     XOR_AX_IMM16 = 0x35  # followed by imm16: AX ^= imm16
+    INC_R16 = 0x40       # 40..47: add 1 to AX CX DX BX SP BP SI DI
+    DEC_R16 = 0x48       # 48..4F: subtract 1 from AX CX DX BX SP BP SI DI
     PUSH_R16 = 0x50      # 50..57: push AX CX DX BX SP BP SI DI
     POP_R16 = 0x58       # 58..5F: pop into AX CX DX BX SP BP SI DI
     MOV_RM16_R16 = 0x89  # followed by ModRM: r/m16 <- r16
