@@ -40,6 +40,8 @@ class CPU:
             Op.MOV_AX_MOFFS16: self.mov_ax_moffs16,
             Op.MOV_MOFFS8_AL: self.mov_moffs8_al,
             Op.MOV_MOFFS16_AX: self.mov_moffs16_ax,
+            Op.CALL_NEAR: self.call_near,
+            Op.RET_NEAR: self.ret_near,
             Op.JMP_SHORT: self.jmp_short,
             Op.INT: self.int_,
             Op.HLT: self.hlt,
@@ -83,6 +85,20 @@ class CPU:
             self.r[i] = (self.r[i] & 0x00FF) | (val & 0xFF) << 8
         else:
             self.r[i] = (self.r[i] & 0xFF00) | (val & 0xFF)
+
+    # --- stack ---
+    def push16(self, val):
+        """Push a word: SP -= 2 (wrapping at 16 bits), then store it at SS:SP."""
+        sp = (self.r[self.SP] - 2) & 0xFFFF
+        self.r[self.SP] = sp
+        self.ww(self.s[self.SS], sp, val)
+
+    def pop16(self):
+        """Pop a word: read it from SS:SP, then SP += 2 (wrapping at 16 bits)."""
+        sp = self.r[self.SP]
+        val = self.rw(self.s[self.SS], sp)
+        self.r[self.SP] = (sp + 2) & 0xFFFF
+        return val
 
     # --- instruction fetch ---
     def fetch8(self):
@@ -175,6 +191,17 @@ class CPU:
     def mov_r16_imm16(self, op):
         """B8..BF: MOV r16, imm16 - load an immediate word into AX..DI (register = low 3 bits of op)."""
         self.r[op - Op.MOV_R16_IMM16] = self.fetch16()
+
+    def call_near(self, op):
+        """E8: CALL rel16 - push the return address (the next instruction), then jump."""
+        d = self.fetch16()  # fetching first leaves IP pointing at the next instruction
+        self.push16(self.ip)
+        # the displacement is signed and counted from the next instruction
+        self.ip = (self.ip + d - (0x10000 if d & 0x8000 else 0)) & 0xFFFF
+
+    def ret_near(self, op):
+        """C3: RET - pop the return address into IP."""
+        self.ip = self.pop16()
 
     def jmp_short(self, op):
         """EB: JMP rel8 - jump by a signed 8-bit displacement relative to the next instruction."""

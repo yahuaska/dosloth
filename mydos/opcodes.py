@@ -24,6 +24,8 @@ class Op(IntEnum):
     MOV_MOFFS16_AX = 0xA3   # followed by a 16-bit offset: word at [offset] <- AX
     MOV_R8_IMM8 = 0xB0   # B0..B7: AL CL DL BL AH CH DH BH <- imm8
     MOV_R16_IMM16 = 0xB8  # B8..BF: AX CX DX BX SP BP SI DI <- imm16
+    RET_NEAR = 0xC3      # pops IP from the stack
     INT = 0xCD           # followed by the interrupt number
+    CALL_NEAR = 0xE8     # followed by a signed 16-bit displacement; pushes the return IP
     JMP_SHORT = 0xEB     # followed by a signed 8-bit displacement
     HLT = 0xF4
