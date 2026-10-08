@@ -3,15 +3,20 @@ from .opcodes import Op
 
 
 class Exit(Exception):
-    """Raised to stop the program; code is the DOS exit code."""
+    """Raised to stop the emulated program. It carries the DOS exit code the program asked for."""
 
     def __init__(self, code):
-        """Remember the DOS exit code."""
+        """Remember the exit code so that run() can return it."""
         self.code = code
 
 
 class CPU:
-    """An 8086-style real-mode CPU with 1 MB of memory; instructions are dispatched via self.ops."""
+    """A tiny 8086-style CPU running in real mode, with 1 MB of flat memory.
+
+    Registers live in two lists: self.r (AX, CX, DX, BX, SP, BP, SI, DI) and self.s (ES, CS, SS, DS).
+    step() reads one instruction and looks its opcode up in self.ops; every entry there is one of
+    the instruction methods further down.
+    """
     # register numbers, available as CPU.AX, CPU.DS, ...
     from .regs import AX, CX, DX, BX, SP, BP, SI, DI, ES, CS, SS, DS
 
@@ -19,7 +24,7 @@ class CPU:
     SEG_PREFIXES = {Op.ES_PREFIX: ES, Op.CS_PREFIX: CS, Op.SS_PREFIX: SS, Op.DS_PREFIX: DS}
 
     def __init__(self):
-        """Fresh machine: 1 MB RAM, zeroed registers, no interrupt handlers."""
+        """Make a fresh machine: 1 MB of zeroed memory, zeroed registers, no interrupts installed."""
         self.mem = bytearray(1024 * 1024)
         self.r = [0] * 8
         self.s = [0] * 4
@@ -67,34 +72,44 @@ class CPU:
 
     # --- memory ---
     def addr(self, seg, off):
-        """Linear address of seg:off, wrapped to 20 bits."""
+        """Turn a segment:offset pair into a real memory address.
+
+        The segment is multiplied by 16 and the offset is added. The result wraps around at 1 MB
+        (20 bits), like on a real 8086.
+        """
         return (seg * 16 + off) & 0xFFFFF
 
     def rb(self, seg, off):
-        """Read a byte at seg:off."""
+        """Read one byte of memory at seg:off."""
         return self.mem[self.addr(seg, off)]
 
     def rw(self, seg, off):
-        """Read a little-endian word at seg:off."""
+        """Read a 16-bit word at seg:off. The x86 keeps the low byte first (little-endian)."""
         return self.rb(seg, off) | self.rb(seg, off + 1) << 8
 
     def wb(self, seg, off, val):
-        """Write a byte at seg:off."""
+        """Write one byte to memory at seg:off. Bits above the low 8 of val are dropped."""
         self.mem[self.addr(seg, off)] = val & 0xFF
 
     def ww(self, seg, off, val):
-        """Write a little-endian word at seg:off."""
+        """Write a 16-bit word at seg:off, low byte first."""
         self.wb(seg, off, val)
         self.wb(seg, off + 1, val >> 8)
 
     # --- 8-bit register access: 0-3 = AL CL DL BL, 4-7 = AH CH DH BH ---
     def get8(self, n):
-        """Read 8-bit register n (low byte of r[n&3], or high byte if n&4)."""
+        """Read an 8-bit register by its x86 number.
+
+        0-3 are AL, CL, DL, BL (the low halves of AX, CX, DX, BX); 4-7 are AH, CH, DH, BH (the high halves).
+        """
         v = self.r[n & 3]
         return (v >> 8) & 0xFF if n & 4 else v & 0xFF
 
     def set8(self, n, val):
-        """Write 8-bit register n, leaving the other half of the 16-bit register alone."""
+        """Write an 8-bit register (numbered as in get8).
+
+        The other half of the 16-bit register keeps its old value.
+        """
         i = n & 3
         if n & 4:
             self.r[i] = (self.r[i] & 0x00FF) | (val & 0xFF) << 8
@@ -103,18 +118,22 @@ class CPU:
 
     # --- flags (masks are in flags.py) ---
     def get_flag(self, mask):
-        """True if the flag with this mask is set."""
+        """Tell whether a flag is set. Pass one of the masks from flags.py."""
         return bool(self.flags & mask)
 
     def set_flag(self, mask, on):
-        """Set or clear the flag with this mask."""
+        """Turn one flag on or off without touching the others."""
         if on:
             self.flags |= mask
         else:
             self.flags &= ~mask
 
     def set_szp(self, result, bits):
-        """Set SF, ZF and PF from a result of the given width (8 or 16 bits)."""
+        """Update three flags from the result of an operation: zero, sign and parity.
+
+        `bits` is the width of the operation, 8 or 16. Sign is the top bit of that width. Parity is an
+        x86 quirk: it only looks at the low byte, even for a 16-bit result.
+        """
         result &= (1 << bits) - 1
         self.set_flag(flags.ZF, result == 0)
         self.set_flag(flags.SF, result >> (bits - 1))
@@ -122,20 +141,27 @@ class CPU:
         self.set_flag(flags.PF, bin(result & 0xFF).count("1") % 2 == 0)
 
     def set_logic_flags(self, result, bits):
-        """Flags after AND/OR/XOR/TEST: CF and OF are cleared, SF/ZF/PF follow the result."""
+        """Set the flags the way AND, OR, XOR and TEST do.
+
+        Those operations can never carry or overflow, so CF and OF are cleared; the remaining flags
+        describe the result.
+        """
         self.set_flag(flags.CF, False)
         self.set_flag(flags.OF, False)
         self.set_szp(result, bits)
 
     # --- stack ---
     def push16(self, val):
-        """Push a word: SP -= 2 (wrapping at 16 bits), then store it at SS:SP."""
+        """Put a word on the stack: SP goes down by 2, then the word is stored at SS:SP.
+
+        The stack grows toward lower addresses.
+        """
         sp = (self.r[self.SP] - 2) & 0xFFFF
         self.r[self.SP] = sp
         self.ww(self.s[self.SS], sp, val)
 
     def pop16(self):
-        """Pop a word: read it from SS:SP, then SP += 2 (wrapping at 16 bits)."""
+        """Take a word off the stack: read it from SS:SP, then move SP up by 2."""
         sp = self.r[self.SP]
         val = self.rw(self.s[self.SS], sp)
         self.r[self.SP] = (sp + 2) & 0xFFFF
@@ -143,18 +169,24 @@ class CPU:
 
     # --- instruction fetch ---
     def fetch8(self):
-        """Read the byte at CS:IP and advance IP."""
+        """Read the next byte of the program (at CS:IP) and move IP past it."""
         v = self.rb(self.s[self.CS], self.ip)
         self.ip = (self.ip + 1) & 0xFFFF
         return v
 
     def fetch16(self):
-        """Read a little-endian word at CS:IP and advance IP by 2."""
+        """Read the next little-endian word of the program and move IP past it."""
         lo = self.fetch8()
         return lo | self.fetch8() << 8
 
     def step(self):
-        """Execute one instruction. Unknown opcodes/interrupts raise NotImplementedError."""
+        """Run one instruction.
+
+        Segment-override prefixes (like 2E for "use CS:") are consumed first and remembered for this
+        one instruction. Then the opcode is looked up in self.ops. An opcode we have not implemented
+        stops the emulator with an error showing where it happened and the bytes around it, so the
+        next thing to implement is always obvious.
+        """
         self.start_ip = self.ip  # where this instruction began (for error messages)
         self.seg_override = None  # set by a prefix, applies to this instruction only
         op = self.fetch8()
@@ -170,55 +202,83 @@ class CPU:
 
     # --- instructions: each takes the opcode byte (groups use its low 3 bits) ---
     def nop(self, op):
-        """90: do nothing."""
+        """Do nothing (opcode 90)."""
         pass
 
     def push_r16(self, op):
-        """50..57: PUSH r16 (register = low 3 bits of op).
+        """Push a 16-bit register onto the stack (opcodes 50-57).
 
-        PUSH SP pushes SP's value from before the instruction (286+ behaviour; the 8086
-        pushed the already decremented value).
+        The register is the low 3 bits of the opcode, in the usual order: AX, CX, DX, BX, SP, BP, SI,
+        DI. PUSH SP stores the value SP had before the push, like 286 and newer CPUs do (the 8086
+        stored the already decreased value).
         """
         self.push16(self.r[op - Op.PUSH_R16])
 
     def pop_r16(self, op):
-        """58..5F: POP r16 (register = low 3 bits of op)."""
+        """Pop a word from the stack into a 16-bit register (opcodes 58-5F).
+
+        The register is chosen the same way as in PUSH.
+        """
         self.r[op - Op.POP_R16] = self.pop16()
 
     def push_sreg(self, op):
-        """06/0E/16/1E: PUSH ES/CS/SS/DS (segment register = bits 3-4 of op)."""
+        """Push a segment register onto the stack (opcodes 06, 0E, 16, 1E for ES, CS, SS, DS).
+
+        Which register is encoded in bits 3-4 of the opcode.
+        """
         self.push16(self.s[(op >> 3) & 3])
 
     def pop_sreg(self, op):
-        """07/17/1F: POP ES/SS/DS (segment register = bits 3-4 of op). 0F (POP CS) is not valid."""
+        """Pop a word from the stack into ES, SS or DS (opcodes 07, 17, 1F).
+
+        There is no POP CS: 0F, where it would be, is not this instruction.
+        """
         self.s[(op >> 3) & 3] = self.pop16()
 
     def mov_rm16_r16(self, op):
-        """89 /r: MOV r/m16, r16 - copy a 16-bit register into a register or memory."""
+        """Copy a 16-bit register into a register or a word in memory (opcode 89 + ModRM).
+
+        The ModRM byte says where the value goes: another register, or an address like [bx+si+5].
+        """
         m = modrm.decode(self, self.seg_override)
         m.write16(self, self.r[m.reg])
 
     def mov_r16_rm16(self, op):
-        """8B /r: MOV r16, r/m16 - copy a register or memory word into a 16-bit register."""
+        """Copy a register or a word in memory into a 16-bit register (opcode 8B + ModRM).
+
+        The same as opcode 89 with the direction reversed.
+        """
         m = modrm.decode(self, self.seg_override)
         self.r[m.reg] = m.read16(self)
 
     def mov_rm16_sreg(self, op):
-        """8C /r: MOV r/m16, sreg - copy a segment register (ModRM reg field) into a register or memory."""
+        """Copy a segment register into a register or memory (opcode 8C + ModRM).
+
+        The segment register is picked by the 'reg' field of the ModRM byte: 0=ES, 1=CS, 2=SS, 3=DS.
+        Values 4-7 mean nothing here, so they stop the emulator.
+        """
         m = modrm.decode(self, self.seg_override)
         if m.reg > 3:  # the reg field only names ES, CS, SS, DS here
             raise NotImplementedError(f"MOV r/m16, sreg with reg={m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
         m.write16(self, self.s[m.reg])
 
     def mov_sreg_rm16(self, op):
-        """8E /r: MOV sreg, r/m16 - load a segment register (not CS) from a register or memory."""
+        """Load a segment register from a register or memory (opcode 8E + ModRM).
+
+        This is how a program points DS at its data: `mov ax, <segment>` and then `mov ds, ax`, because
+        a constant cannot be moved into a segment register directly. Loading CS this way is not
+        allowed on the x86, so that stops the emulator too.
+        """
         m = modrm.decode(self, self.seg_override)
         if m.reg > 3 or m.reg == self.CS:  # loading CS this way is not a valid instruction
             raise NotImplementedError(f"MOV sreg, r/m16 with reg={m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
         self.s[m.reg] = m.read16(self)
 
     def moffs(self):
-        """Read the 16-bit direct address that follows an A0..A3 opcode; return (segment value, offset)."""
+        """Read the fixed address that follows the A0-A3 opcodes and say where it points.
+
+        Returns (segment value, offset). The segment is DS unless a prefix chose another one.
+        """
         off = self.fetch16()
         # Data lives in DS unless a prefix (2E, 26, ...) picked another segment. Compare with
         # None, not truthiness: ES is register number 0.
@@ -226,91 +286,130 @@ class CPU:
         return self.s[seg], off
 
     def mov_al_moffs8(self, op):
-        """A0: MOV AL, [moffs8] - load AL from the byte at the direct address."""
+        """Load AL from the byte at a fixed address (opcode A0 + 16-bit offset)."""
         seg, off = self.moffs()
         self.set8(0, self.rb(seg, off))  # 8-bit register 0 is AL
 
     def mov_ax_moffs16(self, op):
-        """A1: MOV AX, [moffs16] - load AX from the word at the direct address."""
+        """Load AX from the word at a fixed address (opcode A1 + 16-bit offset).
+
+        A shorter encoding of the general MOV for the case where the register is AX.
+        """
         seg, off = self.moffs()
         self.r[self.AX] = self.rw(seg, off)
 
     def mov_moffs8_al(self, op):
-        """A2: MOV [moffs8], AL - store AL at the direct address."""
+        """Store AL at a fixed address (opcode A2 + 16-bit offset)."""
         seg, off = self.moffs()
         self.wb(seg, off, self.get8(0))
 
     def mov_moffs16_ax(self, op):
-        """A3: MOV [moffs16], AX - store AX at the direct address."""
+        """Store AX at a fixed address (opcode A3 + 16-bit offset).
+
+        Compilers like it for writing global variables.
+        """
         seg, off = self.moffs()
         self.ww(seg, off, self.r[self.AX])
 
     def mov_r8_imm8(self, op):
-        """B0..B7: MOV r8, imm8 - load an immediate byte into AL..BH (register = low 3 bits of op)."""
+        """Put a constant into an 8-bit register (opcodes B0-B7).
+
+        The register is the low 3 bits of the opcode: AL, CL, DL, BL, AH, CH, DH, BH.
+        """
         self.set8(op - Op.MOV_R8_IMM8, self.fetch8())
 
     def mov_r16_imm16(self, op):
-        """B8..BF: MOV r16, imm16 - load an immediate word into AX..DI (register = low 3 bits of op)."""
+        """Put a constant into a 16-bit register (opcodes B8-BF).
+
+        The register is the low 3 bits of the opcode: AX, CX, DX, BX, SP, BP, SI, DI.
+        """
         self.r[op - Op.MOV_R16_IMM16] = self.fetch16()
 
     def xor_rm8_r8(self, op):
-        """30 /r: XOR r/m8, r8."""
+        """XOR an 8-bit register into a register or memory byte (opcode 30 + ModRM).
+
+        XOR flips every bit of the destination that is 1 in the other operand. The result is stored in
+        the first operand of the assembly line, e.g. `xor [bx], al`.
+        """
         m = modrm.decode(self, self.seg_override)
         result = m.read8(self) ^ self.get8(m.reg)
         m.write8(self, result)
         self.set_logic_flags(result, 8)
 
     def xor_rm16_r16(self, op):
-        """31 /r: XOR r/m16, r16."""
+        """XOR a 16-bit register into a register or memory word (opcode 31 + ModRM).
+
+        The same as opcode 30 for 16-bit values.
+        """
         m = modrm.decode(self, self.seg_override)
         result = m.read16(self) ^ self.r[m.reg]
         m.write16(self, result)
         self.set_logic_flags(result, 16)
 
     def xor_r8_rm8(self, op):
-        """32 /r: XOR r8, r/m8."""
+        """XOR a register or memory byte into an 8-bit register (opcode 32 + ModRM).
+
+        The same as opcode 30 with the direction reversed: the result lands in the register.
+        """
         m = modrm.decode(self, self.seg_override)
         result = self.get8(m.reg) ^ m.read8(self)
         self.set8(m.reg, result)
         self.set_logic_flags(result, 8)
 
     def xor_r16_rm16(self, op):
-        """33 /r: XOR r16, r/m16 (33 C0 = xor ax,ax is the usual way to zero a register)."""
+        """XOR a register or memory word into a 16-bit register (opcode 33 + ModRM).
+
+        Most often seen as `xor ax, ax` (33 C0): XOR-ing a value with itself always gives 0, so this
+        is the short way to clear a register.
+        """
         m = modrm.decode(self, self.seg_override)
         result = self.r[m.reg] ^ m.read16(self)
         self.r[m.reg] = result
         self.set_logic_flags(result, 16)
 
     def xor_al_imm8(self, op):
-        """34 ib: XOR AL, imm8."""
+        """XOR AL with a constant that follows the opcode (opcode 34)."""
         result = self.get8(0) ^ self.fetch8()  # 8-bit register 0 is AL
         self.set8(0, result)
         self.set_logic_flags(result, 8)
 
     def xor_ax_imm16(self, op):
-        """35 iw: XOR AX, imm16."""
+        """XOR AX with a 16-bit constant that follows the opcode (opcode 35)."""
         result = self.r[self.AX] ^ self.fetch16()
         self.r[self.AX] = result
         self.set_logic_flags(result, 16)
 
     def call_near(self, op):
-        """E8: CALL rel16 - push the return address (the next instruction), then jump."""
+        """Call a procedure in the same code segment (opcode E8 + 16-bit displacement).
+
+        The address of the next instruction is pushed on the stack so that RET can come back to it,
+        then execution jumps to that address plus the displacement. The displacement is signed, so a
+        call can go backwards too.
+        """
         d = self.fetch16()  # fetching first leaves IP pointing at the next instruction
         self.push16(self.ip)
         # the displacement is signed and counted from the next instruction
         self.ip = (self.ip + d - (0x10000 if d & 0x8000 else 0)) & 0xFFFF
 
     def ret_near(self, op):
-        """C3: RET - pop the return address into IP."""
+        """Return from a procedure: pop the saved address off the stack into IP (opcode C3)."""
         self.ip = self.pop16()
 
     def jmp_short(self, op):
-        """EB: JMP rel8 - jump by a signed 8-bit displacement relative to the next instruction."""
+        """Jump a short distance (opcode EB + one signed byte).
+
+        The byte is added to the address of the next instruction, so the jump reaches 128 bytes back
+        or 127 bytes forward.
+        """
         d = self.fetch8()
         self.ip = (self.ip + d - (256 if d & 0x80 else 0)) & 0xFFFF
 
     def int_(self, op):
-        """CD: INT imm8 - call the Python-side handler registered for that interrupt number."""
+        """Call an interrupt (opcode CD + the interrupt number).
+
+        Here the interrupts are Python functions registered in self.int_handlers (see dos.py), not
+        code in the emulated memory. An interrupt nobody registered stops the emulator.
+        """
         n = self.fetch8()
         h = self.int_handlers.get(n)
         if h is None:
@@ -318,11 +417,11 @@ class CPU:
         h(self)
 
     def hlt(self, op):
-        """F4: HLT - stop the program with exit code 0."""
+        """Stop the CPU (opcode F4). We treat it as the end of the program, with exit code 0."""
         raise Exit(0)
 
     def run(self):
-        """Step until the program exits; return its exit code."""
+        """Keep executing instructions until the program exits, then return its exit code."""
         try:
             while True:
                 self.step()
