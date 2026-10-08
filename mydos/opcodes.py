@@ -22,6 +22,12 @@ class Op(IntEnum):
     SS_PREFIX = 0x36
     DS_PREFIX = 0x3E
 
+    XOR_RM8_R8 = 0x30    # followed by ModRM: r/m8 ^= r8
+    XOR_RM16_R16 = 0x31  # followed by ModRM: r/m16 ^= r16
+    XOR_R8_RM8 = 0x32    # followed by ModRM: r8 ^= r/m8
+    XOR_R16_RM16 = 0x33  # followed by ModRM: r16 ^= r/m16
+    XOR_AL_IMM8 = 0x34   # followed by imm8: AL ^= imm8
+    XOR_AX_IMM16 = 0x35  # followed by imm16: AX ^= imm16
     PUSH_R16 = 0x50      # 50..57: push AX CX DX BX SP BP SI DI
     POP_R16 = 0x58       # 58..5F: pop into AX CX DX BX SP BP SI DI
     MOV_RM16_R16 = 0x89  # followed by ModRM: r/m16 <- r16

@@ -47,6 +47,12 @@ class CPU:
             Op.POP_ES: self.pop_sreg,
             Op.POP_SS: self.pop_sreg,
             Op.POP_DS: self.pop_sreg,
+            Op.XOR_RM8_R8: self.xor_rm8_r8,
+            Op.XOR_RM16_R16: self.xor_rm16_r16,
+            Op.XOR_R8_RM8: self.xor_r8_rm8,
+            Op.XOR_R16_RM16: self.xor_r16_rm16,
+            Op.XOR_AL_IMM8: self.xor_al_imm8,
+            Op.XOR_AX_IMM16: self.xor_ax_imm16,
             Op.CALL_NEAR: self.call_near,
             Op.RET_NEAR: self.ret_near,
             Op.JMP_SHORT: self.jmp_short,
@@ -114,6 +120,12 @@ class CPU:
         self.set_flag(flags.SF, result >> (bits - 1))
         # parity looks at the low byte only, even for 16-bit results
         self.set_flag(flags.PF, bin(result & 0xFF).count("1") % 2 == 0)
+
+    def set_logic_flags(self, result, bits):
+        """Flags after AND/OR/XOR/TEST: CF and OF are cleared, SF/ZF/PF follow the result."""
+        self.set_flag(flags.CF, False)
+        self.set_flag(flags.OF, False)
+        self.set_szp(result, bits)
 
     # --- stack ---
     def push16(self, val):
@@ -240,6 +252,46 @@ class CPU:
     def mov_r16_imm16(self, op):
         """B8..BF: MOV r16, imm16 - load an immediate word into AX..DI (register = low 3 bits of op)."""
         self.r[op - Op.MOV_R16_IMM16] = self.fetch16()
+
+    def xor_rm8_r8(self, op):
+        """30 /r: XOR r/m8, r8."""
+        m = modrm.decode(self, self.seg_override)
+        result = m.read8(self) ^ self.get8(m.reg)
+        m.write8(self, result)
+        self.set_logic_flags(result, 8)
+
+    def xor_rm16_r16(self, op):
+        """31 /r: XOR r/m16, r16."""
+        m = modrm.decode(self, self.seg_override)
+        result = m.read16(self) ^ self.r[m.reg]
+        m.write16(self, result)
+        self.set_logic_flags(result, 16)
+
+    def xor_r8_rm8(self, op):
+        """32 /r: XOR r8, r/m8."""
+        m = modrm.decode(self, self.seg_override)
+        result = self.get8(m.reg) ^ m.read8(self)
+        self.set8(m.reg, result)
+        self.set_logic_flags(result, 8)
+
+    def xor_r16_rm16(self, op):
+        """33 /r: XOR r16, r/m16 (33 C0 = xor ax,ax is the usual way to zero a register)."""
+        m = modrm.decode(self, self.seg_override)
+        result = self.r[m.reg] ^ m.read16(self)
+        self.r[m.reg] = result
+        self.set_logic_flags(result, 16)
+
+    def xor_al_imm8(self, op):
+        """34 ib: XOR AL, imm8."""
+        result = self.get8(0) ^ self.fetch8()  # 8-bit register 0 is AL
+        self.set8(0, result)
+        self.set_logic_flags(result, 8)
+
+    def xor_ax_imm16(self, op):
+        """35 iw: XOR AX, imm16."""
+        result = self.r[self.AX] ^ self.fetch16()
+        self.r[self.AX] = result
+        self.set_logic_flags(result, 16)
 
     def call_near(self, op):
         """E8: CALL rel16 - push the return address (the next instruction), then jump."""
