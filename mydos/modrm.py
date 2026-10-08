@@ -62,6 +62,16 @@ class ModRM:
         else:
             cpu.ww(self.seg, self.off, val)
 
+    # The same, with the width (8 or 16) as an argument, for code that handles both sizes alike.
+    def read(self, cpu, bits):
+        return self.read16(cpu) if bits == 16 else self.read8(cpu)
+
+    def write(self, cpu, bits, val):
+        if bits == 16:
+            self.write16(cpu, val)
+        else:
+            self.write8(cpu, val)
+
 
 def decode(cpu, seg_override=None):
     """Fetch a ModRM byte (and its displacement) at CS:IP and return a ModRM.

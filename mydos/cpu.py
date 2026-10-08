@@ -39,10 +39,6 @@ class CPU:
         # opcode byte -> handler(op). Groups get one entry per opcode value.
         self.ops = {
             Op.NOP: self.nop,
-            Op.MOV_RM8_R8: self.mov_rm8_r8,
-            Op.MOV_RM16_R16: self.mov_rm16_r16,
-            Op.MOV_R8_RM8: self.mov_r8_rm8,
-            Op.MOV_R16_RM16: self.mov_r16_rm16,
             Op.MOV_RM16_SREG: self.mov_rm16_sreg,
             Op.MOV_SREG_RM16: self.mov_sreg_rm16,
             Op.MOV_AL_MOFFS8: self.mov_al_moffs8,
@@ -106,6 +102,9 @@ class CPU:
         for cc in range(16):
             self.ops[Op.JCC + cc] = self.jcc
 
+        for form in range(4):
+            self.ops[Op.MOV_RM_REG + form] = self.mov_rm_reg
+
         for i in range(8):
             self.ops[Op.INC_R16 + i] = self.inc_r16
             self.ops[Op.DEC_R16 + i] = self.dec_r16
@@ -159,6 +158,17 @@ class CPU:
             self.r[i] = (self.r[i] & 0x00FF) | (val & 0xFF) << 8
         else:
             self.r[i] = (self.r[i] & 0xFF00) | (val & 0xFF)
+
+    def get_reg(self, n, bits):
+        """Read register number n as a 16-bit register (AX..DI) or as an 8-bit one (AL..BH)."""
+        return self.r[n] if bits == 16 else self.get8(n)
+
+    def set_reg(self, n, bits, value):
+        """Write register number n, 16 or 8 bits wide (an 8-bit write leaves the other half alone)."""
+        if bits == 16:
+            self.r[n] = value & 0xFFFF
+        else:
+            self.set8(n, value)
 
     # --- flags (masks are in flags.py) ---
     def get_flag(self, mask):
@@ -432,39 +442,33 @@ class CPU:
         """
         self.s[(op >> 3) & 3] = self.pop16()
 
-    def mov_rm8_r8(self, op):
-        """Copy an 8-bit register into a register or a byte in memory (opcode 88 + ModRM).
+    def operands(self, op):
+        """Decode the ModRM byte of a two-operand instruction. Returns (modrm, bits, into_register).
 
-        The byte version of opcode 89. The registers are AL, CL, DL, BL, AH, CH, DH, BH.
+        Opcodes 88-8B and the first four forms of every arithmetic/logic operation (00-03, 08-0B,
+        ...) share one layout, in the two lowest bits of the opcode:
+            bit 0: the size, 0 = 8 bits, 1 = 16 bits
+            bit 1: the direction, 0 = the result goes into the register-or-memory operand (r/m),
+                                  1 = the result goes into the register named by the ModRM byte
+        The ModRM byte supplies both operands: the register ('reg' field) and the other one, which
+        is a register or a memory address (the 'mod' and 'r/m' fields).
         """
         m = modrm.decode(self, self.seg_override)
-        m.write8(self, self.get8(m.reg))
+        return m, 16 if op & 1 else 8, bool(op & 2)
 
-    def mov_r8_rm8(self, op):
-        """Copy a register or a byte in memory into an 8-bit register (opcode 8A + ModRM).
+    def mov_rm_reg(self, op):
+        """Copy a register to a register or memory, or the other way (opcodes 88, 89, 8A, 8B + ModRM).
 
-        The byte version of opcode 8B, and the reverse of 88. Only that one register changes: the
-        other half of the 16-bit register stays as it was, which is why code that wants a whole word
-        follows it with `xor ch, ch` or similar.
+        The bits of the opcode say the size and the direction, see operands(). So 88 is "byte, into
+        r/m", 89 "word, into r/m", 8A "byte, into the register", 8B "word, into the register".
+        Moving a byte into an 8-bit register leaves the other half of the 16-bit register as it was,
+        which is why code that wants a whole word follows 8A with `xor ch, ch` or similar.
         """
-        m = modrm.decode(self, self.seg_override)
-        self.set8(m.reg, m.read8(self))
-
-    def mov_rm16_r16(self, op):
-        """Copy a 16-bit register into a register or a word in memory (opcode 89 + ModRM).
-
-        The ModRM byte says where the value goes: another register, or an address like [bx+si+5].
-        """
-        m = modrm.decode(self, self.seg_override)
-        m.write16(self, self.r[m.reg])
-
-    def mov_r16_rm16(self, op):
-        """Copy a register or a word in memory into a 16-bit register (opcode 8B + ModRM).
-
-        The same as opcode 89 with the direction reversed.
-        """
-        m = modrm.decode(self, self.seg_override)
-        self.r[m.reg] = m.read16(self)
+        m, bits, into_register = self.operands(op)
+        if into_register:
+            self.set_reg(m.reg, bits, m.read(self, bits))
+        else:
+            m.write(self, bits, self.get_reg(m.reg, bits))
 
     def mov_rm16_sreg(self, op):
         """Copy a segment register into a register or memory (opcode 8C + ModRM).
@@ -554,16 +558,12 @@ class CPU:
         """
         fn = self.alu_ops[op >> 3]
         form = op & 7
-        if form <= 3:
-            m = modrm.decode(self, self.seg_override)
-        if form == 0:  # r/m8, r8
-            m.write8(self, fn(m.read8(self), self.get8(m.reg), 8))
-        elif form == 1:  # r/m16, r16
-            m.write16(self, fn(m.read16(self), self.r[m.reg], 16))
-        elif form == 2:  # r8, r/m8
-            self.set8(m.reg, fn(self.get8(m.reg), m.read8(self), 8))
-        elif form == 3:  # r16, r/m16
-            self.r[m.reg] = fn(self.r[m.reg], m.read16(self), 16)
+        if form <= 3:  # a register and r/m; size and direction as in operands()
+            m, bits, into_register = self.operands(op)
+            if into_register:
+                self.set_reg(m.reg, bits, fn(self.get_reg(m.reg, bits), m.read(self, bits), bits))
+            else:
+                m.write(self, bits, fn(m.read(self, bits), self.get_reg(m.reg, bits), bits))
         elif form == 4:  # AL, imm8 (8-bit register 0 is AL)
             self.set8(0, fn(self.get8(0), self.fetch8(), 8))
         else:  # form 5: AX, imm16

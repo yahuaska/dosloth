@@ -96,6 +96,8 @@ def machine(code, cf):
     cpu.mem[0x10000:0x10000 + len(code)] = code
     cpu.r[:] = REGS16
     cpu.r[CPU.BX] = MEM_ADDR
+    # start with several flags raised, so that an instruction which wrongly clears one is noticed
+    cpu.flags |= flags.ZF | flags.SF | flags.PF | flags.AF | flags.OF | flags.DF | flags.IF
     cpu.set_flag(flags.CF, cf)
     return cpu
 
@@ -109,6 +111,8 @@ class TestTwoOperandForms(unittest.TestCase):
     """Opcode bit 0 is the size (0 = byte, 1 = word), bit 1 the direction (0 = into r/m, 1 = into the register)."""
 
     def check_flags(self, cpu, start_flags, flags_fn, a, b, c, bits, label):
+        untouchable = flags.DF | flags.IF | flags.TF | 0x0002  # no arithmetic or MOV instruction changes these
+        self.assertEqual(cpu.flags & untouchable, start_flags & untouchable, label)
         if flags_fn is None:  # MOV: not a single flag may change
             self.assertEqual(cpu.flags, start_flags, label)
         else:

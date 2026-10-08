@@ -82,6 +82,14 @@ def _disp(d):
     return "" if d == 0 else (f"-{-d:X}" if d < 0 else f"+{d:X}")
 
 
+def _operands(r, op, seg_override):
+    """The two operands, as (destination, source) text, of an opcode in the layout CPU.operands() describes."""
+    bits = 16 if op & 1 else 8
+    regs = REG16 if bits == 16 else REG8
+    reg, rm, _ = _modrm(r, seg_override, bits)
+    return (regs[reg], rm) if op & 2 else (rm, regs[reg])
+
+
 def _direct(r, seg_override):
     """The [address] that follows the A0-A3 opcodes."""
     return f"{seg_override + ':' if seg_override else ''}[{r.u16():04X}]"
@@ -118,10 +126,8 @@ def _decode_opcode(r, op, seg_override):
             return f"{name} al, {r.u8():02X}"
         if form == 5:
             return f"{name} ax, {r.u16():04X}"
-        bits = 8 if form % 2 == 0 else 16
-        regs = REG8 if bits == 8 else REG16
-        reg, rm, _ = _modrm(r, seg_override, bits)
-        return f"{name} {rm}, {regs[reg]}" if form < 2 else f"{name} {regs[reg]}, {rm}"
+        dst, src = _operands(r, op, seg_override)
+        return f"{name} {dst}, {src}"
     if op in PLAIN:
         return PLAIN[op]
     if op in (Op.PUSH_ES, Op.PUSH_CS, Op.PUSH_SS, Op.PUSH_DS):
@@ -150,18 +156,9 @@ def _decode_opcode(r, op, seg_override):
             imm = _signed(r.s8())  # a one-byte constant that the CPU sign-extends
         size = ("byte " if bits == 8 else "word ") if is_mem else ""  # memory needs a size
         return f"{Alu(reg).name.lower()} {size}{rm}, {imm}"
-    if op == Op.MOV_RM8_R8:
-        reg, rm, _ = _modrm(r, seg_override, 8)
-        return f"mov {rm}, {REG8[reg]}"
-    if op == Op.MOV_R8_RM8:
-        reg, rm, _ = _modrm(r, seg_override, 8)
-        return f"mov {REG8[reg]}, {rm}"
-    if op == Op.MOV_RM16_R16:
-        reg, rm, _ = _modrm(r, seg_override, 16)
-        return f"mov {rm}, {REG16[reg]}"
-    if op == Op.MOV_R16_RM16:
-        reg, rm, _ = _modrm(r, seg_override, 16)
-        return f"mov {REG16[reg]}, {rm}"
+    if Op.MOV_RM_REG <= op < Op.MOV_RM_REG + 4:
+        dst, src = _operands(r, op, seg_override)
+        return f"mov {dst}, {src}"
     if op in (Op.MOV_RM16_SREG, Op.MOV_SREG_RM16):
         reg, rm, _ = _modrm(r, seg_override, 16)
         if reg > 3:

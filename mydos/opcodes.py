@@ -30,10 +30,7 @@ class Op(IntEnum):
     ALU_RM8_IMM8 = 0x80    # + ModRM + imm8:  the operation is the ModRM 'reg' field (see Alu)
     ALU_RM16_IMM16 = 0x81  # + ModRM + imm16
     ALU_RM16_IMM8 = 0x83   # + ModRM + imm8, sign-extended to 16 bits
-    MOV_RM8_R8 = 0x88    # followed by ModRM: r/m8 <- r8
-    MOV_RM16_R16 = 0x89  # followed by ModRM: r/m16 <- r16
-    MOV_R8_RM8 = 0x8A    # followed by ModRM: r8 <- r/m8
-    MOV_R16_RM16 = 0x8B  # followed by ModRM: r16 <- r/m16
+    MOV_RM_REG = 0x88    # 88..8B + ModRM: r/m8 <- r8, r/m16 <- r16, r8 <- r/m8, r16 <- r/m16 (see CPU.operands)
     MOV_RM16_SREG = 0x8C  # followed by ModRM (reg = segment register): r/m16 <- sreg
     MOV_SREG_RM16 = 0x8E  # followed by ModRM (reg = segment register): sreg <- r/m16
     NOP = 0x90
