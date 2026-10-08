@@ -104,6 +104,8 @@ class CPU:
 
         for form in range(4):
             self.ops[Op.MOV_RM_REG + form] = self.mov_rm_reg
+        for size in range(2):
+            self.ops[Op.MOV_RM_IMM + size] = self.mov_rm_imm
 
         for i in range(8):
             self.ops[Op.INC_R16 + i] = self.inc_r16
@@ -455,6 +457,21 @@ class CPU:
         """
         m = modrm.decode(self, self.seg_override)
         return m, 16 if op & 1 else 8, bool(op & 2)
+
+    def mov_rm_imm(self, op):
+        """Put a constant into a register or into memory (opcodes C6 for a byte, C7 for a word).
+
+        This is the only way to store a constant straight into memory. The ModRM byte (whose 'reg'
+        field has to be 0 here) tells where, and the constant follows it, after any address bytes:
+        `C7 06 34 12 00 01` is `mov word [1234], 0100`.
+        """
+        m = modrm.decode(self, self.seg_override)
+        if m.reg != 0:  # the other values of the field are not defined
+            raise NotImplementedError(
+                f"opcode {op:02X} /{m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        bits = 16 if op & 1 else 8
+        imm = self.fetch16() if bits == 16 else self.fetch8()  # read after the ModRM bytes, which decode ate
+        m.write(self, bits, imm)
 
     def mov_rm_reg(self, op):
         """Copy a register to a register or memory, or the other way (opcodes 88, 89, 8A, 8B + ModRM).

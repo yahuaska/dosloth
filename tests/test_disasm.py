@@ -4,6 +4,11 @@ from mydos.cpu import CPU
 from mydos.disasm import disasm
 
 
+# A ModRM byte that is valid after the opcode: a register operand, and the 'reg' field the opcode needs.
+# Most opcodes accept any; the groups below only know some operations (F7 /3 = NEG, C6 and C7 /0 = MOV).
+MODRM_FOR = {0xF7: 0xD8, 0xC6: 0xC0, 0xC7: 0xC0}
+
+
 def machine(code):
     """A CPU with `code` placed at 1000:0100."""
     cpu = CPU()
@@ -60,6 +65,10 @@ class TestText(unittest.TestCase):
             (b"\xFC", "cld"),
             (b"\xC3", "ret"),
             (b"\xF7\xD9", "neg cx"),
+            (b"\x26\xC6\x07\xFF", "mov byte es:[bx], FF"),   # from esetup.exe
+            (b"\xC7\x06\x34\x12\x00\x01", "mov word [1234], 0100"),
+            (b"\xC6\xC1\x05", "mov cl, 05"),
+            (b"\xC7\xC3\x34\x12", "mov bx, 1234"),
             (b"\xD3\xE3", "shl bx, cl"),
             (b"\xD3\x2F", "shr word [bx], cl"),
             (b"\xF7\x1F", "neg word [bx]"),
@@ -79,7 +88,7 @@ class TestAgreesWithCpu(unittest.TestCase):
         """If you teach the CPU a new opcode and forget disasm.py, this fails."""
         for op in CPU().ops:
             with self.subTest(op=f"{op:02X}"):
-                code = bytes([op, 0xD8, 0, 0, 0, 0, 0, 0])  # ModRM D8: register form, reg field 3
+                code = bytes([op, MODRM_FOR.get(op, 0xD8), 0, 0, 0, 0, 0, 0])
                 cpu = machine(code)
                 cpu.ip = 0x100
                 fetched = []

@@ -172,6 +172,14 @@ def _decode_opcode(r, op, seg_override):
         return f"mov {_direct(r, seg_override)}, al"
     if op == Op.MOV_MOFFS16_AX:
         return f"mov {_direct(r, seg_override)}, ax"
+    if op in (Op.MOV_RM_IMM, Op.MOV_RM_IMM + 1):
+        bits = 16 if op & 1 else 8
+        reg, rm, is_mem = _modrm(r, seg_override, bits)
+        if reg != 0:
+            return None
+        imm = f"{r.u16():04X}" if bits == 16 else f"{r.u8():02X}"
+        size = ("word " if bits == 16 else "byte ") if is_mem else ""
+        return f"mov {size}{rm}, {imm}"
     if Op.MOV_R8_IMM8 <= op < Op.MOV_R8_IMM8 + 8:
         return f"mov {REG8[op - Op.MOV_R8_IMM8]}, {r.u8():02X}"
     if Op.MOV_R16_IMM16 <= op < Op.MOV_R16_IMM16 + 8:

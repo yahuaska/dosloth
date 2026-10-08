@@ -220,5 +220,53 @@ class TestTwoOperandForms(unittest.TestCase):
                     self.assertEqual(cpu_flags(cpu), flags_fn(a, b, c, bits), label)
 
 
+class TestMovImmediate(unittest.TestCase):
+    """C6 (byte) and C7 (word): mov r/m, imm."""
+
+    def run_code(self, code, **regs):
+        cpu = machine(bytes(code), False)
+        for name, value in regs.items():
+            cpu.r[getattr(CPU, name)] = value
+        start_flags = cpu.flags
+        cpu.step()
+        self.assertEqual(cpu.flags, start_flags)  # MOV changes no flag
+        return cpu
+
+    def test_byte_into_memory_through_es(self):
+        """26 C6 07 FF = mov byte es:[bx], FF, from esetup.exe"""
+        cpu = self.run_code([0x26, 0xC6, 0x07, 0xFF])
+        self.assertEqual(cpu.mem[0x30000 + MEM_ADDR], 0xFF)
+        self.assertEqual(cpu.mem[0x30000 + MEM_ADDR + 1], 0)  # one byte only
+        self.assertEqual(cpu.mem[0x20000 + MEM_ADDR], 0)  # not DS
+        self.assertEqual(cpu.ip, 4)
+
+    def test_word_into_memory_after_the_address_bytes(self):
+        cpu = self.run_code([0xC7, 0x06, 0x34, 0x12, 0x00, 0x01])  # mov word [1234], 0100
+        self.assertEqual(cpu.rw(0x2000, 0x1234), 0x0100)
+        self.assertEqual(cpu.ip, 6)
+
+    def test_displacement_then_constant(self):
+        cpu = self.run_code([0xC7, 0x47, 0xFE, 0xCD, 0xAB])  # mov word [bx-2], ABCD
+        self.assertEqual(cpu.rw(0x2000, MEM_ADDR - 2), 0xABCD)
+        self.assertEqual(cpu.ip, 5)
+
+    def test_into_every_register(self):
+        for reg in range(8):
+            cpu = self.run_code([0xC6, 0xC0 | reg, 0x5A])  # 8-bit register reg
+            model = put(REGS16[:3] + [MEM_ADDR] + REGS16[4:], reg, 8, 0x5A)
+            self.assertEqual(cpu.r, model, f"C6 reg {reg}")
+            cpu = self.run_code([0xC7, 0xC0 | reg, 0x34, 0x12])  # 16-bit register reg
+            model = list(REGS16)
+            model[CPU.BX] = MEM_ADDR
+            model[reg] = 0x1234
+            self.assertEqual(cpu.r, model, f"C7 reg {reg}")
+
+    def test_the_other_values_of_the_reg_field_stop_loudly(self):
+        for op in (0xC6, 0xC7):
+            for reg in range(1, 8):
+                with self.assertRaises(NotImplementedError, msg=f"{op:02X} /{reg}"):
+                    self.run_code([op, 0xC0 | reg << 3, 0, 0])
+
+
 if __name__ == "__main__":
     unittest.main()
