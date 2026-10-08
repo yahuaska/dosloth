@@ -46,3 +46,9 @@ class Op(IntEnum):
     CALL_NEAR = 0xE8     # followed by a signed 16-bit displacement; pushes the return IP
     JMP_SHORT = 0xEB     # followed by a signed 8-bit displacement
     HLT = 0xF4
+    CLC = 0xF8
+    STC = 0xF9
+    CLI = 0xFA
+    STI = 0xFB
+    CLD = 0xFC
+    STD = 0xFD

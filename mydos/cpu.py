@@ -63,6 +63,12 @@ class CPU:
             Op.JMP_SHORT: self.jmp_short,
             Op.INT: self.int_,
             Op.HLT: self.hlt,
+            Op.CLC: self.clc,
+            Op.STC: self.stc,
+            Op.CLI: self.cli,
+            Op.STI: self.sti,
+            Op.CLD: self.cld,
+            Op.STD: self.std,
         }
         for i in range(8):
             self.ops[Op.PUSH_R16 + i] = self.push_r16
@@ -419,6 +425,33 @@ class CPU:
     def hlt(self, op):
         """Stop the CPU (opcode F4). We treat it as the end of the program, with exit code 0."""
         raise Exit(0)
+
+    def clc(self, op):
+        """Clear the carry flag (opcode F8)."""
+        self.set_flag(flags.CF, False)
+
+    def stc(self, op):
+        """Set the carry flag (opcode F9)."""
+        self.set_flag(flags.CF, True)
+
+    def cli(self, op):
+        """Clear the interrupt flag (opcode FA): "don't interrupt me".
+
+        We have no hardware interrupts yet, so for now this only changes the flag.
+        """
+        self.set_flag(flags.IF, False)
+
+    def sti(self, op):
+        """Set the interrupt flag (opcode FB): hardware interrupts are allowed again."""
+        self.set_flag(flags.IF, True)
+
+    def cld(self, op):
+        """Clear the direction flag (opcode FC): string instructions will walk forward through memory."""
+        self.set_flag(flags.DF, False)
+
+    def std(self, op):
+        """Set the direction flag (opcode FD): string instructions will walk backward through memory."""
+        self.set_flag(flags.DF, True)
 
     def run(self):
         """Keep executing instructions until the program exits, then return its exit code."""
