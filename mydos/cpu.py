@@ -1,4 +1,4 @@
-from . import modrm
+from . import flags, modrm
 from .opcodes import Op
 
 
@@ -94,6 +94,26 @@ class CPU:
             self.r[i] = (self.r[i] & 0x00FF) | (val & 0xFF) << 8
         else:
             self.r[i] = (self.r[i] & 0xFF00) | (val & 0xFF)
+
+    # --- flags (masks are in flags.py) ---
+    def get_flag(self, mask):
+        """True if the flag with this mask is set."""
+        return bool(self.flags & mask)
+
+    def set_flag(self, mask, on):
+        """Set or clear the flag with this mask."""
+        if on:
+            self.flags |= mask
+        else:
+            self.flags &= ~mask
+
+    def set_szp(self, result, bits):
+        """Set SF, ZF and PF from a result of the given width (8 or 16 bits)."""
+        result &= (1 << bits) - 1
+        self.set_flag(flags.ZF, result == 0)
+        self.set_flag(flags.SF, result >> (bits - 1))
+        # parity looks at the low byte only, even for 16-bit results
+        self.set_flag(flags.PF, bin(result & 0xFF).count("1") % 2 == 0)
 
     # --- stack ---
     def push16(self, val):
