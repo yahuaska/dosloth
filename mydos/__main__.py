@@ -2,7 +2,7 @@ import struct
 import sys
 from dataclasses import dataclass
 
-from . import dos
+from . import dos, dump
 from .cpu import CPU
 
 PSP_SEG = 0x1000
@@ -87,7 +87,12 @@ def main():
     cpu = CPU()
     dos.install(cpu)
     load(cpu, sys.argv[1])
-    sys.exit(cpu.run())
+    try:
+        code = cpu.run()
+    except Exception as e:
+        dump.write(cpu, sys.argv[1], e)  # leave something to debug with, then fail as usual
+        raise
+    sys.exit(code)
 
 
 main()
