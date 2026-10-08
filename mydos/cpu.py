@@ -32,6 +32,8 @@ class CPU:
             Op.NOP: self.nop,
             Op.MOV_RM16_R16: self.mov_rm16_r16,
             Op.MOV_R16_RM16: self.mov_r16_rm16,
+            Op.MOV_RM16_SREG: self.mov_rm16_sreg,
+            Op.MOV_SREG_RM16: self.mov_sreg_rm16,
             Op.JMP_SHORT: self.jmp_short,
             Op.INT: self.int_,
             Op.HLT: self.hlt,
@@ -114,6 +116,18 @@ class CPU:
     def mov_r16_rm16(self, op):
         m = modrm.decode(self, self.seg_override)
         self.r[m.reg] = m.read16(self)
+
+    def mov_rm16_sreg(self, op):
+        m = modrm.decode(self, self.seg_override)
+        if m.reg > 3:  # the reg field only names ES, CS, SS, DS here
+            raise NotImplementedError(f"MOV r/m16, sreg with reg={m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        m.write16(self, self.s[m.reg])
+
+    def mov_sreg_rm16(self, op):
+        m = modrm.decode(self, self.seg_override)
+        if m.reg > 3 or m.reg == self.CS:  # loading CS this way is not a valid instruction
+            raise NotImplementedError(f"MOV sreg, r/m16 with reg={m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        self.s[m.reg] = m.read16(self)
 
     def mov_r8_imm8(self, op):
         self.set8(op - Op.MOV_R8_IMM8, self.fetch8())

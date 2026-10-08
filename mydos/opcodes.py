@@ -15,6 +15,8 @@ class Op(IntEnum):
 
     MOV_RM16_R16 = 0x89  # followed by ModRM: r/m16 <- r16
     MOV_R16_RM16 = 0x8B  # followed by ModRM: r16 <- r/m16
+    MOV_RM16_SREG = 0x8C  # followed by ModRM (reg = segment register): r/m16 <- sreg
+    MOV_SREG_RM16 = 0x8E  # followed by ModRM (reg = segment register): sreg <- r/m16
     NOP = 0x90
     MOV_R8_IMM8 = 0xB0   # B0..B7: AL CL DL BL AH CH DH BH <- imm8
     MOV_R16_IMM16 = 0xB8  # B8..BF: AX CX DX BX SP BP SI DI <- imm16
