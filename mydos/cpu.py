@@ -68,6 +68,8 @@ class CPU:
             Op.LOOP: self.loop,
             Op.JCXZ: self.jcxz,
             Op.GROUP3_RM16: self.group3_rm16,
+            Op.GROUP4_RM8: self.group4_rm8,
+            Op.GROUP5_RM16: self.group5_rm16,
             Op.CALL_NEAR: self.call_near,
             Op.RET_NEAR: self.ret_near,
             Op.JMP_SHORT: self.jmp_short,
@@ -396,6 +398,19 @@ class CPU:
         """Do nothing (opcode 90)."""
         pass
 
+    def inc_dec(self, value, bits, decrement):
+        """Add 1 to `value` (or subtract 1) the way INC and DEC do, and return the result.
+
+        The flags are set as for ADD or SUB, except CF, which keeps the value it had.
+        """
+        carry = self.get_flag(flags.CF)
+        if decrement:
+            result = self.sub_with_flags(value, 1, bits)
+        else:
+            result = self.add_with_flags(value, 1, bits)
+        self.set_flag(flags.CF, carry)
+        return result
+
     def inc_r16(self, op):
         """Add 1 to a 16-bit register (opcodes 40-47; the register is the low 3 bits of the opcode).
 
@@ -403,16 +418,12 @@ class CPU:
         the middle of multi-word arithmetic, where the carry from the previous step must survive.
         """
         reg = op - Op.INC_R16
-        carry = self.get_flag(flags.CF)
-        self.r[reg] = self.add_with_flags(self.r[reg], 1, 16)
-        self.set_flag(flags.CF, carry)
+        self.r[reg] = self.inc_dec(self.r[reg], 16, decrement=False)
 
     def dec_r16(self, op):
         """Subtract 1 from a 16-bit register (opcodes 48-4F). Like INC, it leaves CF alone."""
         reg = op - Op.DEC_R16
-        carry = self.get_flag(flags.CF)
-        self.r[reg] = self.sub_with_flags(self.r[reg], 1, 16)
-        self.set_flag(flags.CF, carry)
+        self.r[reg] = self.inc_dec(self.r[reg], 16, decrement=True)
 
     def push_r16(self, op):
         """Push a 16-bit register onto the stack (opcodes 50-57).
@@ -878,6 +889,51 @@ class CPU:
         # NEG: change the sign, i.e. 0 - operand. The flags come out right as for any subtraction:
         # CF is set unless the operand was 0, OF only for 8000h (-32768 has no positive twin).
         m.write16(self, self.sub_with_flags(0, m.read16(self), 16))
+
+    def group4_rm8(self, op):
+        """Opcode FE: add 1 to (INC, reg field 0) or subtract 1 from (DEC, 1) a register or memory byte."""
+        m = modrm.decode(self, self.seg_override)
+        if m.reg > 1:
+            raise NotImplementedError(f"opcode FE /{m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        m.write8(self, self.inc_dec(m.read8(self), 8, decrement=bool(m.reg)))
+
+    def group5_rm16(self, op):
+        """Opcode FF: one of six operations on a register or memory word, chosen by the ModRM 'reg' field.
+
+            0 INC       add 1                         4 JMP       jump to the address in the operand
+            1 DEC       subtract 1                    5 JMP far   jump to the segment:offset in memory
+            2 CALL      call the address in the       6 PUSH      put the operand on the stack
+                        operand
+            3 CALL far  call the segment:offset in memory
+
+        What makes these different from E8 (CALL) and EB (JMP) is that the target is not worked out
+        from a distance written in the code: it is read from the operand when the instruction runs.
+        That is how a program calls a function through a pointer or a table of functions, as in
+        `call word es:[bx+2]`. A near address is one word (the new IP). A far one is two words in
+        memory, the offset first and then the segment; only memory can hold it, not a register.
+        """
+        m = modrm.decode(self, self.seg_override)
+        if m.reg in (0, 1):
+            m.write16(self, self.inc_dec(m.read16(self), 16, decrement=bool(m.reg)))
+        elif m.reg == 2:  # read the operand before pushing: it may be addressed through SP
+            target = m.read16(self)
+            self.push16(self.ip)  # the instruction has been read to its end: IP is the return address
+            self.ip = target
+        elif m.reg == 4:
+            self.ip = m.read16(self)
+        elif m.reg in (3, 5):
+            if m.is_reg:  # there is no register that could hold 4 bytes
+                raise NotImplementedError(
+                    f"opcode FF /{m.reg} with a register at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+            offset, segment = m.rw_pair(self)
+            if m.reg == 3:
+                self.push16(self.s[self.CS])
+                self.push16(self.ip)
+            self.s[self.CS], self.ip = segment, offset
+        elif m.reg == 6:  # read first: PUSH SP pushes the value SP had before the push
+            self.push16(m.read16(self))
+        else:
+            raise NotImplementedError(f"opcode FF /{m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
 
     def clc(self, op):
         """Clear the carry flag (opcode F8)."""

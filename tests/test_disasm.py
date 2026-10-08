@@ -5,8 +5,9 @@ from mydos.disasm import disasm
 
 
 # A ModRM byte that is valid after the opcode: a register operand, and the 'reg' field the opcode needs.
-# Most opcodes accept any; the groups below only know some operations (F7 /3 = NEG, C6 and C7 /0 = MOV).
-MODRM_FOR = {0xF7: 0xD8, 0xC6: 0xC0, 0xC7: 0xC0}
+# Most opcodes accept any; the groups below only know some operations (F7 /3 = NEG, C6 and C7 /0 = MOV,
+# FE and FF /0 = INC).
+MODRM_FOR = {0xF7: 0xD8, 0xC6: 0xC0, 0xC7: 0xC0, 0xFE: 0xC0, 0xFF: 0xC0}
 
 
 def machine(code):
@@ -65,6 +66,17 @@ class TestText(unittest.TestCase):
             (b"\xFC", "cld"),
             (b"\xC3", "ret"),
             (b"\xF7\xD9", "neg cx"),
+            (b"\x26\xFF\x57\x02", "call word es:[bx+2]"),   # from esetup.exe
+            (b"\xFF\xD0", "call ax"),
+            (b"\xFF\x1F", "call far [bx]"),
+            (b"\xFF\xE3", "jmp bx"),
+            (b"\xFF\x6F\x04", "jmp far [bx+4]"),
+            (b"\xFF\x36\x34\x12", "push word [1234]"),
+            (b"\xFF\xF1", "push cx"),
+            (b"\xFF\xC0", "inc ax"),
+            (b"\xFF\x0F", "dec word [bx]"),
+            (b"\xFE\xC1", "inc cl"),
+            (b"\xFE\x0F", "dec byte [bx]"),
             (b"\x26\xC6\x07\xFF", "mov byte es:[bx], FF"),   # from esetup.exe
             (b"\xC7\x06\x34\x12\x00\x01", "mov word [1234], 0100"),
             (b"\xC6\xC1\x05", "mov cl, 05"),

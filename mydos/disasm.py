@@ -184,6 +184,19 @@ def _decode_opcode(r, op, seg_override):
         return f"mov {REG8[op - Op.MOV_R8_IMM8]}, {r.u8():02X}"
     if Op.MOV_R16_IMM16 <= op < Op.MOV_R16_IMM16 + 8:
         return f"mov {REG16[op - Op.MOV_R16_IMM16]}, {r.u16():04X}"
+    if op == Op.GROUP4_RM8:
+        reg, rm, is_mem = _modrm(r, seg_override, 8)
+        if reg > 1:
+            return None
+        return f"{'dec' if reg else 'inc'} {'byte ' if is_mem else ''}{rm}"
+    if op == Op.GROUP5_RM16:
+        reg, rm, is_mem = _modrm(r, seg_override, 16)
+        word = f"word {rm}" if is_mem else rm
+        if reg in (0, 1, 2, 4, 6):
+            return f"{['inc', 'dec', 'call', None, 'jmp', None, 'push'][reg]} {word}"
+        if reg in (3, 5) and is_mem:  # a far pointer needs memory
+            return f"{'call' if reg == 3 else 'jmp'} far {rm}"
+        return None
     if op == Op.GROUP3_RM16:
         reg, rm, is_mem = _modrm(r, seg_override, 16)
         if reg != 3:

@@ -62,6 +62,10 @@ class ModRM:
         else:
             cpu.ww(self.seg, self.off, val)
 
+    def rw_pair(self, cpu):
+        """Read the two words that a far pointer in memory is made of: (offset, segment). Memory only."""
+        return cpu.rw(self.seg, self.off), cpu.rw(self.seg, (self.off + 2) & 0xFFFF)
+
     # The same, with the width (8 or 16) as an argument, for code that handles both sizes alike.
     def read(self, cpu, bits):
         return self.read16(cpu) if bits == 16 else self.read8(cpu)

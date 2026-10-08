@@ -70,6 +70,8 @@ class Op(IntEnum):
     STI = 0xFB
     CLD = 0xFC
     STD = 0xFD
+    GROUP4_RM8 = 0xFE    # + ModRM: INC or DEC of r/m8, chosen by the 'reg' field (0 or 1)
+    GROUP5_RM16 = 0xFF   # + ModRM: INC, DEC, CALL, JMP (near or far) or PUSH of r/m16, by the 'reg' field
 
 
 class Alu(IntEnum):

@@ -268,5 +268,133 @@ class TestMovImmediate(unittest.TestCase):
                     self.run_code([op, 0xC0 | reg << 3, 0, 0])
 
 
+class TestGroups4And5(unittest.TestCase):
+    """FE (INC/DEC byte) and FF (INC, DEC, CALL, JMP, PUSH on a word), plus the short INC/DEC/PUSH."""
+
+    def run_code(self, code, steps=1, cf=False, **regs):
+        cpu = machine(bytes(code), cf)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0200
+        for name, value in regs.items():
+            cpu.r[getattr(CPU, name)] = value
+        for _ in range(steps):
+            cpu.step()
+        return cpu
+
+    def stack_word(self, cpu, depth=0):
+        return cpu.rw(cpu.s[CPU.SS], cpu.r[CPU.SP] + 2 * depth)
+
+    def test_call_through_a_pointer_in_memory(self):
+        """26 FF 57 02 = call word es:[bx+2], from esetup.exe"""
+        cpu = machine(bytes([0x26, 0xFF, 0x57, 0x02]), False)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0200
+        cpu.ww(0x3000, MEM_ADDR + 2, 0x165D)  # the pointer lives in ES, not in DS
+        cpu.ww(0x2000, MEM_ADDR + 2, 0x1111)
+        start_flags = cpu.flags
+        cpu.step()
+        self.assertEqual(cpu.ip, 0x165D)
+        self.assertEqual(cpu.r[CPU.SP], 0x01FE)
+        self.assertEqual(self.stack_word(cpu), 4)  # the address after the 4-byte instruction
+        self.assertEqual(cpu.flags, start_flags)
+
+    def test_call_through_a_register_and_come_back(self):
+        cpu = self.run_code([0xFF, 0xD0], AX=0x0010)  # call ax
+        self.assertEqual((cpu.ip, self.stack_word(cpu)), (0x10, 2))
+        cpu.mem[0x10010] = 0xC3  # ret
+        cpu.step()
+        self.assertEqual((cpu.ip, cpu.r[CPU.SP]), (2, 0x0200))
+
+    def test_the_operand_is_read_before_the_return_address_is_pushed(self):
+        cpu = machine(bytes([0xFF, 0x14]), False)  # call word [si], with SI pointing at the stack slot to be written
+        cpu.s[CPU.SS], cpu.s[CPU.DS], cpu.r[CPU.SP], cpu.r[CPU.SI] = 0x4000, 0x4000, 0x0200, 0x01FE
+        cpu.ww(0x4000, 0x01FE, 0x0055)  # what [si] holds before the call
+        cpu.step()
+        self.assertEqual(cpu.ip, 0x0055)
+
+    def test_jmp_near_through_register_and_memory(self):
+        cpu = self.run_code([0xFF, 0xE3], BX=0x0777)  # jmp bx
+        self.assertEqual((cpu.ip, cpu.r[CPU.SP]), (0x777, 0x0200))  # nothing pushed
+        cpu = machine(bytes([0xFF, 0x27]), False)  # jmp word [bx]
+        cpu.ww(0x2000, MEM_ADDR, 0x0321)
+        cpu.step()
+        self.assertEqual(cpu.ip, 0x321)
+
+    def test_far_call_and_far_jump_read_offset_then_segment(self):
+        cpu = machine(bytes([0xFF, 0x1F]), False)  # call far [bx]
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0200
+        cpu.ww(0x2000, MEM_ADDR, 0x1234)
+        cpu.ww(0x2000, MEM_ADDR + 2, 0x5678)
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x5678, 0x1234))
+        self.assertEqual(cpu.r[CPU.SP], 0x01FC)
+        self.assertEqual((self.stack_word(cpu, 0), self.stack_word(cpu, 1)), (2, 0x1000))  # IP on top, CS under it
+        cpu = machine(bytes([0xFF, 0x2F]), False)  # jmp far [bx]
+        cpu.r[CPU.SP] = 0x0200
+        cpu.ww(0x2000, MEM_ADDR, 0x0042)
+        cpu.ww(0x2000, MEM_ADDR + 2, 0x6000)
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.r[CPU.SP]), (0x6000, 0x42, 0x0200))
+
+    def test_far_forms_need_memory(self):
+        for reg in (3, 5):
+            with self.assertRaises(NotImplementedError):
+                self.run_code([0xFF, 0xC0 | reg << 3])
+
+    def test_push_word(self):
+        cpu = machine(bytes([0xFF, 0x37]), False)  # push word [bx]
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0200
+        cpu.ww(0x2000, MEM_ADDR, 0xBEEF)
+        start_flags = cpu.flags
+        cpu.step()
+        self.assertEqual((self.stack_word(cpu), cpu.r[CPU.SP], cpu.flags), (0xBEEF, 0x01FE, start_flags))
+        cpu = self.run_code([0xFF, 0xF1], CX=0x4321)  # push cx
+        self.assertEqual(self.stack_word(cpu), 0x4321)
+        cpu = self.run_code([0xFF, 0xF4])  # push sp stores the value SP had before
+        self.assertEqual(self.stack_word(cpu), 0x0200)
+
+    def test_inc_dec_word_keep_the_carry_flag(self):
+        for reg, name, start, want, overflow in ((0, "inc", 0x7FFF, 0x8000, True), (1, "dec", 0x8000, 0x7FFF, True),
+                                                  (0, "inc", 0xFFFF, 0x0000, False), (1, "dec", 0x0000, 0xFFFF, False)):
+            for cf in (False, True):
+                label = f"{name} {start:04X} cf={cf}"
+                cpu = self.run_code([0xFF, 0xC0 | reg << 3 | 3], cf=cf, BX=start)  # on BX
+                self.assertEqual(cpu.r[CPU.BX], want, label)
+                self.assertEqual(cpu.get_flag(flags.CF), cf, label)
+                self.assertEqual(cpu.get_flag(flags.OF), overflow, label)
+                self.assertEqual(cpu.get_flag(flags.ZF), want == 0, label)
+        cpu = machine(bytes([0xFF, 0x07]), False)  # inc word [bx]
+        cpu.ww(0x2000, MEM_ADDR, 0x00FF)
+        cpu.step()
+        self.assertEqual(cpu.rw(0x2000, MEM_ADDR), 0x0100)
+
+    def test_inc_dec_byte(self):
+        cpu = self.run_code([0xFE, 0xC1], CX=0x12FF)  # inc cl
+        self.assertEqual(cpu.r[CPU.CX], 0x1200)  # CL wrapped, CH left alone
+        self.assertTrue(cpu.get_flag(flags.ZF))
+        cpu = self.run_code([0xFE, 0xCD], CX=0x1200, cf=True)  # dec ch
+        self.assertEqual(cpu.r[CPU.CX], 0x1100)
+        self.assertTrue(cpu.get_flag(flags.CF))
+        cpu = machine(bytes([0xFE, 0x0F]), False)  # dec byte [bx]
+        cpu.mem[0x20000 + MEM_ADDR] = 0x80
+        cpu.mem[0x20000 + MEM_ADDR + 1] = 0x99
+        cpu.step()
+        self.assertEqual((cpu.mem[0x20000 + MEM_ADDR], cpu.mem[0x20000 + MEM_ADDR + 1]), (0x7F, 0x99))
+        self.assertTrue(cpu.get_flag(flags.OF))  # -128 - 1
+
+    def test_the_undefined_operations_stop_loudly(self):
+        for code in ([0xFE, 0xD0], [0xFE, 0xF8], [0xFF, 0xF8]):  # FE /2, FE /7, FF /7
+            with self.assertRaises(NotImplementedError):
+                self.run_code(code)
+
+    def test_the_short_inc_dec_still_work(self):
+        for reg in range(8):
+            for cf in (False, True):
+                cpu = self.run_code([0x40 + reg], cf=cf)
+                self.assertEqual(cpu.r[reg], (self.run_code([0x90]).r[reg] + 1) & 0xFFFF if reg != CPU.SP else 0x0201)
+                self.assertEqual(cpu.get_flag(flags.CF), cf)
+                cpu = self.run_code([0x48 + reg], cf=cf)
+                self.assertEqual(cpu.r[reg], (self.run_code([0x90]).r[reg] - 1) & 0xFFFF if reg != CPU.SP else 0x01FF)
+                self.assertEqual(cpu.get_flag(flags.CF), cf)
+
+
 if __name__ == "__main__":
     unittest.main()
