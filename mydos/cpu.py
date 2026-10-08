@@ -33,6 +33,7 @@ class CPU:
         self.int_handlers = {}  # int number -> fn(cpu)
         self.start_ip = 0  # set by step(): IP of the instruction being executed
         self.seg_override = None  # set by step(): segment register from a prefix, or None
+        self.trace = None  # optional fn(cpu), called before every instruction (for the -d log)
         self.rep = None  # set by step(): the repeat prefix (Op.REPNE_PREFIX) before this instruction, or None
 
         # opcode byte -> handler(op). Groups get one entry per opcode value.
@@ -283,6 +284,8 @@ class CPU:
         stops the emulator with an error showing where it happened and the bytes around it, so the
         next thing to implement is always obvious.
         """
+        if self.trace:
+            self.trace(self)
         self.start_ip = self.ip  # where this instruction began (for error messages)
         self.seg_override = None  # set by a prefix, applies to this instruction only
         self.rep = None  # same for the repeat prefix

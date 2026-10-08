@@ -1,8 +1,9 @@
+import argparse
 import struct
 import sys
 from dataclasses import dataclass
 
-from . import dos, dump
+from . import disasm, dos, dump
 from .cpu import CPU
 
 PSP_SEG = 0x1000
@@ -82,16 +83,40 @@ def load(cpu, path):
         load_com(cpu, data)
 
 
+def make_trace(log):
+    """Return a CPU trace hook that writes one line per instruction to the open file `log`.
+
+    A line looks like `1773:0880  8B C3        mov ax, bx`: address, the instruction bytes, the text.
+    """
+    def trace(cpu):
+        seg, off = cpu.s[CPU.CS], cpu.ip
+        length, text = disasm.disasm(cpu, seg, off)
+        raw = bytes(cpu.rb(seg, off + i) for i in range(length)).hex(" ").upper()
+        log.write(f"{seg:04X}:{off:04X}  {raw:<20}  {text}\n")
+    return trace
+
+
 def main():
-    """Run the program given as argv[1]; exit with the program's exit code."""
+    """Run the program named on the command line; exit with the program's exit code."""
+    parser = argparse.ArgumentParser(prog="python -m mydos", description="Run a DOS .COM or .EXE program.")
+    parser.add_argument("-d", metavar="LOGFILE", help="write every executed instruction to LOGFILE")
+    parser.add_argument("program", help="the .COM or .EXE file to run")
+    args = parser.parse_args()
+
     cpu = CPU()
     dos.install(cpu)
-    load(cpu, sys.argv[1])
+    load(cpu, args.program)
+    log = open(args.d, "w") if args.d else None
+    if log:
+        cpu.trace = make_trace(log)
     try:
         code = cpu.run()
     except Exception as e:
-        dump.write(cpu, sys.argv[1], e)  # leave something to debug with, then fail as usual
+        dump.write(cpu, args.program, e)  # leave something to debug with, then fail as usual
         raise
+    finally:
+        if log:
+            log.close()
     sys.exit(code)
 
 
