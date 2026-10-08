@@ -76,6 +76,7 @@ class CPU:
         # result. Each one gets its whole block of 6 opcodes (see the Alu enum).
         self.alu_ops = {
             Alu.XOR: self.alu_xor,
+            Alu.CMP: self.alu_cmp,
         }
         for operation in self.alu_ops:
             for form in range(6):
@@ -435,6 +436,18 @@ class CPU:
             self.set8(0, fn(self.get8(0), self.fetch8(), 8))
         else:  # form 5: AX, imm16
             self.r[self.AX] = fn(self.r[self.AX], self.fetch16(), 16)
+
+    def alu_cmp(self, a, b, bits):
+        """CMP: subtract b from a only to get the flags, and throw the result away.
+
+        The flags then tell how a relates to b: equal (ZF), smaller as an unsigned number (CF),
+        smaller as a signed number (SF differs from OF). A conditional jump usually follows.
+
+        alu() stores whatever we return into the first operand. CMP must leave it unchanged, so it
+        returns a itself: writing back the value that was already there changes nothing.
+        """
+        self.sub_with_flags(a, b, bits)
+        return a
 
     def alu_xor(self, a, b, bits):
         """XOR: flip every bit of a that is 1 in b.
