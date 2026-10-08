@@ -82,6 +82,9 @@ class CPU:
             for form in range(6):
                 self.ops[(operation << 3) | form] = self.alu
 
+        for cc in range(16):
+            self.ops[Op.JCC + cc] = self.jcc
+
         for i in range(8):
             self.ops[Op.INC_R16 + i] = self.inc_r16
             self.ops[Op.DEC_R16 + i] = self.dec_r16
@@ -197,6 +200,24 @@ class CPU:
         self.set_flag(flags.AF, bool((a ^ b ^ result) & 0x10))
         self.set_szp(result, bits)
         return result
+
+    def condition(self, cc):
+        """Tell whether condition number cc (0-15, the low 4 bits of a 70-7F opcode) holds.
+
+        The conditions come in pairs that are each other's opposite: an even number tests something
+        and the odd number after it tests that it is not so. The tested things are:
+            0 overflow (OF)            4 negative result (SF)
+            1 below, unsigned (CF)     5 even parity (PF)
+            2 equal (ZF)               6 less, signed (SF differs from OF)
+            3 below or equal, unsigned 7 less or equal, signed
+              (CF or ZF)                 (ZF, or SF differs from OF)
+        """
+        cf = self.get_flag(flags.CF)
+        zf = self.get_flag(flags.ZF)
+        sf = self.get_flag(flags.SF)
+        of = self.get_flag(flags.OF)
+        holds = (of, cf, zf, cf or zf, sf, self.get_flag(flags.PF), sf != of, zf or sf != of)[cc >> 1]
+        return holds != bool(cc & 1)  # odd numbers are the opposite condition
 
     def sub_with_flags(self, a, b, bits):
         """Compute a - b like the CPU's SUB and CMP do: set the flags and return the result.
@@ -543,6 +564,22 @@ class CPU:
     def ret_near(self, op):
         """Return from a procedure: pop the saved address off the stack into IP (opcode C3)."""
         self.ip = self.pop16()
+
+    def jcc(self, op):
+        """Jump a short distance only if a condition on the flags holds (opcodes 70-7F + one signed byte).
+
+        These usually follow CMP (or any instruction that sets flags). The sixteen opcodes and the
+        names assemblers give them:
+            70 JO          74 JE / JZ       78 JS       7C JL / JNGE
+            71 JNO         75 JNE / JNZ     79 JNS      7D JGE / JNL
+            72 JB / JC     76 JBE / JNA     7A JP       7E JLE / JNG
+            73 JAE / JNC   77 JA / JNBE     7B JNP      7F JG / JNLE
+        "Below"/"above" compare unsigned numbers; "less"/"greater" compare signed ones.
+        The displacement is read even when the jump is not taken, to get past it.
+        """
+        target = self.fetch_rel8()
+        if self.condition(op & 0xF):
+            self.ip = target
 
     def jmp_short(self, op):
         """Jump a short distance (opcode EB + one signed byte).

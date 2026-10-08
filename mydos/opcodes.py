@@ -26,6 +26,7 @@ class Op(IntEnum):
     DEC_R16 = 0x48       # 48..4F: subtract 1 from AX CX DX BX SP BP SI DI
     PUSH_R16 = 0x50      # 50..57: push AX CX DX BX SP BP SI DI
     POP_R16 = 0x58       # 58..5F: pop into AX CX DX BX SP BP SI DI
+    JCC = 0x70           # 70..7F: conditional short jump, followed by a signed 8-bit displacement
     MOV_RM16_R16 = 0x89  # followed by ModRM: r/m16 <- r16
     MOV_R16_RM16 = 0x8B  # followed by ModRM: r16 <- r/m16
     MOV_RM16_SREG = 0x8C  # followed by ModRM (reg = segment register): r/m16 <- sreg
