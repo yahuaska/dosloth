@@ -34,7 +34,7 @@ class CPU:
         self.start_ip = 0  # set by step(): IP of the instruction being executed
         self.seg_override = None  # set by step(): segment register from a prefix, or None
         self.trace = None  # optional fn(cpu), called before every instruction (for the -d log)
-        self.rep = None  # set by step(): the repeat prefix (Op.REPNE_PREFIX) before this instruction, or None
+        self.rep = None  # set by step(): the repeat prefix in front of this instruction (F3 or F2), or None
 
         # opcode byte -> handler(op). Groups get one entry per opcode value.
         self.ops = {
@@ -54,6 +54,14 @@ class CPU:
             Op.POP_ES: self.pop_sreg,
             Op.POP_SS: self.pop_sreg,
             Op.POP_DS: self.pop_sreg,
+            Op.MOVSB: self.movs,
+            Op.MOVSW: self.movs,
+            Op.CMPSB: self.cmps,
+            Op.CMPSW: self.cmps,
+            Op.STOSB: self.stos,
+            Op.STOSW: self.stos,
+            Op.LODSB: self.lods,
+            Op.LODSW: self.lods,
             Op.SCASB: self.scas,
             Op.SCASW: self.scas,
             Op.SHIFT_RM16_CL: self.shift_rm16_cl,
@@ -357,7 +365,7 @@ class CPU:
         while True:  # prefixes come before the opcode, in any order
             if op in self.SEG_PREFIXES:
                 self.seg_override = self.SEG_PREFIXES[op]
-            elif op == Op.REPNE_PREFIX:
+            elif op in (Op.REP_PREFIX, Op.REPNE_PREFIX):
                 self.rep = op
             else:
                 break
@@ -461,16 +469,20 @@ class CPU:
             raise NotImplementedError(f"MOV sreg, r/m16 with reg={m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
         self.s[m.reg] = m.read16(self)
 
+    def data_segment(self):
+        """The segment value that ordinary data accesses use: DS, unless a prefix (2E, 26, ...) chose another.
+
+        Compare with None, not truthiness: ES is register number 0.
+        """
+        return self.s[self.DS if self.seg_override is None else self.seg_override]
+
     def moffs(self):
         """Read the fixed address that follows the A0-A3 opcodes and say where it points.
 
         Returns (segment value, offset). The segment is DS unless a prefix chose another one.
         """
         off = self.fetch16()
-        # Data lives in DS unless a prefix (2E, 26, ...) picked another segment. Compare with
-        # None, not truthiness: ES is register number 0.
-        seg = self.DS if self.seg_override is None else self.seg_override
-        return self.s[seg], off
+        return self.data_segment(), off
 
     def mov_al_moffs8(self, op):
         """Load AL from the byte at a fixed address (opcode A0 + 16-bit offset)."""
@@ -608,33 +620,105 @@ class CPU:
         self.set_logic_flags(result, bits)
         return result
 
-    def scas(self, op):
-        """Compare AL (opcode AE) or AX (opcode AF) with the byte or word at ES:DI, then step DI.
+    def string_op(self, op, one_step, compares=False):
+        """Run a string instruction once, or over and over if a REP prefix is in front of it.
 
-        The comparison is a subtraction that only sets flags, like CMP. DI moves forward, or backward
-        if the direction flag is set (see CLD and STD). The segment is always ES, prefixes cannot
-        change it.
+        `one_step(bits, step)` handles a single element: `bits` is 8 or 16 (from the low bit of the
+        opcode) and `step` is how far SI/DI move afterwards: forward, or backward if the direction
+        flag is set (see CLD and STD).
 
-        With the REPNE prefix (F2) this repeats while CX is not zero, taking 1 off CX each time, and
-        stops as soon as the values are equal. The classic use is measuring a zero-terminated string:
-        AL = 0, CX = 0FFFFh, `repne scasb`, and the length can be worked out from what is left in CX.
+        Without a prefix it is one element. With one, it goes on while CX is not zero, taking 1 off CX
+        after every element, so CX = 0 means not even one. The instructions that compare (`compares`:
+        CMPS and SCAS) can also stop early, by looking at ZF, which they set: REPE (F3) goes on only
+        while the values are equal, REPNE (F2) only while they differ. The others just repeat CX times.
         """
         bits = 16 if op & 1 else 8
-        size = bits // 8
-        step = -size if self.get_flag(flags.DF) else size
-        while True:
-            if self.rep is not None and self.r[self.CX] == 0:
-                break  # nothing (more) to repeat
-            if bits == 16:
-                self.sub_with_flags(self.r[self.AX], self.rw(self.s[self.ES], self.r[self.DI]), 16)
-            else:
-                self.sub_with_flags(self.get8(0), self.rb(self.s[self.ES], self.r[self.DI]), 8)  # 0 is AL
-            self.r[self.DI] = (self.r[self.DI] + step) & 0xFFFF
-            if self.rep is None:
-                break  # no prefix: just one comparison
+        step = -(bits // 8) if self.get_flag(flags.DF) else bits // 8
+        if self.rep is None:
+            one_step(bits, step)
+            return
+        while self.r[self.CX] != 0:
+            one_step(bits, step)
             self.r[self.CX] -= 1
-            if self.get_flag(flags.ZF):
-                break  # REPNE stops on the first match
+            # stop on a difference for REPE, on a match for REPNE
+            if compares and (self.rep == Op.REPNE_PREFIX) == self.get_flag(flags.ZF):
+                break
+
+    def movs(self, op):
+        """Copy a byte or word from DS:SI to ES:DI and step both (opcodes A4, A5).
+
+        With REP (F3) it copies CX elements: the block copy. The source segment can be changed by a
+        prefix; the destination is always ES.
+        """
+        self.string_op(op, self.movs_step)
+
+    def movs_step(self, bits, step):
+        read, write = (self.rw, self.ww) if bits == 16 else (self.rb, self.wb)
+        write(self.s[self.ES], self.r[self.DI], read(self.data_segment(), self.r[self.SI]))
+        self.r[self.SI] = (self.r[self.SI] + step) & 0xFFFF
+        self.r[self.DI] = (self.r[self.DI] + step) & 0xFFFF
+
+    def cmps(self, op):
+        """Compare the byte or word at DS:SI with the one at ES:DI and step both (opcodes A6, A7).
+
+        Like CMP, it only sets the flags (DS:SI minus ES:DI). With REPE (F3) it compares two blocks
+        and stops at the first difference; with REPNE (F2) it stops at the first match.
+        """
+        self.string_op(op, self.cmps_step, compares=True)
+
+    def cmps_step(self, bits, step):
+        read = self.rw if bits == 16 else self.rb
+        self.sub_with_flags(read(self.data_segment(), self.r[self.SI]), read(self.s[self.ES], self.r[self.DI]), bits)
+        self.r[self.SI] = (self.r[self.SI] + step) & 0xFFFF
+        self.r[self.DI] = (self.r[self.DI] + step) & 0xFFFF
+
+    def stos(self, op):
+        """Store AL or AX at ES:DI and step DI (opcodes AA, AB).
+
+        With REP (F3) it fills CX elements with the same value. `xor ax, ax` followed by `rep stosw`
+        is the usual way to clear a block of memory.
+        """
+        self.string_op(op, self.stos_step)
+
+    def stos_step(self, bits, step):
+        if bits == 16:
+            self.ww(self.s[self.ES], self.r[self.DI], self.r[self.AX])
+        else:
+            self.wb(self.s[self.ES], self.r[self.DI], self.get8(0))  # 8-bit register 0 is AL
+        self.r[self.DI] = (self.r[self.DI] + step) & 0xFFFF
+
+    def lods(self, op):
+        """Load AL or AX from DS:SI and step SI (opcodes AC, AD).
+
+        Used one at a time to walk through a string; with REP only the last element would be left in
+        the register, so that is rare.
+        """
+        self.string_op(op, self.lods_step)
+
+    def lods_step(self, bits, step):
+        if bits == 16:
+            self.r[self.AX] = self.rw(self.data_segment(), self.r[self.SI])
+        else:
+            self.set8(0, self.rb(self.data_segment(), self.r[self.SI]))
+        self.r[self.SI] = (self.r[self.SI] + step) & 0xFFFF
+
+    def scas(self, op):
+        """Compare AL or AX with the byte or word at ES:DI and step DI (opcodes AE, AF).
+
+        The comparison is a subtraction that only sets flags, like CMP. The segment is always ES,
+        prefixes cannot change it. With REPNE (F2) it searches: it goes on until the value is found,
+        or CX runs out. With REPE (F3) it skips: it goes on while the values are equal. The classic
+        use is measuring a zero-terminated string: AL = 0, CX = 0FFFFh, `repne scasb`, and the length
+        can be worked out from what is left in CX.
+        """
+        self.string_op(op, self.scas_step, compares=True)
+
+    def scas_step(self, bits, step):
+        if bits == 16:
+            self.sub_with_flags(self.r[self.AX], self.rw(self.s[self.ES], self.r[self.DI]), 16)
+        else:
+            self.sub_with_flags(self.get8(0), self.rb(self.s[self.ES], self.r[self.DI]), 8)
+        self.r[self.DI] = (self.r[self.DI] + step) & 0xFFFF
 
     def loop(self, op):
         """Repeat a block of code CX times (opcode E2 + one signed byte).

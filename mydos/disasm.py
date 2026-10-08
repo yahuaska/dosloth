@@ -20,7 +20,10 @@ JCC = ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "j
 PLAIN = {
     Op.NOP: "nop", Op.RET_NEAR: "ret", Op.HLT: "hlt", Op.CLC: "clc", Op.STC: "stc", Op.CLI: "cli",
     Op.STI: "sti", Op.CLD: "cld", Op.STD: "std", Op.SCASB: "scasb", Op.SCASW: "scasw",
+    Op.MOVSB: "movsb", Op.MOVSW: "movsw", Op.CMPSB: "cmpsb", Op.CMPSW: "cmpsw",
+    Op.STOSB: "stosb", Op.STOSW: "stosw", Op.LODSB: "lodsb", Op.LODSW: "lodsw",
 }
+COMPARING = (Op.CMPSB, Op.CMPSW, Op.SCASB, Op.SCASW)  # these look at ZF, so a prefix F3 reads "repe"
 SHIFTS = ["rol", "ror", "rcl", "rcr", "shl", "shr", "sal", "sar"]  # by the ModRM reg field
 LOOPS = {Op.LOOPNE: "loopne", Op.LOOPE: "loope", Op.LOOP: "loop", Op.JCXZ: "jcxz"}
 
@@ -91,14 +94,20 @@ def _decode(r):
     while True:  # prefixes, as in CPU.step
         if op in SEG_PREFIXES:
             seg_override = SEG_PREFIXES[op]
-        elif op == Op.REPNE_PREFIX:
-            rep = "repne "
+        elif op in (Op.REP_PREFIX, Op.REPNE_PREFIX):
+            rep = op
         else:
             break
         op = r.u8()
 
     text = _decode_opcode(r, op, seg_override)
-    return None if text is None else (rep or "") + text
+    if text is None:
+        return None
+    if rep == Op.REPNE_PREFIX:
+        return "repne " + text
+    if rep == Op.REP_PREFIX:
+        return ("repe " if op in COMPARING else "rep ") + text
+    return text
 
 
 def _decode_opcode(r, op, seg_override):

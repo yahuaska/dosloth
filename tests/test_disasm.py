@@ -42,6 +42,12 @@ class TestText(unittest.TestCase):
             (b"\xE8\x55\x01", "call 0258"),     # 0103 + 0155
             (b"\xE2\xFE", "loop 0100"),
             (b"\xF2\xAE", "repne scasb"),
+            (b"\xF3\xAA", "rep stosb"),
+            (b"\xF3\xA5", "rep movsw"),
+            (b"\xF3\xA6", "repe cmpsb"),
+            (b"\xF3\xAE", "repe scasb"),
+            (b"\xAC", "lodsb"),
+            (b"\xAB", "stosw"),
             (b"\x1E", "push ds"),
             (b"\x50", "push ax"),
             (b"\x5D", "pop bp"),

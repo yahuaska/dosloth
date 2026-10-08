@@ -39,8 +39,16 @@ class Op(IntEnum):
     MOV_AX_MOFFS16 = 0xA1   # followed by a 16-bit offset: AX <- word at [offset]
     MOV_MOFFS8_AL = 0xA2    # followed by a 16-bit offset: byte at [offset] <- AL
     MOV_MOFFS16_AX = 0xA3   # followed by a 16-bit offset: word at [offset] <- AX
-    SCASB = 0xAE         # compare AL with the byte at ES:DI, then step DI
-    SCASW = 0xAF         # compare AX with the word at ES:DI, then step DI
+    MOVSB = 0xA4         # string instructions: work on the byte/word at DS:SI and/or ES:DI, then step SI/DI
+    MOVSW = 0xA5         # copy DS:SI to ES:DI
+    CMPSB = 0xA6         # compare DS:SI with ES:DI
+    CMPSW = 0xA7
+    STOSB = 0xAA         # store AL/AX at ES:DI
+    STOSW = 0xAB
+    LODSB = 0xAC         # load AL/AX from DS:SI
+    LODSW = 0xAD
+    SCASB = 0xAE         # compare AL/AX with ES:DI
+    SCASW = 0xAF
     MOV_R8_IMM8 = 0xB0   # B0..B7: AL CL DL BL AH CH DH BH <- imm8
     MOV_R16_IMM16 = 0xB8  # B8..BF: AX CX DX BX SP BP SI DI <- imm16
     RET_NEAR = 0xC3      # pops IP from the stack
@@ -53,6 +61,7 @@ class Op(IntEnum):
     CALL_NEAR = 0xE8     # followed by a signed 16-bit displacement; pushes the return IP
     JMP_SHORT = 0xEB     # followed by a signed 8-bit displacement
     REPNE_PREFIX = 0xF2  # modifies the next string instruction: repeat while CX != 0 and ZF == 0
+    REP_PREFIX = 0xF3    # ... repeat CX times (REP); with CMPS/SCAS: also while ZF == 1 (REPE)
     HLT = 0xF4
     GROUP3_RM16 = 0xF7   # + ModRM: one operation on r/m16, chosen by the 'reg' field (only NEG, 3, so far)
     CLC = 0xF8
