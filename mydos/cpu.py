@@ -32,6 +32,15 @@ class CPU:
         """Read a little-endian word at seg:off."""
         return self.rb(seg, off) | self.rb(seg, off + 1) << 8
 
+    def wb(self, seg, off, val):
+        """Write a byte at seg:off."""
+        self.mem[self.addr(seg, off)] = val & 0xFF
+
+    def ww(self, seg, off, val):
+        """Write a little-endian word at seg:off."""
+        self.wb(seg, off, val)
+        self.wb(seg, off + 1, val >> 8)
+
     # --- 8-bit register access: 0-3 = AL CL DL BL, 4-7 = AH CH DH BH ---
     def get8(self, n):
         """Read 8-bit register n (low byte of r[n&3], or high byte if n&4)."""
