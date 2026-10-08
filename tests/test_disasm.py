@@ -50,6 +50,8 @@ class TestText(unittest.TestCase):
             (b"\xFC", "cld"),
             (b"\xC3", "ret"),
             (b"\xF7\xD9", "neg cx"),
+            (b"\xD3\xE3", "shl bx, cl"),
+            (b"\xD3\x2F", "shr word [bx], cl"),
             (b"\xF7\x1F", "neg word [bx]"),
         ]
         for code, text in cases:

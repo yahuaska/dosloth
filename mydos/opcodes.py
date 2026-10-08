@@ -45,6 +45,7 @@ class Op(IntEnum):
     MOV_R16_IMM16 = 0xB8  # B8..BF: AX CX DX BX SP BP SI DI <- imm16
     RET_NEAR = 0xC3      # pops IP from the stack
     INT = 0xCD           # followed by the interrupt number
+    SHIFT_RM16_CL = 0xD3  # + ModRM: shift or rotate r/m16 by CL bits; the 'reg' field picks which
     LOOPNE = 0xE0        # followed by a signed 8-bit displacement
     LOOPE = 0xE1         # followed by a signed 8-bit displacement
     LOOP = 0xE2          # followed by a signed 8-bit displacement

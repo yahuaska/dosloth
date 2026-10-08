@@ -56,6 +56,7 @@ class CPU:
             Op.POP_DS: self.pop_sreg,
             Op.SCASB: self.scas,
             Op.SCASW: self.scas,
+            Op.SHIFT_RM16_CL: self.shift_rm16_cl,
             Op.LOOPNE: self.loopne,
             Op.LOOPE: self.loope,
             Op.LOOP: self.loop,
@@ -229,6 +230,68 @@ class CPU:
         of = self.get_flag(flags.OF)
         holds = (of, cf, zf, cf or zf, sf, self.get_flag(flags.PF), sf != of, zf or sf != of)[cc >> 1]
         return holds != bool(cc & 1)  # odd numbers are the opposite condition
+
+    def shift_with_flags(self, kind, value, count, bits):
+        """Shift or rotate `value` by `count` bits and set the flags. Returns the new value.
+
+        `kind` is the number the CPU puts in the ModRM 'reg' field:
+            0 ROL  rotate left              4 SHL  shift left, zeros come in on the right
+            1 ROR  rotate right             5 SHR  shift right, zeros come in on the left
+            2 RCL  rotate left through CF   6 SAL  the same as SHL (an alias nobody should use)
+            3 RCR  rotate right through CF  7 SAR  shift right, the sign bit is copied in on the left
+        Rotating through CF means CF is one more bit of the ring: it is shifted into the value and the
+        bit that falls out becomes the new CF.
+
+        It is done one bit at a time, `count` times, which is what the 8086 does: the count is not
+        limited (286 and newer use only its low 5 bits). With a count of 0 nothing at all changes.
+
+        CF ends up as the last bit that fell out. SHL, SHR and SAR also set SF, ZF and PF from the
+        result; rotations leave them alone. OF is only well defined for a count of 1, where it says
+        "the sign changed" (shifts) or "the top two bits differ" (right rotations); for other counts
+        it is whatever the last single-bit step gave.
+        """
+        if count == 0:
+            return value
+        mask = (1 << bits) - 1
+        top = 1 << (bits - 1)
+        cf = self.get_flag(flags.CF)
+        of = False
+        for _ in range(count):
+            if kind in (4, 6):  # SHL
+                cf = bool(value & top)
+                value = (value << 1) & mask
+                of = bool(value & top) != cf
+            elif kind == 5:  # SHR
+                of = bool(value & top)
+                cf = bool(value & 1)
+                value >>= 1
+            elif kind == 7:  # SAR
+                cf = bool(value & 1)
+                value = (value >> 1) | (value & top)
+                of = False
+            elif kind == 0:  # ROL
+                cf = bool(value & top)
+                value = ((value << 1) & mask) | cf
+                of = bool(value & top) != cf
+            elif kind == 1:  # ROR
+                cf = bool(value & 1)
+                value = (value >> 1) | (top if cf else 0)
+                of = bool(value & top) != bool(value & (top >> 1))
+            elif kind == 2:  # RCL
+                out = bool(value & top)
+                value = ((value << 1) & mask) | cf
+                cf = out
+                of = bool(value & top) != cf
+            else:  # RCR
+                out = bool(value & 1)
+                value = (value >> 1) | (top if cf else 0)
+                cf = out
+                of = bool(value & top) != bool(value & (top >> 1))
+        self.set_flag(flags.CF, cf)
+        self.set_flag(flags.OF, of)
+        if kind in (4, 5, 6, 7):
+            self.set_szp(value, bits)
+        return value
 
     def sub_with_flags(self, a, b, bits, borrow=0):
         """Compute a - b (- borrow) like the CPU's SUB, SBB and CMP do: set the flags, return the result.
@@ -669,6 +732,17 @@ class CPU:
     def hlt(self, op):
         """Stop the CPU (opcode F4). We treat it as the end of the program, with exit code 0."""
         raise Exit(0)
+
+    def shift_rm16_cl(self, op):
+        """Shift or rotate a register or memory word by the number of bits in CL (opcode D3 + ModRM).
+
+        The 'reg' field of the ModRM byte says which of the eight operations; see shift_with_flags.
+        Compilers use it for multiplying and dividing by powers of two when the amount is not known
+        in advance: `mov cx, 2` then `shl bx, cl` is bx * 4.
+        """
+        m = modrm.decode(self, self.seg_override)
+        count = self.get8(1)  # 8-bit register 1 is CL
+        m.write16(self, self.shift_with_flags(m.reg, m.read16(self), count, 16))
 
     def group3_rm16(self, op):
         """Opcode F7: one of several single-operand operations on a register or memory word.

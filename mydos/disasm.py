@@ -21,6 +21,7 @@ PLAIN = {
     Op.NOP: "nop", Op.RET_NEAR: "ret", Op.HLT: "hlt", Op.CLC: "clc", Op.STC: "stc", Op.CLI: "cli",
     Op.STI: "sti", Op.CLD: "cld", Op.STD: "std", Op.SCASB: "scasb", Op.SCASW: "scasw",
 }
+SHIFTS = ["rol", "ror", "rcl", "rcr", "shl", "shr", "sal", "sar"]  # by the ModRM reg field
 LOOPS = {Op.LOOPNE: "loopne", Op.LOOPE: "loope", Op.LOOP: "loop", Op.JCXZ: "jcxz"}
 
 
@@ -168,6 +169,9 @@ def _decode_opcode(r, op, seg_override):
         if reg != 3:
             return None  # the CPU only knows NEG here
         return f"neg {'word ' if is_mem else ''}{rm}"
+    if op == Op.SHIFT_RM16_CL:
+        reg, rm, is_mem = _modrm(r, seg_override, 16)
+        return f"{SHIFTS[reg]} {'word ' if is_mem else ''}{rm}, cl"
     if op == Op.INT:
         return f"int {r.u8():02X}"
     if op in LOOPS:
