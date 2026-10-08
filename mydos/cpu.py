@@ -36,6 +36,10 @@ class CPU:
             Op.MOV_R16_RM16: self.mov_r16_rm16,
             Op.MOV_RM16_SREG: self.mov_rm16_sreg,
             Op.MOV_SREG_RM16: self.mov_sreg_rm16,
+            Op.MOV_AL_MOFFS8: self.mov_al_moffs8,
+            Op.MOV_AX_MOFFS16: self.mov_ax_moffs16,
+            Op.MOV_MOFFS8_AL: self.mov_moffs8_al,
+            Op.MOV_MOFFS16_AX: self.mov_moffs16_ax,
             Op.JMP_SHORT: self.jmp_short,
             Op.INT: self.int_,
             Op.HLT: self.hlt,
@@ -135,6 +139,34 @@ class CPU:
         if m.reg > 3 or m.reg == self.CS:  # loading CS this way is not a valid instruction
             raise NotImplementedError(f"MOV sreg, r/m16 with reg={m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
         self.s[m.reg] = m.read16(self)
+
+    def moffs(self):
+        """Read the 16-bit direct address that follows an A0..A3 opcode; return (segment value, offset)."""
+        off = self.fetch16()
+        # Data lives in DS unless a prefix (2E, 26, ...) picked another segment. Compare with
+        # None, not truthiness: ES is register number 0.
+        seg = self.DS if self.seg_override is None else self.seg_override
+        return self.s[seg], off
+
+    def mov_al_moffs8(self, op):
+        """A0: MOV AL, [moffs8] - load AL from the byte at the direct address."""
+        seg, off = self.moffs()
+        self.set8(0, self.rb(seg, off))  # 8-bit register 0 is AL
+
+    def mov_ax_moffs16(self, op):
+        """A1: MOV AX, [moffs16] - load AX from the word at the direct address."""
+        seg, off = self.moffs()
+        self.r[self.AX] = self.rw(seg, off)
+
+    def mov_moffs8_al(self, op):
+        """A2: MOV [moffs8], AL - store AL at the direct address."""
+        seg, off = self.moffs()
+        self.wb(seg, off, self.get8(0))
+
+    def mov_moffs16_ax(self, op):
+        """A3: MOV [moffs16], AX - store AX at the direct address."""
+        seg, off = self.moffs()
+        self.ww(seg, off, self.r[self.AX])
 
     def mov_r8_imm8(self, op):
         """B0..B7: MOV r8, imm8 - load an immediate byte into AL..BH (register = low 3 bits of op)."""
