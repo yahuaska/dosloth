@@ -1,4 +1,5 @@
 from . import modrm
+from .opcodes import Op
 
 
 class Exit(Exception):
@@ -13,7 +14,7 @@ class CPU:
     from .regs import AX, CX, DX, BX, SP, BP, SI, DI, ES, CS, SS, DS
 
     # segment-override prefix byte -> segment register
-    SEG_PREFIXES = {0x26: ES, 0x2E: CS, 0x36: SS, 0x3E: DS}
+    SEG_PREFIXES = {Op.ES_PREFIX: ES, Op.CS_PREFIX: CS, Op.SS_PREFIX: SS, Op.DS_PREFIX: DS}
 
     def __init__(self):
         """Fresh machine: 1 MB RAM, zeroed registers, no interrupt handlers."""
@@ -80,25 +81,25 @@ class CPU:
         while op in self.SEG_PREFIXES:
             seg_override = self.SEG_PREFIXES[op]
             op = self.fetch8()
-        if op == 0x90:  # NOP
+        if op == Op.NOP:
             pass
-        elif op == 0x89:  # MOV r/m16, r16
+        elif op == Op.MOV_RM16_R16:
             m = modrm.decode(self, seg_override)
             m.write16(self, self.r[m.reg])
-        elif 0xB0 <= op <= 0xB7:  # MOV r8, imm8
-            self.set8(op - 0xB0, self.fetch8())
-        elif 0xB8 <= op <= 0xBF:  # MOV r16, imm16
-            self.r[op - 0xB8] = self.fetch16()
-        elif op == 0xEB:  # JMP short
+        elif Op.MOV_R8_IMM8 <= op < Op.MOV_R8_IMM8 + 8:
+            self.set8(op - Op.MOV_R8_IMM8, self.fetch8())
+        elif Op.MOV_R16_IMM16 <= op < Op.MOV_R16_IMM16 + 8:
+            self.r[op - Op.MOV_R16_IMM16] = self.fetch16()
+        elif op == Op.JMP_SHORT:
             d = self.fetch8()
             self.ip = (self.ip + d - (256 if d & 0x80 else 0)) & 0xFFFF
-        elif op == 0xCD:  # INT imm8
+        elif op == Op.INT:
             n = self.fetch8()
             h = self.int_handlers.get(n)
             if h is None:
                 raise NotImplementedError(f"INT {n:02X} at {self.s[self.CS]:04X}:{start_ip:04X}")
             h(self)
-        elif op == 0xF4:  # HLT
+        elif op == Op.HLT:
             raise Exit(0)
         else:
             raw = bytes(self.mem[self.addr(self.s[self.CS], start_ip):][:8]).hex(" ")
