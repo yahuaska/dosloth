@@ -4,6 +4,7 @@ from .cpu import CPU, Exit
 
 
 def int21(cpu):
+    """INT 21h: DOS services, selected by AH. Only 09h and 4Ch so far."""
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
         off = cpu.r[CPU.DX]
@@ -20,4 +21,5 @@ def int21(cpu):
 
 
 def install(cpu):
+    """Hook DOS interrupt handlers into the CPU."""
     cpu.int_handlers[0x21] = int21

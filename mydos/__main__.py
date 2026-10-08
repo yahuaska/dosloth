@@ -7,6 +7,7 @@ PSP_SEG = 0x1000
 
 
 def load_com(cpu, path):
+    """Load a .COM file at PSP_SEG:0100 and set up registers the way DOS would."""
     data = open(path, "rb").read()
     base = PSP_SEG * 16 + 0x100
     cpu.mem[base:base + len(data)] = data
@@ -17,6 +18,7 @@ def load_com(cpu, path):
 
 
 def main():
+    """Run the .COM file given as argv[1]; exit with the program's exit code."""
     cpu = CPU()
     dos.install(cpu)
     load_com(cpu, sys.argv[1])
