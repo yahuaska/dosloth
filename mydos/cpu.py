@@ -24,6 +24,20 @@ class CPU:
         self.ip = 0
         self.flags = 0x0002
         self.int_handlers = {}  # int number -> fn(cpu)
+        self.start_ip = 0  # set by step(): IP of the instruction being executed
+        self.seg_override = None  # set by step(): segment register from a prefix, or None
+
+        # opcode byte -> handler(op). Groups get one entry per opcode value.
+        self.ops = {
+            Op.NOP: self.nop,
+            Op.MOV_RM16_R16: self.mov_rm16_r16,
+            Op.JMP_SHORT: self.jmp_short,
+            Op.INT: self.int_,
+            Op.HLT: self.hlt,
+        }
+        for i in range(8):
+            self.ops[Op.MOV_R8_IMM8 + i] = self.mov_r8_imm8
+            self.ops[Op.MOV_R16_IMM16 + i] = self.mov_r16_imm16
 
     # --- memory ---
     def addr(self, seg, off):
@@ -75,36 +89,46 @@ class CPU:
 
     def step(self):
         """Execute one instruction. Unknown opcodes/interrupts raise NotImplementedError."""
-        start_ip = self.ip
-        seg_override = None  # set by a prefix, applies to this instruction only
+        self.start_ip = self.ip  # where this instruction began (for error messages)
+        self.seg_override = None  # set by a prefix, applies to this instruction only
         op = self.fetch8()
         while op in self.SEG_PREFIXES:
-            seg_override = self.SEG_PREFIXES[op]
+            self.seg_override = self.SEG_PREFIXES[op]
             op = self.fetch8()
-        if op == Op.NOP:
-            pass
-        elif op == Op.MOV_RM16_R16:
-            m = modrm.decode(self, seg_override)
-            m.write16(self, self.r[m.reg])
-        elif Op.MOV_R8_IMM8 <= op < Op.MOV_R8_IMM8 + 8:
-            self.set8(op - Op.MOV_R8_IMM8, self.fetch8())
-        elif Op.MOV_R16_IMM16 <= op < Op.MOV_R16_IMM16 + 8:
-            self.r[op - Op.MOV_R16_IMM16] = self.fetch16()
-        elif op == Op.JMP_SHORT:
-            d = self.fetch8()
-            self.ip = (self.ip + d - (256 if d & 0x80 else 0)) & 0xFFFF
-        elif op == Op.INT:
-            n = self.fetch8()
-            h = self.int_handlers.get(n)
-            if h is None:
-                raise NotImplementedError(f"INT {n:02X} at {self.s[self.CS]:04X}:{start_ip:04X}")
-            h(self)
-        elif op == Op.HLT:
-            raise Exit(0)
-        else:
-            raw = bytes(self.mem[self.addr(self.s[self.CS], start_ip):][:8]).hex(" ")
+        handler = self.ops.get(op)
+        if handler is None:
+            raw = bytes(self.mem[self.addr(self.s[self.CS], self.start_ip):][:8]).hex(" ")
             raise NotImplementedError(
-                f"opcode {op:02X} at {self.s[self.CS]:04X}:{start_ip:04X}: {raw}")
+                f"opcode {op:02X} at {self.s[self.CS]:04X}:{self.start_ip:04X}: {raw}")
+        handler(op)
+
+    # --- instructions: each takes the opcode byte (groups use its low 3 bits) ---
+    def nop(self, op):
+        pass
+
+    def mov_rm16_r16(self, op):
+        m = modrm.decode(self, self.seg_override)
+        m.write16(self, self.r[m.reg])
+
+    def mov_r8_imm8(self, op):
+        self.set8(op - Op.MOV_R8_IMM8, self.fetch8())
+
+    def mov_r16_imm16(self, op):
+        self.r[op - Op.MOV_R16_IMM16] = self.fetch16()
+
+    def jmp_short(self, op):
+        d = self.fetch8()
+        self.ip = (self.ip + d - (256 if d & 0x80 else 0)) & 0xFFFF
+
+    def int_(self, op):
+        n = self.fetch8()
+        h = self.int_handlers.get(n)
+        if h is None:
+            raise NotImplementedError(f"INT {n:02X} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        h(self)
+
+    def hlt(self, op):
+        raise Exit(0)
 
     def run(self):
         """Step until the program exits; return its exit code."""
