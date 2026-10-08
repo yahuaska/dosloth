@@ -53,6 +53,7 @@ class Op(IntEnum):
     JMP_SHORT = 0xEB     # followed by a signed 8-bit displacement
     REPNE_PREFIX = 0xF2  # modifies the next string instruction: repeat while CX != 0 and ZF == 0
     HLT = 0xF4
+    GROUP3_RM16 = 0xF7   # + ModRM: one operation on r/m16, chosen by the 'reg' field (only NEG, 3, so far)
     CLC = 0xF8
     STC = 0xF9
     CLI = 0xFA

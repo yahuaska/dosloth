@@ -49,6 +49,8 @@ class TestText(unittest.TestCase):
             (b"\x4D", "dec bp"),
             (b"\xFC", "cld"),
             (b"\xC3", "ret"),
+            (b"\xF7\xD9", "neg cx"),
+            (b"\xF7\x1F", "neg word [bx]"),
         ]
         for code, text in cases:
             with self.subTest(code=code.hex(" ")):
@@ -65,7 +67,7 @@ class TestAgreesWithCpu(unittest.TestCase):
         """If you teach the CPU a new opcode and forget disasm.py, this fails."""
         for op in CPU().ops:
             with self.subTest(op=f"{op:02X}"):
-                code = bytes([op, 0xC0, 0, 0, 0, 0, 0, 0])
+                code = bytes([op, 0xD8, 0, 0, 0, 0, 0, 0])  # ModRM D8: register form, reg field 3
                 cpu = machine(code)
                 cpu.ip = 0x100
                 fetched = []

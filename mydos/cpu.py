@@ -60,6 +60,7 @@ class CPU:
             Op.LOOPE: self.loope,
             Op.LOOP: self.loop,
             Op.JCXZ: self.jcxz,
+            Op.GROUP3_RM16: self.group3_rm16,
             Op.CALL_NEAR: self.call_near,
             Op.RET_NEAR: self.ret_near,
             Op.JMP_SHORT: self.jmp_short,
@@ -668,6 +669,20 @@ class CPU:
     def hlt(self, op):
         """Stop the CPU (opcode F4). We treat it as the end of the program, with exit code 0."""
         raise Exit(0)
+
+    def group3_rm16(self, op):
+        """Opcode F7: one of several single-operand operations on a register or memory word.
+
+        The 'reg' field of the ModRM byte picks the operation: TEST, NOT, NEG, MUL, IMUL, DIV, IDIV.
+        Only NEG (3) is done so far; asking for any other stops the emulator.
+        """
+        m = modrm.decode(self, self.seg_override)
+        if m.reg != 3:
+            raise NotImplementedError(
+                f"opcode F7 /{m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        # NEG: change the sign, i.e. 0 - operand. The flags come out right as for any subtraction:
+        # CF is set unless the operand was 0, OF only for 8000h (-32768 has no positive twin).
+        m.write16(self, self.sub_with_flags(0, m.read16(self), 16))
 
     def clc(self, op):
         """Clear the carry flag (opcode F8)."""

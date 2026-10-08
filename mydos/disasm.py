@@ -163,6 +163,11 @@ def _decode_opcode(r, op, seg_override):
         return f"mov {REG8[op - Op.MOV_R8_IMM8]}, {r.u8():02X}"
     if Op.MOV_R16_IMM16 <= op < Op.MOV_R16_IMM16 + 8:
         return f"mov {REG16[op - Op.MOV_R16_IMM16]}, {r.u16():04X}"
+    if op == Op.GROUP3_RM16:
+        reg, rm, is_mem = _modrm(r, seg_override, 16)
+        if reg != 3:
+            return None  # the CPU only knows NEG here
+        return f"neg {'word ' if is_mem else ''}{rm}"
     if op == Op.INT:
         return f"int {r.u8():02X}"
     if op in LOOPS:
