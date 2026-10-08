@@ -6,10 +6,12 @@ class Exit(Exception):
     """Raised to stop the program; code is the DOS exit code."""
 
     def __init__(self, code):
+        """Remember the DOS exit code."""
         self.code = code
 
 
 class CPU:
+    """An 8086-style real-mode CPU with 1 MB of memory; instructions are dispatched via self.ops."""
     # register numbers, available as CPU.AX, CPU.DS, ...
     from .regs import AX, CX, DX, BX, SP, BP, SI, DI, ES, CS, SS, DS
 
@@ -107,39 +109,48 @@ class CPU:
 
     # --- instructions: each takes the opcode byte (groups use its low 3 bits) ---
     def nop(self, op):
+        """90: do nothing."""
         pass
 
     def mov_rm16_r16(self, op):
+        """89 /r: MOV r/m16, r16 - copy a 16-bit register into a register or memory."""
         m = modrm.decode(self, self.seg_override)
         m.write16(self, self.r[m.reg])
 
     def mov_r16_rm16(self, op):
+        """8B /r: MOV r16, r/m16 - copy a register or memory word into a 16-bit register."""
         m = modrm.decode(self, self.seg_override)
         self.r[m.reg] = m.read16(self)
 
     def mov_rm16_sreg(self, op):
+        """8C /r: MOV r/m16, sreg - copy a segment register (ModRM reg field) into a register or memory."""
         m = modrm.decode(self, self.seg_override)
         if m.reg > 3:  # the reg field only names ES, CS, SS, DS here
             raise NotImplementedError(f"MOV r/m16, sreg with reg={m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
         m.write16(self, self.s[m.reg])
 
     def mov_sreg_rm16(self, op):
+        """8E /r: MOV sreg, r/m16 - load a segment register (not CS) from a register or memory."""
         m = modrm.decode(self, self.seg_override)
         if m.reg > 3 or m.reg == self.CS:  # loading CS this way is not a valid instruction
             raise NotImplementedError(f"MOV sreg, r/m16 with reg={m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
         self.s[m.reg] = m.read16(self)
 
     def mov_r8_imm8(self, op):
+        """B0..B7: MOV r8, imm8 - load an immediate byte into AL..BH (register = low 3 bits of op)."""
         self.set8(op - Op.MOV_R8_IMM8, self.fetch8())
 
     def mov_r16_imm16(self, op):
+        """B8..BF: MOV r16, imm16 - load an immediate word into AX..DI (register = low 3 bits of op)."""
         self.r[op - Op.MOV_R16_IMM16] = self.fetch16()
 
     def jmp_short(self, op):
+        """EB: JMP rel8 - jump by a signed 8-bit displacement relative to the next instruction."""
         d = self.fetch8()
         self.ip = (self.ip + d - (256 if d & 0x80 else 0)) & 0xFFFF
 
     def int_(self, op):
+        """CD: INT imm8 - call the Python-side handler registered for that interrupt number."""
         n = self.fetch8()
         h = self.int_handlers.get(n)
         if h is None:
@@ -147,6 +158,7 @@ class CPU:
         h(self)
 
     def hlt(self, op):
+        """F4: HLT - stop the program with exit code 0."""
         raise Exit(0)
 
     def run(self):
