@@ -1,13 +1,15 @@
 import sys
 
+from . import flags
 from .cpu import CPU, Exit
 
 DOS_VERSION = (7, 1)  # (major, minor) reported by INT 21h AH=30h
 OEM_MICROSOFT = 0xFF
+MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands out nothing above it
 
 
 def int21(cpu):
-    """INT 21h: DOS services, selected by AH. Only 09h, 25h, 30h, 35h and 4Ch so far."""
+    """INT 21h: DOS services, selected by AH. Only 09h, 25h, 30h, 35h, 4Ah and 4Ch so far."""
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
         off = cpu.r[CPU.DX]
@@ -33,6 +35,16 @@ def int21(cpu):
         cpu.set8(7, OEM_MICROSOFT)
         cpu.set8(3, 0)
         cpu.r[CPU.CX] = 0
+    elif ah == 0x4A:  # resize the memory block that starts at segment ES to BX paragraphs
+        # Naive: we keep no list of blocks, only the top of memory. A block can grow or shrink as
+        # long as it ends below that top. (DOS error 09, "not a block", cannot be told apart yet.)
+        available = max(MEMORY_TOP_SEG - cpu.s[CPU.ES], 0)
+        if cpu.r[CPU.BX] <= available:
+            cpu.set_flag(flags.CF, False)
+        else:  # error 08: not enough memory; BX says how much there is
+            cpu.set_flag(flags.CF, True)
+            cpu.r[CPU.AX] = 8
+            cpu.r[CPU.BX] = available
     elif ah == 0x4C:  # exit with code in AL
         raise Exit(cpu.get8(0))
     else:
