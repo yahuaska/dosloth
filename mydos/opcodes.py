@@ -45,6 +45,10 @@ class Op(IntEnum):
     MOV_R16_IMM16 = 0xB8  # B8..BF: AX CX DX BX SP BP SI DI <- imm16
     RET_NEAR = 0xC3      # pops IP from the stack
     INT = 0xCD           # followed by the interrupt number
+    LOOPNE = 0xE0        # followed by a signed 8-bit displacement
+    LOOPE = 0xE1         # followed by a signed 8-bit displacement
+    LOOP = 0xE2          # followed by a signed 8-bit displacement
+    JCXZ = 0xE3          # followed by a signed 8-bit displacement
     CALL_NEAR = 0xE8     # followed by a signed 16-bit displacement; pushes the return IP
     JMP_SHORT = 0xEB     # followed by a signed 8-bit displacement
     REPNE_PREFIX = 0xF2  # modifies the next string instruction: repeat while CX != 0 and ZF == 0

@@ -61,6 +61,10 @@ class CPU:
             Op.XOR_AX_IMM16: self.xor_ax_imm16,
             Op.SCASB: self.scas,
             Op.SCASW: self.scas,
+            Op.LOOPNE: self.loopne,
+            Op.LOOPE: self.loope,
+            Op.LOOP: self.loop,
+            Op.JCXZ: self.jcxz,
             Op.CALL_NEAR: self.call_near,
             Op.RET_NEAR: self.ret_near,
             Op.JMP_SHORT: self.jmp_short,
@@ -158,6 +162,16 @@ class CPU:
         self.set_flag(flags.CF, False)
         self.set_flag(flags.OF, False)
         self.set_szp(result, bits)
+
+    def fetch_rel8(self):
+        """Read the one-byte jump distance after an opcode and return the address it points to.
+
+        The byte is a signed number (-128..127) counted from the end of the instruction, so the
+        address is worked out after the byte has been read. Jumps that may or may not be taken
+        read the byte first and then decide whether to go there.
+        """
+        d = self.fetch8()
+        return (self.ip + d - (256 if d & 0x80 else 0)) & 0xFFFF
 
     def sub_with_flags(self, a, b, bits):
         """Compute a - b like the CPU's SUB and CMP do: set the flags and return the result.
@@ -437,6 +451,47 @@ class CPU:
             if self.get_flag(flags.ZF):
                 break  # REPNE stops on the first match
 
+    def loop(self, op):
+        """Repeat a block of code CX times (opcode E2 + one signed byte).
+
+        Takes 1 off CX and jumps back to the start of the block unless CX has reached zero. Mind
+        that CX is decreased first: with CX = 0 on entry it wraps to FFFFh and the loop runs 65536
+        times. The flags are not touched.
+        """
+        target = self.fetch_rel8()
+        self.r[self.CX] = (self.r[self.CX] - 1) & 0xFFFF
+        if self.r[self.CX] != 0:
+            self.ip = target
+
+    def loope(self, op):
+        """Like LOOP, but also stops as soon as ZF is clear (opcode E1; alias LOOPZ).
+
+        Handy for "repeat while still equal": the loop body compares something and sets ZF.
+        """
+        target = self.fetch_rel8()
+        self.r[self.CX] = (self.r[self.CX] - 1) & 0xFFFF
+        if self.r[self.CX] != 0 and self.get_flag(flags.ZF):
+            self.ip = target
+
+    def loopne(self, op):
+        """Like LOOP, but also stops as soon as ZF is set (opcode E0; alias LOOPNZ).
+
+        Handy for "repeat until a match is found".
+        """
+        target = self.fetch_rel8()
+        self.r[self.CX] = (self.r[self.CX] - 1) & 0xFFFF
+        if self.r[self.CX] != 0 and not self.get_flag(flags.ZF):
+            self.ip = target
+
+    def jcxz(self, op):
+        """Jump if CX is zero (opcode E3 + one signed byte). CX is not changed.
+
+        Placed before a LOOP to skip the whole loop when there is nothing to repeat.
+        """
+        target = self.fetch_rel8()
+        if self.r[self.CX] == 0:
+            self.ip = target
+
     def call_near(self, op):
         """Call a procedure in the same code segment (opcode E8 + 16-bit displacement).
 
@@ -459,8 +514,7 @@ class CPU:
         The byte is added to the address of the next instruction, so the jump reaches 128 bytes back
         or 127 bytes forward.
         """
-        d = self.fetch8()
-        self.ip = (self.ip + d - (256 if d & 0x80 else 0)) & 0xFFFF
+        self.ip = self.fetch_rel8()
 
     def int_(self, op):
         """Call an interrupt (opcode CD + the interrupt number).
