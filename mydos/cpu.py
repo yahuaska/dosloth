@@ -39,7 +39,9 @@ class CPU:
         # opcode byte -> handler(op). Groups get one entry per opcode value.
         self.ops = {
             Op.NOP: self.nop,
+            Op.MOV_RM8_R8: self.mov_rm8_r8,
             Op.MOV_RM16_R16: self.mov_rm16_r16,
+            Op.MOV_R8_RM8: self.mov_r8_rm8,
             Op.MOV_R16_RM16: self.mov_r16_rm16,
             Op.MOV_RM16_SREG: self.mov_rm16_sreg,
             Op.MOV_SREG_RM16: self.mov_sreg_rm16,
@@ -429,6 +431,24 @@ class CPU:
         There is no POP CS: 0F, where it would be, is not this instruction.
         """
         self.s[(op >> 3) & 3] = self.pop16()
+
+    def mov_rm8_r8(self, op):
+        """Copy an 8-bit register into a register or a byte in memory (opcode 88 + ModRM).
+
+        The byte version of opcode 89. The registers are AL, CL, DL, BL, AH, CH, DH, BH.
+        """
+        m = modrm.decode(self, self.seg_override)
+        m.write8(self, self.get8(m.reg))
+
+    def mov_r8_rm8(self, op):
+        """Copy a register or a byte in memory into an 8-bit register (opcode 8A + ModRM).
+
+        The byte version of opcode 8B, and the reverse of 88. Only that one register changes: the
+        other half of the 16-bit register stays as it was, which is why code that wants a whole word
+        follows it with `xor ch, ch` or similar.
+        """
+        m = modrm.decode(self, self.seg_override)
+        self.set8(m.reg, m.read8(self))
 
     def mov_rm16_r16(self, op):
         """Copy a 16-bit register into a register or a word in memory (opcode 89 + ModRM).

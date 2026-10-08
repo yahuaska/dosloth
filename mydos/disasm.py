@@ -150,6 +150,12 @@ def _decode_opcode(r, op, seg_override):
             imm = _signed(r.s8())  # a one-byte constant that the CPU sign-extends
         size = ("byte " if bits == 8 else "word ") if is_mem else ""  # memory needs a size
         return f"{Alu(reg).name.lower()} {size}{rm}, {imm}"
+    if op == Op.MOV_RM8_R8:
+        reg, rm, _ = _modrm(r, seg_override, 8)
+        return f"mov {rm}, {REG8[reg]}"
+    if op == Op.MOV_R8_RM8:
+        reg, rm, _ = _modrm(r, seg_override, 8)
+        return f"mov {REG8[reg]}, {rm}"
     if op == Op.MOV_RM16_R16:
         reg, rm, _ = _modrm(r, seg_override, 16)
         return f"mov {rm}, {REG16[reg]}"

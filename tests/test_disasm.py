@@ -21,6 +21,10 @@ class TestText(unittest.TestCase):
         cases = [
             (b"\x8B\xC3", "mov ax, bx"),
             (b"\x89\xD8", "mov ax, bx"),
+            (b"\x8A\xCC", "mov cl, ah"),
+            (b"\x88\xE1", "mov cl, ah"),
+            (b"\x26\x8A\x4F\x01", "mov cl, es:[bx+1]"),   # from esetup.exe
+            (b"\x88\x07", "mov [bx], al"),
             (b"\x8B\x07", "mov ax, [bx]"),
             (b"\x8B\x46\xFE", "mov ax, [bp-2]"),
             (b"\x8B\x80\x00\x01", "mov ax, [bx+si+100]"),
