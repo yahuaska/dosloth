@@ -5,11 +5,13 @@ from .cpu import CPU, Exit
 
 DOS_VERSION = (7, 1)  # (major, minor) reported by INT 21h AH=30h
 OEM_MICROSOFT = 0xFF
+CONSOLE_INFO = 0x80D3  # IOCTL answer for the console: a character device, standard input and output
+STANDARD_HANDLES = (0, 1, 2)  # standard input, standard output, standard error: all three are the console
 MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands out nothing above it
 
 
 def int21(cpu):
-    """INT 21h: DOS services, selected by AH. Only 09h, 25h, 30h, 35h, 4Ah and 4Ch so far."""
+    """INT 21h: DOS services, selected by AH. Only 09h, 25h, 30h, 35h, 44h, 4Ah and 4Ch so far."""
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
         off = cpu.r[CPU.DX]
@@ -35,6 +37,18 @@ def int21(cpu):
         cpu.set8(7, OEM_MICROSOFT)
         cpu.set8(3, 0)
         cpu.r[CPU.CX] = 0
+    elif ah == 0x44:  # IOCTL: device control through a file handle in BX, subfunction in AL
+        al = cpu.get8(0)
+        if al != 0x00:
+            raise NotImplementedError(f"INT 21h AH=44 AL={al:02X}")
+        # Subfunction 0: get device information into DX. C libraries use it to ask "is this handle a
+        # terminal or a file?", which decides whether output is buffered. Bit 7 of DX set means a device.
+        if cpu.r[CPU.BX] in STANDARD_HANDLES:
+            cpu.r[CPU.DX] = CONSOLE_INFO
+            cpu.set_flag(flags.CF, False)
+        else:  # error 06: invalid handle (nothing else is open yet)
+            cpu.set_flag(flags.CF, True)
+            cpu.r[CPU.AX] = 6
     elif ah == 0x4A:  # resize the memory block that starts at segment ES to BX paragraphs
         # Naive: we keep no list of blocks, only the top of memory. A block can grow or shrink as
         # long as it ends below that top. (DOS error 09, "not a block", cannot be told apart yet.)
