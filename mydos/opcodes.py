@@ -30,10 +30,12 @@ class Op(IntEnum):
     ALU_RM8_IMM8 = 0x80    # + ModRM + imm8:  the operation is the ModRM 'reg' field (see Alu)
     ALU_RM16_IMM16 = 0x81  # + ModRM + imm16
     ALU_RM16_IMM8 = 0x83   # + ModRM + imm8, sign-extended to 16 bits
+    XCHG_RM_REG = 0x86   # 86 (byte) and 87 (word) + ModRM: swap a register with a register or memory
     MOV_RM_REG = 0x88    # 88..8B + ModRM: r/m8 <- r8, r/m16 <- r16, r8 <- r/m8, r16 <- r/m16 (see CPU.operands)
     MOV_RM16_SREG = 0x8C  # followed by ModRM (reg = segment register): r/m16 <- sreg
     MOV_SREG_RM16 = 0x8E  # followed by ModRM (reg = segment register): sreg <- r/m16
-    NOP = 0x90
+    NOP = 0x90           # really XCHG AX, AX, which does nothing
+    XCHG_AX_R16 = 0x90   # 91..97: swap AX with CX DX BX SP BP SI DI (90 itself is NOP)
     CBW = 0x98           # AL -> AX, the sign copied into AH
     CWD = 0x99           # AX -> DX:AX, the sign copied into DX
     MOV_AL_MOFFS8 = 0xA0    # followed by a 16-bit offset: AL <- byte at [offset]

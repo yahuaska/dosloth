@@ -120,6 +120,10 @@ class CPU:
         for form in range(4):
             self.ops[Op.MOV_RM_REG + form] = self.mov_rm_reg
         for size in range(2):
+            self.ops[Op.XCHG_RM_REG + size] = self.xchg_rm_reg
+        for i in range(1, 8):  # 90 is NOP
+            self.ops[Op.XCHG_AX_R16 + i] = self.xchg_ax_r16
+        for size in range(2):
             self.ops[Op.MOV_RM_IMM + size] = self.mov_rm_imm
         for form in range(4):
             self.ops[Op.SHIFT_RM + form] = self.shift_rm
@@ -517,6 +521,26 @@ class CPU:
         bits = 16 if op & 1 else 8
         imm = self.fetch16() if bits == 16 else self.fetch8()  # read after the ModRM bytes, which decode ate
         m.write(self, bits, imm)
+
+    def xchg_rm_reg(self, op):
+        """Swap a register with a register or a memory operand (opcodes 86 for bytes, 87 for words + ModRM).
+
+        Both operands receive the other's value, so there is no direction to speak of; only the size bit
+        of the opcode matters. Flags are not changed.
+        """
+        m, bits, _ = self.operands(op)  # the direction bit means nothing here
+        from_rm = m.read(self, bits)
+        m.write(self, bits, self.get_reg(m.reg, bits))
+        self.set_reg(m.reg, bits, from_rm)
+
+    def xchg_ax_r16(self, op):
+        """Swap AX with another 16-bit register (opcodes 91-97; the register is the low 3 bits of the opcode).
+
+        The short form of XCHG, one byte. Opcode 90 would be "swap AX with AX", which is why it is the NOP.
+        Flags are not changed.
+        """
+        reg = op - Op.XCHG_AX_R16
+        self.r[self.AX], self.r[reg] = self.r[reg], self.r[self.AX]
 
     def mov_rm_reg(self, op):
         """Copy a register to a register or memory, or the other way (opcodes 88, 89, 8A, 8B + ModRM).

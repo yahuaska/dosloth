@@ -64,6 +64,11 @@ class TestText(unittest.TestCase):
             (b"\x4D", "dec bp"),
             (b"\xFC", "cld"),
             (b"\x98", "cbw"),
+            (b"\x92", "xchg ax, dx"),   # from esetup.exe
+            (b"\x97", "xchg ax, di"),
+            (b"\x87\xD8", "xchg bx, ax"),   # reg field BX first, r/m AX second
+            (b"\x86\x07", "xchg al, [bx]"),
+            (b"\x87\x4F\x02", "xchg cx, [bx+2]"),
             (b"\x99", "cwd"),
             (b"\xC3", "ret"),
             (b"\xF7\xD9", "neg cx"),

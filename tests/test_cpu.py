@@ -697,5 +697,124 @@ class TestSignExtension(unittest.TestCase):
         self.assertEqual((signed(cpu.r[CPU.AX] & 0xFF, 8), signed(cpu.r[CPU.AX] >> 8, 8)), (-3, -1))
 
 
+class TestXchg(unittest.TestCase):
+    """XCHG: 90-97 (with AX) and 86, 87 (with ModRM)."""
+
+    def test_swap_with_ax(self):
+        for reg in range(1, 8):
+            cpu = machine(bytes([0x90 + reg]), True)
+            start_flags = cpu.flags
+            model = list(REGS16)
+            model[CPU.BX] = MEM_ADDR
+            model[0], model[reg] = model[reg], model[0]
+            cpu.step()
+            self.assertEqual((cpu.r, cpu.flags, cpu.ip), (model, start_flags, 1), f"9{reg}")
+
+    def test_90_is_still_nothing_at_all(self):
+        cpu = machine(bytes([0x90]), True)
+        registers, start_flags = list(cpu.r), cpu.flags
+        cpu.step()
+        self.assertEqual((cpu.r, cpu.flags, cpu.ip), (registers, start_flags, 1))
+
+    def test_register_with_register(self):
+        for op in (0x86, 0x87):
+            bits = 16 if op & 1 else 8
+            for reg in range(8):
+                for rm in range(8):
+                    label = f"{op:02X} reg {reg} rm {rm}"
+                    cpu = machine(bytes([op, 0xC0 | reg << 3 | rm]), False)
+                    model = list(REGS16)
+                    model[CPU.BX] = MEM_ADDR
+                    start_flags = cpu.flags
+                    cpu.step()
+                    a, b = get(model, rm, bits), get(model, reg, bits)
+                    model = put(put(model, rm, bits, b), reg, bits, a)
+                    self.assertEqual(cpu.r, model, label)
+                    self.assertEqual((cpu.flags, cpu.ip), (start_flags, 2), label)
+
+    def test_register_with_memory(self):
+        for op in (0x86, 0x87):
+            bits = 16 if op & 1 else 8
+            size = bits // 8
+            for reg in range(8):
+                label = f"{op:02X} reg {reg}"
+                cpu = machine(bytes([op, reg << 3 | 7]), False)  # [bx]
+                cpu.mem[0x20000 + MEM_ADDR - 1:0x20000 + MEM_ADDR + 4] = bytes(MEM_BYTES)
+                model = list(REGS16)
+                model[CPU.BX] = MEM_ADDR
+                mem = bytearray(MEM_BYTES)
+                from_memory = int.from_bytes(mem[1:1 + size], "little")
+                from_register = get(model, reg, bits)
+                start_flags = cpu.flags
+                cpu.step()
+                model = put(model, reg, bits, from_memory)
+                mem[1:1 + size] = from_register.to_bytes(size, "little")
+                self.assertEqual(cpu.r, model, label)
+                self.assertEqual(bytes(cpu.mem[0x20000 + MEM_ADDR - 1:0x20000 + MEM_ADDR + 4]), bytes(mem), label)
+                self.assertEqual((cpu.flags, cpu.ip), (start_flags, 2), label)
+
+    def test_segment_prefix_picks_the_segment_of_the_memory_operand(self):
+        cpu = machine(bytes([0x26, 0x87, 0x07]), False)  # xchg ax, es:[bx]
+        cpu.ww(0x3000, MEM_ADDR, 0xABCD)
+        cpu.ww(0x2000, MEM_ADDR, 0x1111)
+        cpu.step()
+        self.assertEqual(cpu.r[CPU.AX], 0xABCD)
+        self.assertEqual(cpu.rw(0x3000, MEM_ADDR), REGS16[0])  # ES got the old AX
+        self.assertEqual(cpu.rw(0x2000, MEM_ADDR), 0x1111)  # DS untouched
+
+    def test_swapping_a_register_with_itself(self):
+        cpu = machine(bytes([0x87, 0xDB]), False)  # xchg bx, bx
+        registers = list(cpu.r)
+        cpu.step()
+        self.assertEqual(cpu.r, registers)
+
+    def test_xchg_ax_dx_from_esetup(self):
+        """92 = xchg ax, dx: the C library moves the IOCTL answer from DX into AX."""
+        cpu = machine(bytes([0x92]), False)
+        cpu.r[CPU.AX], cpu.r[CPU.DX] = 0x44, 0x80D3
+        cpu.step()
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.DX]), (0x80D3, 0x44))
+
+
+class TestInstructionsThatLeaveTheFlagsAlone(unittest.TestCase):
+    """Each of these must change no flag, whatever the flags were: all clear, or all raised.
+
+    Checking one pattern only misses half of the mistakes: an instruction that wrongly SETS a flag
+    cannot be seen when the flag was already set, and one that wrongly CLEARS it cannot be seen when it
+    was already clear.
+    """
+
+    ALL_CLEAR = 0x0002
+    ALL_RAISED = 0x0002 | flags.CF | flags.PF | flags.AF | flags.ZF | flags.SF | flags.OF | flags.DF | flags.IF
+
+    CODES = {
+        "mov r/m8,r8": [0x88, 0x07], "mov r/m16,r16": [0x89, 0x07],
+        "mov r8,r/m8": [0x8A, 0x07], "mov r16,r/m16": [0x8B, 0x07],
+        "mov sreg,r/m16": [0x8E, 0xD8], "mov r/m16,sreg": [0x8C, 0xD8],
+        "mov al,[addr]": [0xA0, 0x00, 0x01], "mov ax,[addr]": [0xA1, 0x00, 0x01],
+        "mov [addr],al": [0xA2, 0x00, 0x01], "mov [addr],ax": [0xA3, 0x00, 0x01],
+        "mov r8,imm8": [0xB3, 0x05], "mov r16,imm16": [0xBB, 0x05, 0x00],
+        "mov r/m8,imm8": [0xC6, 0x07, 0x05], "mov r/m16,imm16": [0xC7, 0x07, 0x05, 0x00],
+        "xchg ax,r16": [0x93], "xchg r/m8,r8": [0x86, 0x07], "xchg r/m16,r16": [0x87, 0x07],
+        "nop": [0x90], "cbw": [0x98], "cwd": [0x99],
+        "push r16": [0x53], "pop r16": [0x5B], "push es": [0x06], "pop es": [0x07],
+        "push r/m16": [0xFF, 0x37], "not r/m8": [0xF6, 0xD3], "not r/m16": [0xF7, 0xD3],
+        "jmp short": [0xEB, 0x05], "call near": [0xE8, 0x05, 0x00], "call r/m16": [0xFF, 0xD3],
+        "jmp r/m16": [0xFF, 0xE3], "ret": [0xC3],
+        "movsb": [0xA4], "movsw": [0xA5], "stosb": [0xAA], "stosw": [0xAB], "lodsb": [0xAC], "lodsw": [0xAD],
+        "rep stosb": [0xF3, 0xAA], "rep movsw": [0xF3, 0xA5],
+    }
+
+    def test_flags_do_not_move(self):
+        for name, code in self.CODES.items():
+            for pattern in (self.ALL_CLEAR, self.ALL_RAISED):
+                cpu = machine(bytes(code), False)
+                cpu.s[CPU.SS], cpu.r[CPU.SP], cpu.r[CPU.CX] = 0x4000, 0x0200, 3
+                cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x0300, 0x0400
+                cpu.flags = pattern
+                cpu.step()
+                self.assertEqual(cpu.flags, pattern, f"{name} with flags {pattern:04X}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -157,6 +157,11 @@ def _decode_opcode(r, op, seg_override):
             imm = _signed(r.s8())  # a one-byte constant that the CPU sign-extends
         size = ("byte " if bits == 8 else "word ") if is_mem else ""  # memory needs a size
         return f"{Alu(reg).name.lower()} {size}{rm}, {imm}"
+    if Op.XCHG_AX_R16 < op < Op.XCHG_AX_R16 + 8:
+        return f"xchg ax, {REG16[op - Op.XCHG_AX_R16]}"
+    if op in (Op.XCHG_RM_REG, Op.XCHG_RM_REG + 1):
+        dst, src = _operands(r, op, seg_override)  # the layout puts the register first for these opcodes
+        return f"xchg {dst}, {src}"
     if Op.MOV_RM_REG <= op < Op.MOV_RM_REG + 4:
         dst, src = _operands(r, op, seg_override)
         return f"mov {dst}, {src}"
