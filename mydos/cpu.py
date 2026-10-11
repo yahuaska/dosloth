@@ -10,6 +10,19 @@ class Exit(Exception):
         self.code = code
 
 
+class DivideError(Exception):
+    """DIV or IDIV was asked for something impossible: a zero divisor, or a quotient too big for the register.
+
+    A real CPU calls interrupt 0 here, and a program may have put its own handler there. We have no way
+    to run a program's handler from a Python-side event yet, so for now this stops the emulator.
+    """
+
+
+def signed(value, bits):
+    """Read `value` (an unsigned number of `bits` bits) as a two's complement signed number."""
+    return value - (1 << bits) if value >> (bits - 1) else value
+
+
 class CPU:
     """A tiny 8086-style CPU running in real mode, with 1 MB of flat memory.
 
@@ -66,7 +79,6 @@ class CPU:
             Op.LOOPE: self.loope,
             Op.LOOP: self.loop,
             Op.JCXZ: self.jcxz,
-            Op.GROUP3_RM16: self.group3_rm16,
             Op.GROUP4_RM8: self.group4_rm8,
             Op.GROUP5_RM16: self.group5_rm16,
             Op.CALL_NEAR: self.call_near,
@@ -109,6 +121,8 @@ class CPU:
             self.ops[Op.MOV_RM_IMM + size] = self.mov_rm_imm
         for form in range(4):
             self.ops[Op.SHIFT_RM + form] = self.shift_rm
+        for size in range(2):
+            self.ops[Op.GROUP3_RM + size] = self.group3_rm
 
         for i in range(8):
             self.ops[Op.INC_R16 + i] = self.inc_r16
@@ -882,19 +896,87 @@ class CPU:
         count = self.get8(1) if op & 2 else 1  # 8-bit register 1 is CL
         m.write(self, bits, self.shift_with_flags(m.reg, m.read(self, bits), count, bits))
 
-    def group3_rm16(self, op):
-        """Opcode F7: one of several single-operand operations on a register or memory word.
+    def group3_rm(self, op):
+        """Opcodes F6 (byte) and F7 (word): one operation on a register or memory operand, by 'reg'.
 
-        The 'reg' field of the ModRM byte picks the operation: TEST, NOT, NEG, MUL, IMUL, DIV, IDIV.
-        Only NEG (3) is done so far; asking for any other stops the emulator.
+            0 TEST  AND with a constant that follows, only for the flags   4 MUL   multiply AL or AX
+            1 TEST  the same, an alias nobody should use                   5 IMUL  the same, signed
+            2 NOT   flip every bit                                         6 DIV   divide AX or DX:AX
+            3 NEG   change the sign                                        7 IDIV  the same, signed
+
+        MUL, IMUL, DIV and IDIV have no second operand to name: they work on fixed registers (see
+        multiply and divide). The ModRM byte is followed by the constant only for TEST.
         """
         m = modrm.decode(self, self.seg_override)
-        if m.reg != 3:
-            raise NotImplementedError(
-                f"opcode F7 /{m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
-        # NEG: change the sign, i.e. 0 - operand. The flags come out right as for any subtraction:
-        # CF is set unless the operand was 0, OF only for 8000h (-32768 has no positive twin).
-        m.write16(self, self.sub_with_flags(0, m.read16(self), 16))
+        bits = 16 if op & 1 else 8
+        kind = m.reg
+        if kind in (0, 1):
+            imm = self.fetch16() if bits == 16 else self.fetch8()  # after the ModRM bytes
+            self.set_logic_flags(m.read(self, bits) & imm, bits)
+        elif kind == 2:
+            m.write(self, bits, ~m.read(self, bits) & ((1 << bits) - 1))  # no flags change
+        elif kind == 3:
+            # NEG is 0 - operand. The flags come out right as for any subtraction: CF is set unless the
+            # operand was 0, and OF only for 80h or 8000h (the most negative number has no positive twin).
+            m.write(self, bits, self.sub_with_flags(0, m.read(self, bits), bits))
+        elif kind in (4, 5):
+            self.multiply(m.read(self, bits), bits, signed_numbers=(kind == 5))
+        else:
+            self.divide(m.read(self, bits), bits, signed_numbers=(kind == 7))
+
+    def multiply(self, operand, bits, signed_numbers):
+        """AL * operand into AX (bytes), or AX * operand into DX:AX (words): MUL and IMUL.
+
+        The result is twice as wide as the factors, so it always fits. CF and OF say whether the upper
+        half is needed: for MUL, whether it is not zero; for IMUL, whether it is more than a sign
+        extension of the lower half (that is, the product does not fit in the width of the factors).
+        The other flags are undefined on a real CPU; they are left as they were.
+        """
+        a = self.get8(0) if bits == 8 else self.r[self.AX]  # 8-bit register 0 is AL
+        if signed_numbers:
+            a, operand = signed(a, bits), signed(operand, bits)
+        product = a * operand
+        wide = product & ((1 << 2 * bits) - 1)
+        if bits == 8:
+            self.r[self.AX] = wide
+        else:
+            self.r[self.AX], self.r[self.DX] = wide & 0xFFFF, wide >> 16
+        if signed_numbers:
+            needs_upper_half = not -(1 << (bits - 1)) <= product < 1 << (bits - 1)
+        else:
+            needs_upper_half = product >> bits != 0
+        self.set_flag(flags.CF, needs_upper_half)
+        self.set_flag(flags.OF, needs_upper_half)
+
+    def divide(self, divisor, bits, signed_numbers):
+        """AX / divisor (bytes) or DX:AX / divisor (words): DIV and IDIV.
+
+        Bytes: quotient in AL, remainder in AH. Words: quotient in AX, remainder in DX. The quotient is
+        cut towards zero, and a remainder takes the sign of the dividend, as in C. A zero divisor, or a
+        quotient that does not fit its register, is a DivideError; nothing is changed then. All flags
+        are undefined after a division and are left as they were.
+        """
+        if bits == 8:
+            dividend = self.r[self.AX]
+        else:
+            dividend = self.r[self.DX] << 16 | self.r[self.AX]
+        if signed_numbers:
+            dividend, divisor = signed(dividend, 2 * bits), signed(divisor, bits)
+        if divisor == 0:
+            raise DivideError(f"divide by zero at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        quotient = abs(dividend) // abs(divisor)
+        if (dividend < 0) != (divisor < 0):
+            quotient = -quotient
+        remainder = dividend - quotient * divisor
+        low, high = (-(1 << (bits - 1)), 1 << (bits - 1)) if signed_numbers else (0, 1 << bits)
+        if not low <= quotient < high:
+            raise DivideError(f"quotient too big at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        mask = (1 << bits) - 1
+        if bits == 8:
+            self.set8(0, quotient & mask)  # AL
+            self.set8(4, remainder & mask)  # AH
+        else:
+            self.r[self.AX], self.r[self.DX] = quotient & mask, remainder & mask
 
     def group4_rm8(self, op):
         """Opcode FE: add 1 to (INC, reg field 0) or subtract 1 from (DEC, 1) a register or memory byte."""

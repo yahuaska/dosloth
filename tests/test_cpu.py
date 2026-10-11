@@ -1,7 +1,7 @@
 import unittest
 
 from mydos import flags
-from mydos.cpu import CPU
+from mydos.cpu import CPU, DivideError
 
 
 class TestSegmentOverrideMov(unittest.TestCase):
@@ -510,6 +510,150 @@ class TestShiftsAndRotates(unittest.TestCase):
         cpu.r[CPU.BX] = 5
         cpu.step()
         self.assertEqual(cpu.r[CPU.BX], 10)
+
+
+class TestGroup3(unittest.TestCase):
+    """F6 (byte) and F7 (word): TEST, NOT, NEG, MUL, IMUL, DIV, IDIV. The operand is BX (or BL)."""
+
+    VALUES = {8: [0x00, 0x01, 0x02, 0x07, 0x7F, 0x80, 0xFF, 0x10],
+              16: [0x0000, 0x0001, 0x0002, 0x7FFF, 0x8000, 0xFFFF, 0x1234, 0x0100]}
+
+    def execute(self, kind, bits, operand, ax=0, dx=0, imm=None):
+        op = 0xF7 if bits == 16 else 0xF6
+        code = bytes([op, 0xC0 | kind << 3 | 3]) + (imm.to_bytes(bits // 8, "little") if imm is not None else b"")
+        cpu = machine(code, False)
+        cpu.r[CPU.BX] = operand if bits == 16 else 0xA500 | operand  # BH must stay untouched
+        cpu.r[CPU.AX], cpu.r[CPU.DX] = ax, dx
+        start_flags = cpu.flags
+        cpu.step()
+        return cpu, start_flags
+
+    def test_not_flips_the_bits_and_touches_no_flag(self):
+        for bits in (8, 16):
+            for v in self.VALUES[bits]:
+                cpu, start = self.execute(2, bits, v)
+                self.assertEqual(cpu.r[CPU.BX] & mask(bits), ~v & mask(bits), f"{bits} {v:X}")
+                self.assertEqual(cpu.r[CPU.BX] >> 8 if bits == 8 else 0xA5, 0xA5)
+                self.assertEqual(cpu.flags, start)
+
+    def test_neg(self):
+        for bits in (8, 16):
+            for v in self.VALUES[bits]:
+                cpu, _ = self.execute(3, bits, v)
+                result = -v & mask(bits)
+                self.assertEqual(cpu.r[CPU.BX] & mask(bits), result, f"{bits} {v:X}")
+                self.assertEqual(cpu_flags(cpu), {"C": v != 0, "O": v == 1 << (bits - 1), **szp(result, bits)})
+
+    def test_test_sets_the_flags_and_stores_nothing(self):
+        for bits in (8, 16):
+            for kind in (0, 1):  # /1 is an alias
+                for v in self.VALUES[bits]:
+                    for imm in self.VALUES[bits]:
+                        cpu, _ = self.execute(kind, bits, v, imm=imm)
+                        label = f"{bits} /{kind} {v:X} {imm:X}"
+                        self.assertEqual(cpu.r[CPU.BX] & mask(bits), v, label)
+                        self.assertEqual(cpu.ip, 2 + bits // 8, label)
+                        self.assertEqual(cpu_flags(cpu), logic_flags(v & imm, bits), label)
+
+    def test_mul_unsigned(self):
+        for bits in (8, 16):
+            for a in self.VALUES[bits]:
+                for b in self.VALUES[bits]:
+                    cpu, _ = self.execute(4, bits, b, ax=0x5500 | a if bits == 8 else a, dx=0x5555)
+                    product = a * b
+                    label = f"{bits} {a:X} * {b:X}"
+                    if bits == 8:
+                        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.DX]), (product, 0x5555), label)  # AX only
+                    else:
+                        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.DX]), (product & 0xFFFF, product >> 16), label)
+                    big = product >> bits != 0
+                    self.assertEqual((cpu.get_flag(flags.CF), cpu.get_flag(flags.OF)), (big, big), label)
+
+    def test_imul_signed(self):
+        for bits in (8, 16):
+            for a in self.VALUES[bits]:
+                for b in self.VALUES[bits]:
+                    cpu, _ = self.execute(5, bits, b, ax=0x5500 | a if bits == 8 else a, dx=0x5555)
+                    product = signed(a, bits) * signed(b, bits)
+                    wide = product & mask(2 * bits)
+                    label = f"{bits} {a:X} * {b:X}"
+                    if bits == 8:
+                        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.DX]), (wide, 0x5555), label)
+                    else:
+                        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.DX]), (wide & 0xFFFF, wide >> 16), label)
+                    big = not -(1 << (bits - 1)) <= product < 1 << (bits - 1)
+                    self.assertEqual((cpu.get_flag(flags.CF), cpu.get_flag(flags.OF)), (big, big), label)
+
+    def divide_cases(self, bits):
+        """(dividend as (dx, ax), divisor): a spread that includes every edge of the signed and unsigned ranges."""
+        if bits == 8:
+            dividends = [(0, ax) for ax in (0x0000, 0x0001, 0x00FF, 0x0100, 0x7FFF, 0x8000, 0xFF80, 0xFFFF, 0x1234)]
+        else:
+            highs = (0, 1, 0x7FFF, 0x8000, 0xFFFF)
+            dividends = [(dx, ax) for dx in highs for ax in (0, 1, 0x7FFF, 0x8000, 0xFFFF, 0x1234)]
+        return [(d, v) for d in dividends for v in self.VALUES[bits]]
+
+    def check_division(self, kind, bits):
+        for (dx, ax), divisor in self.divide_cases(bits):
+            wide = (dx << 16 | ax) if bits == 16 else ax
+            label = f"{bits} /{kind} {wide:X} / {divisor:X}"
+            if kind == 7:
+                wide, divisor_value = signed(wide, 2 * bits), signed(divisor, bits)
+            else:
+                divisor_value = divisor
+            # float division, so that the reference shares no code with the CPU's integer arithmetic
+            quotient = int(wide / divisor_value) if divisor_value else None
+            fits = quotient is not None and (-(1 << (bits - 1)) <= quotient < 1 << (bits - 1) if kind == 7
+                                             else 0 <= quotient < 1 << bits)
+            if not fits:
+                with self.assertRaises(DivideError, msg=label):
+                    self.execute(kind, bits, divisor, ax=ax, dx=dx)
+                continue
+            cpu, _ = self.execute(kind, bits, divisor, ax=ax, dx=dx)
+            remainder = wide - quotient * divisor_value
+            if bits == 8:
+                # AH holds the remainder, AL the quotient
+                self.assertEqual(cpu.r[CPU.AX], (remainder & 0xFF) << 8 | quotient & 0xFF, label)
+                self.assertEqual(cpu.r[CPU.DX], dx, label)
+            else:
+                self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.DX]), (quotient & 0xFFFF, remainder & 0xFFFF), label)
+
+    def test_div_unsigned(self):
+        for bits in (8, 16):
+            self.check_division(6, bits)
+
+    def test_idiv_signed(self):
+        for bits in (8, 16):
+            self.check_division(7, bits)
+
+    def test_a_failed_division_changes_nothing(self):
+        for kind in (6, 7):
+            cpu = machine(bytes([0xF7, 0xC0 | kind << 3 | 3]), False)
+            cpu.r[CPU.BX], cpu.r[CPU.AX], cpu.r[CPU.DX] = 0, 0x1234, 0x0005  # divide by zero
+            registers, flag_bits = list(cpu.r), cpu.flags
+            with self.assertRaises(DivideError):
+                cpu.step()
+            self.assertEqual((cpu.r, cpu.flags), (registers, flag_bits))
+
+    def test_memory_operand_and_prefix(self):
+        cpu = machine(bytes([0xF7, 0x27]), False)  # mul word [bx]
+        cpu.r[CPU.AX] = 300
+        cpu.ww(0x2000, MEM_ADDR, 1000)
+        cpu.step()
+        self.assertEqual((cpu.r[CPU.DX] << 16) | cpu.r[CPU.AX], 300000)
+        cpu = machine(bytes([0x2E, 0xF6, 0x37]), False)  # div byte cs:[bx]
+        cpu.r[CPU.AX] = 100
+        cpu.mem[0x10000 + MEM_ADDR] = 7  # in CS, not in DS
+        cpu.mem[0x20000 + MEM_ADDR] = 1
+        cpu.step()
+        self.assertEqual(cpu.r[CPU.AX], (100 % 7) << 8 | 100 // 7)
+
+    def test_the_index_times_record_size_from_esetup(self):
+        """mov ax, cx / mov dx, 14h / imul dx: item number 5 times 20 bytes per item."""
+        cpu = machine(bytes([0xF7, 0xEA]), False)
+        cpu.r[CPU.AX], cpu.r[CPU.DX] = 5, 0x14
+        cpu.step()
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.DX]), (100, 0))
 
 
 if __name__ == "__main__":

@@ -197,11 +197,13 @@ def _decode_opcode(r, op, seg_override):
         if reg in (3, 5) and is_mem:  # a far pointer needs memory
             return f"{'call' if reg == 3 else 'jmp'} far {rm}"
         return None
-    if op == Op.GROUP3_RM16:
-        reg, rm, is_mem = _modrm(r, seg_override, 16)
-        if reg != 3:
-            return None  # the CPU only knows NEG here
-        return f"neg {'word ' if is_mem else ''}{rm}"
+    if op in (Op.GROUP3_RM, Op.GROUP3_RM + 1):
+        bits = 16 if op & 1 else 8
+        reg, rm, is_mem = _modrm(r, seg_override, bits)
+        size = ("word " if bits == 16 else "byte ") if is_mem else ""
+        if reg in (0, 1):  # TEST has a constant after the ModRM bytes
+            return f"test {size}{rm}, {r.u16():04X}" if bits == 16 else f"test {size}{rm}, {r.u8():02X}"
+        return f"{['', '', 'not', 'neg', 'mul', 'imul', 'div', 'idiv'][reg]} {size}{rm}"
     if Op.SHIFT_RM <= op < Op.SHIFT_RM + 4:
         bits = 16 if op & 1 else 8
         reg, rm, is_mem = _modrm(r, seg_override, bits)
