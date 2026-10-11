@@ -227,9 +227,9 @@ def _decode_opcode(r, op, seg_override):
     if op in LOOPS:
         d = r.s8()
         return f"{LOOPS[op]} {(r.pos + d) & 0xFFFF:04X}"
-    if op == Op.CALL_NEAR:
+    if op in (Op.CALL_NEAR, Op.JMP_NEAR):
         d = r.u16()
-        return f"call {(r.pos + d) & 0xFFFF:04X}"  # + wraps like the CPU's signed displacement
+        return f"{'call' if op == Op.CALL_NEAR else 'jmp'} {(r.pos + d) & 0xFFFF:04X}"  # wraps like the CPU
     if op == Op.JMP_SHORT:
         d = r.s8()
         return f"jmp {(r.pos + d) & 0xFFFF:04X}"

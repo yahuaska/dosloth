@@ -68,6 +68,7 @@ class Op(IntEnum):
     LOOP = 0xE2          # followed by a signed 8-bit displacement
     JCXZ = 0xE3          # followed by a signed 8-bit displacement
     CALL_NEAR = 0xE8     # followed by a signed 16-bit displacement; pushes the return IP
+    JMP_NEAR = 0xE9      # followed by a signed 16-bit displacement
     JMP_SHORT = 0xEB     # followed by a signed 8-bit displacement
     REPNE_PREFIX = 0xF2  # modifies the next string instruction: repeat while CX != 0 and ZF == 0
     REP_PREFIX = 0xF3    # ... repeat CX times (REP); with CMPS/SCAS: also while ZF == 1 (REPE)

@@ -799,7 +799,8 @@ class TestInstructionsThatLeaveTheFlagsAlone(unittest.TestCase):
         "nop": [0x90], "cbw": [0x98], "cwd": [0x99],
         "push r16": [0x53], "pop r16": [0x5B], "push es": [0x06], "pop es": [0x07],
         "push r/m16": [0xFF, 0x37], "not r/m8": [0xF6, 0xD3], "not r/m16": [0xF7, 0xD3],
-        "jmp short": [0xEB, 0x05], "call near": [0xE8, 0x05, 0x00], "call r/m16": [0xFF, 0xD3],
+        "jmp short": [0xEB, 0x05], "jmp near": [0xE9, 0x05, 0x00],
+        "call near": [0xE8, 0x05, 0x00], "call r/m16": [0xFF, 0xD3],
         "jmp r/m16": [0xFF, 0xE3], "ret": [0xC3], "retf": [0xCB],
         "ret n": [0xC2, 0x02, 0x00], "retf n": [0xCA, 0x02, 0x00],
         "les": [0xC4, 0x1F], "lds": [0xC5, 0x1F],
@@ -946,6 +947,58 @@ class TestLoadFarPointer(unittest.TestCase):
             cpu = machine(bytes([op, 0xC3]), False)
             with self.assertRaises(NotImplementedError):
                 cpu.step()
+
+
+class TestNearJumpsAndCalls(unittest.TestCase):
+    """E9 JMP rel16 and E8 CALL rel16, which share the way they work out the target."""
+
+    def jump_target(self, code, at=0x0100):
+        cpu = machine(bytes(code), False)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0200
+        cpu.ip = at
+        cpu.mem[0x10000 + at:0x10000 + at + len(code)] = bytes(code)
+        cpu.step()
+        return cpu
+
+    def test_jmp_rel16_is_counted_from_the_next_instruction(self):
+        for displacement in (0, 1, 0x7FFF, 0x8000, 0xFFFF, 0xFF3F, 0x1234):
+            for at in (0x0100, 0x4196, 0x0000, 0xFFF0):
+                cpu = self.jump_target([0xE9, displacement & 0xFF, displacement >> 8], at)
+                signed_d = displacement - 0x10000 if displacement & 0x8000 else displacement
+                self.assertEqual(cpu.ip, (at + 3 + signed_d) & 0xFFFF, f"at {at:04X} by {displacement:04X}")
+                self.assertEqual((cpu.r[CPU.SP], cpu.s[CPU.CS]), (0x0200, 0x1000))  # no push, no change of CS
+
+    def test_the_jump_from_esetup(self):
+        """4196: E9 3F FF is jmp 40D8; the same address the earlier checks jump to."""
+        cpu = self.jump_target([0xE9, 0x3F, 0xFF], at=0x4196)
+        self.assertEqual(cpu.ip, 0x40D8)
+
+    def test_a_distance_of_minus_three_jumps_to_itself(self):
+        cpu = self.jump_target([0xE9, 0xFD, 0xFF], at=0x0100)
+        self.assertEqual(cpu.ip, 0x0100)
+
+    def test_it_wraps_round_the_segment(self):
+        cpu = self.jump_target([0xE9, 0x00, 0x10], at=0xF800)  # forward 0x1000 from the end
+        self.assertEqual(cpu.ip, 0x0803)
+        cpu = self.jump_target([0xE9, 0xFB, 0xFF], at=0x0001)  # back 5 from the start
+        self.assertEqual(cpu.ip, 0xFFFF)
+
+    def test_call_pushes_the_address_after_the_instruction(self):
+        for displacement in (0x0155, 0xFFFB, 0x0000):
+            cpu = self.jump_target([0xE8, displacement & 0xFF, displacement >> 8], at=0x0100)
+            signed_d = displacement - 0x10000 if displacement & 0x8000 else displacement
+            self.assertEqual(cpu.ip, (0x0103 + signed_d) & 0xFFFF, f"{displacement:04X}")
+            self.assertEqual((cpu.r[CPU.SP], cpu.rw(0x4000, cpu.r[CPU.SP])), (0x01FE, 0x0103))
+
+    def test_the_long_conditional_jump_idiom(self):
+        """or ax, dx ; jne skip ; jmp far_away ; skip: ...  jumps away only when DX:AX is zero."""
+        for ax, dx, jumps in ((0, 0, True), (1, 0, False), (0, 1, False), (0x8000, 0x8000, False)):
+            code = [0x0B, 0xC2, 0x75, 0x03, 0xE9, 0x00, 0x10, 0x90]  # or ax,dx ; jne +3 ; jmp +0x1000 ; nop
+            cpu = machine(bytes(code), False)
+            cpu.r[CPU.AX], cpu.r[CPU.DX] = ax, dx
+            for _ in range(3 if jumps else 2):
+                cpu.step()
+            self.assertEqual(cpu.ip, 0x1007 if jumps else 7, f"AX={ax:X} DX={dx:X}")
 
 
 if __name__ == "__main__":

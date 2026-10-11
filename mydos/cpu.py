@@ -90,6 +90,7 @@ class CPU:
             Op.LDS: self.load_far_pointer,
             Op.RETF_POP: self.retf_pop,
             Op.RETF: self.retf,
+            Op.JMP_NEAR: self.jmp_near,
             Op.JMP_SHORT: self.jmp_short,
             Op.INT: self.int_,
             Op.HLT: self.hlt,
@@ -243,6 +244,17 @@ class CPU:
         """
         d = self.fetch8()
         return (self.ip + d - (256 if d & 0x80 else 0)) & 0xFFFF
+
+    def fetch_rel16(self):
+        """Read the two-byte jump distance after an opcode and return the address it points to.
+
+        The word is a signed number counted from the end of the instruction, like the byte in
+        fetch_rel8. Unlike the byte, it needs no sign handling: the address wraps round inside the
+        64 KB segment anyway, and adding FFFEh there is the same as subtracting 2. IP is left pointing
+        at the next instruction, which is what a call has to push as its return address.
+        """
+        d = self.fetch16()  # first: reading it moves IP to the end of the instruction
+        return (self.ip + d) & 0xFFFF
 
     def add_with_flags(self, a, b, bits, carry=0):
         """Compute a + b (+ carry) like the CPU's ADD and ADC do: set the flags and return the result.
@@ -879,10 +891,9 @@ class CPU:
         then execution jumps to that address plus the displacement. The displacement is signed, so a
         call can go backwards too.
         """
-        d = self.fetch16()  # fetching first leaves IP pointing at the next instruction
+        target = self.fetch_rel16()  # IP now points at the next instruction: the return address
         self.push16(self.ip)
-        # the displacement is signed and counted from the next instruction
-        self.ip = (self.ip + d - (0x10000 if d & 0x8000 else 0)) & 0xFFFF
+        self.ip = target
 
     def ret_near(self, op):
         """Return from a procedure: pop the saved address off the stack into IP (opcode C3)."""
@@ -946,6 +957,16 @@ class CPU:
         target = self.fetch_rel8()
         if self.condition(op & 0xF):
             self.ip = target
+
+    def jmp_near(self, op):
+        """Jump anywhere in the code segment (opcode E9 + a signed 16-bit distance).
+
+        The long form of the short jump EB: the distance is counted from the next instruction, and
+        wraps round inside the segment. Compilers also use it to make a conditional jump reach far:
+        the short conditional jump skips over a JMP that goes the long way when the condition is
+        the opposite.
+        """
+        self.ip = self.fetch_rel16()
 
     def jmp_short(self, op):
         """Jump a short distance (opcode EB + one signed byte).
