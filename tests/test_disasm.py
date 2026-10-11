@@ -71,6 +71,9 @@ class TestText(unittest.TestCase):
             (b"\x87\x4F\x02", "xchg cx, [bx+2]"),
             (b"\x99", "cwd"),
             (b"\xC3", "ret"),
+            (b"\xCB", "retf"),   # from esetup.exe
+            (b"\xC2\x06\x00", "ret 0006"),
+            (b"\xCA\x04\x00", "retf 0004"),
             (b"\xF7\xD9", "neg cx"),
             (b"\xF7\xEA", "imul dx"),   # from esetup.exe
             (b"\xF7\xE3", "mul bx"),

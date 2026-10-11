@@ -1,7 +1,7 @@
 import unittest
 
 from mydos import flags
-from mydos.cpu import CPU, DivideError
+from mydos.cpu import CPU, DivideError, Exit
 
 
 class TestSegmentOverrideMov(unittest.TestCase):
@@ -800,7 +800,8 @@ class TestInstructionsThatLeaveTheFlagsAlone(unittest.TestCase):
         "push r16": [0x53], "pop r16": [0x5B], "push es": [0x06], "pop es": [0x07],
         "push r/m16": [0xFF, 0x37], "not r/m8": [0xF6, 0xD3], "not r/m16": [0xF7, 0xD3],
         "jmp short": [0xEB, 0x05], "call near": [0xE8, 0x05, 0x00], "call r/m16": [0xFF, 0xD3],
-        "jmp r/m16": [0xFF, 0xE3], "ret": [0xC3],
+        "jmp r/m16": [0xFF, 0xE3], "ret": [0xC3], "retf": [0xCB],
+        "ret n": [0xC2, 0x02, 0x00], "retf n": [0xCA, 0x02, 0x00],
         "movsb": [0xA4], "movsw": [0xA5], "stosb": [0xAA], "stosw": [0xAB], "lodsb": [0xAC], "lodsw": [0xAD],
         "rep stosb": [0xF3, 0xAA], "rep movsw": [0xF3, 0xA5],
     }
@@ -814,6 +815,75 @@ class TestInstructionsThatLeaveTheFlagsAlone(unittest.TestCase):
                 cpu.flags = pattern
                 cpu.step()
                 self.assertEqual(cpu.flags, pattern, f"{name} with flags {pattern:04X}")
+
+
+class TestReturns(unittest.TestCase):
+    """C3 RET, C2 RET n, CB RETF, CA RETF n."""
+
+    def machine_with_stack(self, code, *words):
+        """CS=1000, IP=0 on `code`; the stack at 4000:0200 holds `words` (the first is on top)."""
+        cpu = machine(bytes(code), False)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0200
+        for i, word in enumerate(words):
+            cpu.ww(0x4000, 0x0200 + 2 * i, word)
+        return cpu
+
+    def run_until_halt(self, cpu, limit=50):
+        """Step until the program stops, but never for ever: a wrong return must fail the test, not hang it."""
+        for _ in range(limit):
+            try:
+                cpu.step()
+            except Exit:
+                return
+        self.fail(f"the program did not stop within {limit} instructions")
+
+    def test_retf_pops_ip_then_cs(self):
+        cpu = self.machine_with_stack([0xCB], 0x0123, 0x5678, 0x9999)
+        start_flags = cpu.flags
+        cpu.step()
+        self.assertEqual((cpu.ip, cpu.s[CPU.CS], cpu.r[CPU.SP], cpu.flags), (0x0123, 0x5678, 0x0204, start_flags))
+
+    def test_ret_n_drops_the_arguments_too(self):
+        cpu = self.machine_with_stack([0xC2, 0x04, 0x00], 0x0123)
+        cpu.step()
+        self.assertEqual((cpu.ip, cpu.s[CPU.CS], cpu.r[CPU.SP]), (0x0123, 0x1000, 0x0200 + 2 + 4))
+
+    def test_retf_n_drops_the_arguments_too(self):
+        cpu = self.machine_with_stack([0xCA, 0x06, 0x00], 0x0123, 0x5678)
+        cpu.step()
+        self.assertEqual((cpu.ip, cpu.s[CPU.CS], cpu.r[CPU.SP]), (0x0123, 0x5678, 0x0200 + 4 + 6))
+
+    def test_the_count_is_read_before_the_return_address_is_used(self):
+        """The returning code must not read its own operand from the place it returns to."""
+        for code, words in (([0xC2, 0x04, 0x00], (0x0500,)), ([0xCA, 0x04, 0x00], (0x0500, 0x2000))):
+            cpu = self.machine_with_stack(code, *words)
+            cpu.mem[0x10500:0x10502] = b"\xFF\xFF"  # what a wrong order would read as the count
+            cpu.mem[0x20500:0x20502] = b"\xFF\xFF"
+            cpu.step()
+            self.assertEqual(cpu.r[CPU.SP], 0x0200 + 2 * len(words) + 4, code)
+
+    def test_push_cs_and_call_then_retf_comes_back(self):
+        """As in esetup.exe: push cs ; call f ; ... f: retf  (a far call done by hand)."""
+        code = [0x0E, 0xE8, 0x0E, 0x00, 0xF4] + [0x90] * 13 + [0xCB]  # f is at offset 0x12
+        cpu = self.machine_with_stack(code)
+        self.run_until_halt(cpu)  # it returned to the HLT at offset 4 and stopped there
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.r[CPU.SP]), (0x1000, 5, 0x0200))
+
+    def test_far_call_through_memory_and_back(self):
+        cpu = self.machine_with_stack([0xFF, 0x1F])  # call far [bx]
+        cpu.ww(0x2000, MEM_ADDR, 0x0010)
+        cpu.ww(0x2000, MEM_ADDR + 2, 0x5000)
+        cpu.mem[0x50010] = 0xCB  # retf
+        cpu.step()
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.r[CPU.SP]), (0x1000, 2, 0x0200))
+
+    def test_a_procedure_that_cleans_its_own_arguments(self):
+        """push 2 words ; call f ; ... f: ret 4"""
+        code = [0x50, 0x53, 0xE8, 0x01, 0x00, 0xF4, 0xC2, 0x04, 0x00]  # push ax ; push bx ; call 0x6 ; hlt ; ret 4
+        cpu = self.machine_with_stack(code)
+        self.run_until_halt(cpu)
+        self.assertEqual(cpu.r[CPU.SP], 0x0200)  # arguments gone, nothing left on the stack
 
 
 if __name__ == "__main__":

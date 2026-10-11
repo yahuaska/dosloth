@@ -84,7 +84,10 @@ class CPU:
             Op.GROUP4_RM8: self.group4_rm8,
             Op.GROUP5_RM16: self.group5_rm16,
             Op.CALL_NEAR: self.call_near,
+            Op.RET_NEAR_POP: self.ret_near_pop,
             Op.RET_NEAR: self.ret_near,
+            Op.RETF_POP: self.retf_pop,
+            Op.RETF: self.retf,
             Op.JMP_SHORT: self.jmp_short,
             Op.INT: self.int_,
             Op.HLT: self.hlt,
@@ -882,6 +885,33 @@ class CPU:
     def ret_near(self, op):
         """Return from a procedure: pop the saved address off the stack into IP (opcode C3)."""
         self.ip = self.pop16()
+
+    def ret_near_pop(self, op):
+        """Return from a procedure and also throw away its arguments (opcode C2 + imm16).
+
+        The number after the opcode is how many bytes of arguments the caller pushed; the procedure
+        removes them itself, as Pascal and `__stdcall` procedures do. `ret 4` after two words of
+        arguments leaves the stack as it was before the caller pushed them.
+        """
+        count = self.fetch16()  # read before IP changes: the number is in the code that is being left
+        self.ip = self.pop16()
+        self.r[self.SP] = (self.r[self.SP] + count) & 0xFFFF
+
+    def retf(self, op):
+        """Return from a far procedure: pop IP and then CS (opcode CB).
+
+        The mirror image of a far call, which pushes CS and then IP. A near CALL preceded by `push cs`
+        looks the same on the stack, so a procedure called that way also ends with RETF.
+        """
+        self.ip = self.pop16()
+        self.s[self.CS] = self.pop16()
+
+    def retf_pop(self, op):
+        """Return from a far procedure and also throw away its arguments (opcode CA + imm16)."""
+        count = self.fetch16()  # read before IP and CS change
+        self.ip = self.pop16()
+        self.s[self.CS] = self.pop16()
+        self.r[self.SP] = (self.r[self.SP] + count) & 0xFFFF
 
     def jcc(self, op):
         """Jump a short distance only if a condition on the flags holds (opcodes 70-7F + one signed byte).

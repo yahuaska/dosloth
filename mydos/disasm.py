@@ -18,7 +18,7 @@ SEG_PREFIXES = {Op.ES_PREFIX: "es", Op.CS_PREFIX: "cs", Op.SS_PREFIX: "ss", Op.D
 JCC = ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"]
 # instructions that are a single byte with no operands
 PLAIN = {
-    Op.NOP: "nop", Op.CBW: "cbw", Op.CWD: "cwd", Op.RET_NEAR: "ret", Op.HLT: "hlt",
+    Op.NOP: "nop", Op.CBW: "cbw", Op.CWD: "cwd", Op.RET_NEAR: "ret", Op.RETF: "retf", Op.HLT: "hlt",
     Op.CLC: "clc", Op.STC: "stc", Op.CLI: "cli",
     Op.STI: "sti", Op.CLD: "cld", Op.STD: "std", Op.SCASB: "scasb", Op.SCASW: "scasw",
     Op.MOVSB: "movsb", Op.MOVSW: "movsw", Op.CMPSB: "cmpsb", Op.CMPSW: "cmpsw",
@@ -215,6 +215,8 @@ def _decode_opcode(r, op, seg_override):
         reg, rm, is_mem = _modrm(r, seg_override, bits)
         size = ("word " if bits == 16 else "byte ") if is_mem else ""
         return f"{SHIFTS[reg]} {size}{rm}, {'cl' if op & 2 else '1'}"
+    if op in (Op.RET_NEAR_POP, Op.RETF_POP):
+        return f"{'ret' if op == Op.RET_NEAR_POP else 'retf'} {r.u16():04X}"
     if op == Op.INT:
         return f"int {r.u8():02X}"
     if op in LOOPS:

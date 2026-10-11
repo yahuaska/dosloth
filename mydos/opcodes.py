@@ -54,7 +54,10 @@ class Op(IntEnum):
     SCASW = 0xAF
     MOV_R8_IMM8 = 0xB0   # B0..B7: AL CL DL BL AH CH DH BH <- imm8
     MOV_R16_IMM16 = 0xB8  # B8..BF: AX CX DX BX SP BP SI DI <- imm16
+    RET_NEAR_POP = 0xC2  # followed by imm16: pops IP, then drops that many bytes of arguments from the stack
     RET_NEAR = 0xC3      # pops IP from the stack
+    RETF_POP = 0xCA      # followed by imm16: pops IP and CS, then drops that many bytes of arguments
+    RETF = 0xCB          # pops IP, then CS
     MOV_RM_IMM = 0xC6    # C6 (byte) and C7 (word) + ModRM (reg field 0) + the constant: r/m <- imm
     INT = 0xCD           # followed by the interrupt number
     SHIFT_RM = 0xD0      # D0..D3 + ModRM: shift or rotate r/m by 1 or by CL, the 'reg' field picks how (CPU.shift_rm)
