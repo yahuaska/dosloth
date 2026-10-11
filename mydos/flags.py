@@ -9,3 +9,7 @@ TF = 0x0100  # trap (single-step)
 IF = 0x0200  # interrupt enable
 DF = 0x0400  # direction for string instructions: 1 = go downwards
 OF = 0x0800  # overflow: signed overflow
+
+ALWAYS_ONE = 0x0002  # bit 1 of the flags word always reads as 1
+DEFINED = CF | PF | AF | ZF | SF | TF | IF | DF | OF  # the nine flags that exist; the other bits mean nothing
+LOW = CF | PF | AF | ZF | SF  # the five flags that LAHF and SAHF carry to and from AH

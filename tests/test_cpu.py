@@ -796,7 +796,7 @@ class TestInstructionsThatLeaveTheFlagsAlone(unittest.TestCase):
         "mov r8,imm8": [0xB3, 0x05], "mov r16,imm16": [0xBB, 0x05, 0x00],
         "mov r/m8,imm8": [0xC6, 0x07, 0x05], "mov r/m16,imm16": [0xC7, 0x07, 0x05, 0x00],
         "xchg ax,r16": [0x93], "xchg r/m8,r8": [0x86, 0x07], "xchg r/m16,r16": [0x87, 0x07],
-        "nop": [0x90], "cbw": [0x98], "cwd": [0x99],
+        "nop": [0x90], "cbw": [0x98], "cwd": [0x99], "pushf": [0x9C], "lahf": [0x9F],
         "push r16": [0x53], "pop r16": [0x5B], "push es": [0x06], "pop es": [0x07],
         "push r/m16": [0xFF, 0x37], "not r/m8": [0xF6, 0xD3], "not r/m16": [0xF7, 0xD3],
         "jmp short": [0xEB, 0x05], "jmp near": [0xE9, 0x05, 0x00],
@@ -999,6 +999,83 @@ class TestNearJumpsAndCalls(unittest.TestCase):
             for _ in range(3 if jumps else 2):
                 cpu.step()
             self.assertEqual(cpu.ip, 0x1007 if jumps else 7, f"AX={ax:X} DX={dx:X}")
+
+
+class TestFlagsRegisterInstructions(unittest.TestCase):
+    """9C PUSHF, 9D POPF, 9E SAHF, 9F LAHF."""
+
+    PATTERNS = [0x0002, 0x0FD7, 0x0002 | flags.CF, 0x0002 | flags.ZF | flags.SF, 0x0002 | flags.IF | flags.DF,
+                0x0002 | flags.OF | flags.AF | flags.PF, 0x0002 | flags.TF]
+
+    def machine_with_stack(self, code):
+        cpu = machine(bytes(code), False)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0200
+        return cpu
+
+    def test_pushf_puts_the_flags_on_the_stack_and_changes_none(self):
+        for pattern in self.PATTERNS:
+            cpu = self.machine_with_stack([0x9C])
+            cpu.flags = pattern
+            cpu.step()
+            self.assertEqual((cpu.rw(0x4000, 0x01FE), cpu.r[CPU.SP], cpu.flags), (pattern, 0x01FE, pattern))
+
+    def test_popf_takes_only_the_flags_that_exist(self):
+        for word in (0x0000, 0xFFFF, 0x0FD7, 0xF000, 0x0001, 0x0200, 0x1234, 0xAAAA):
+            cpu = self.machine_with_stack([0x9D])
+            cpu.ww(0x4000, 0x0200, word)
+            cpu.step()
+            self.assertEqual(cpu.flags, (word & 0x0FD5) | 0x0002, f"{word:04X}")  # nine flags, bit 1 always set
+            self.assertEqual(cpu.r[CPU.SP], 0x0202)
+
+    def test_pushf_cli_popf_puts_the_interrupt_flag_back(self):
+        """As in esetup.exe: save the flags, switch interrupts off, restore."""
+        for start_if in (True, False):
+            cpu = self.machine_with_stack([0x9C, 0xFA, 0x9D])  # pushf ; cli ; popf
+            cpu.set_flag(flags.IF, start_if)
+            cpu.step()
+            cpu.step()
+            self.assertFalse(cpu.get_flag(flags.IF))
+            cpu.step()
+            self.assertEqual((cpu.get_flag(flags.IF), cpu.r[CPU.SP]), (start_if, 0x0200))
+
+    def test_pushf_stc_popf_forgets_the_carry(self):
+        cpu = self.machine_with_stack([0x9C, 0xF9, 0x9D])  # pushf ; stc ; popf
+        for _ in range(3):
+            cpu.step()
+        self.assertFalse(cpu.get_flag(flags.CF))
+
+    def test_lahf_copies_the_five_low_flags_into_ah(self):
+        for pattern in self.PATTERNS:
+            cpu = machine(bytes([0x9F]), False)
+            cpu.flags = pattern
+            cpu.r[CPU.AX] = 0x1234
+            cpu.step()
+            low = pattern & (flags.SF | flags.ZF | flags.AF | flags.PF | flags.CF)
+            self.assertEqual(cpu.r[CPU.AX], (low | 0x02) << 8 | 0x34, f"{pattern:04X}")  # AL is not touched
+            self.assertEqual(cpu.flags, pattern)
+
+    def test_sahf_sets_only_the_five_low_flags(self):
+        high = flags.OF | flags.DF | flags.IF | flags.TF
+        for ah in range(256):
+            for start in (0x0002, 0x0002 | high, 0x0FD7):
+                cpu = machine(bytes([0x9E]), False)
+                cpu.flags = start
+                cpu.r[CPU.AX] = ah << 8 | 0x77
+                cpu.step()
+                low = flags.SF | flags.ZF | flags.AF | flags.PF | flags.CF
+                self.assertEqual(cpu.flags, (start & ~low) | (ah & low), f"AH={ah:02X} start={start:04X}")
+                self.assertEqual(cpu.r[CPU.AX], ah << 8 | 0x77)  # AX is left alone
+
+    def test_lahf_then_sahf_round_trip(self):
+        """Save the low flags in AH, spoil them, and get them back; the high flags are not part of it."""
+        low = flags.SF | flags.ZF | flags.AF | flags.PF | flags.CF
+        for pattern in self.PATTERNS:
+            cpu = machine(bytes([0x9F, 0x9E]), False)  # lahf ; sahf
+            cpu.flags = pattern
+            cpu.step()
+            cpu.flags = (pattern & ~low) | (~pattern & low)  # every low flag turned over
+            cpu.step()
+            self.assertEqual(cpu.flags, pattern, f"{pattern:04X}")
 
 
 if __name__ == "__main__":

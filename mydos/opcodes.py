@@ -38,6 +38,10 @@ class Op(IntEnum):
     XCHG_AX_R16 = 0x90   # 91..97: swap AX with CX DX BX SP BP SI DI (90 itself is NOP)
     CBW = 0x98           # AL -> AX, the sign copied into AH
     CWD = 0x99           # AX -> DX:AX, the sign copied into DX
+    PUSHF = 0x9C         # flags -> stack
+    POPF = 0x9D          # stack -> flags
+    SAHF = 0x9E          # AH -> SF ZF AF PF CF
+    LAHF = 0x9F          # SF ZF AF PF CF -> AH
     MOV_AL_MOFFS8 = 0xA0    # followed by a 16-bit offset: AL <- byte at [offset]
     MOV_AX_MOFFS16 = 0xA1   # followed by a 16-bit offset: AX <- word at [offset]
     MOV_MOFFS8_AL = 0xA2    # followed by a 16-bit offset: byte at [offset] <- AL

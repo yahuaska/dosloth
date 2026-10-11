@@ -54,6 +54,10 @@ class CPU:
             Op.NOP: self.nop,
             Op.CBW: self.cbw,
             Op.CWD: self.cwd,
+            Op.PUSHF: self.pushf,
+            Op.POPF: self.popf,
+            Op.SAHF: self.sahf,
+            Op.LAHF: self.lahf,
             Op.MOV_RM16_SREG: self.mov_rm16_sreg,
             Op.MOV_SREG_RM16: self.mov_sreg_rm16,
             Op.MOV_AL_MOFFS8: self.mov_al_moffs8,
@@ -479,6 +483,35 @@ class CPU:
         """Subtract 1 from a 16-bit register (opcodes 48-4F). Like INC, it leaves CF alone."""
         reg = op - Op.DEC_R16
         self.r[reg] = self.inc_dec(self.r[reg], 16, decrement=True)
+
+    def pushf(self, op):
+        """Put the flags register on the stack (opcode 9C).
+
+        The only way to save every flag at once. Code saves them before doing something that spoils
+        them, or that must run with interrupts off (`pushf`, `cli`, ... `popf` puts IF back as it was).
+        Flags are not changed.
+        """
+        self.push16(self.flags)
+
+    def popf(self, op):
+        """Take a word off the stack into the flags register (opcode 9D).
+
+        Only the nine flags that exist are taken from the word, and bit 1 stays 1: the other bits of
+        the word mean nothing and are dropped. TF and IF are stored, but do nothing here yet, as we
+        have no single-stepping and no hardware interrupts.
+        """
+        self.flags = (self.pop16() & flags.DEFINED) | flags.ALWAYS_ONE
+
+    def lahf(self, op):
+        """Copy the five low flags into AH (opcode 9F): SF, ZF, AF, PF and CF, with bit 1 set.
+
+        OF, DF, IF and TF cannot be reached this way; use PUSHF for those. Flags are not changed.
+        """
+        self.set8(4, (self.flags & flags.LOW) | flags.ALWAYS_ONE)  # 8-bit register 4 is AH
+
+    def sahf(self, op):
+        """Set the five low flags from AH (opcode 9E): SF, ZF, AF, PF and CF. The other flags stay as they were."""
+        self.flags = (self.flags & ~flags.LOW) | (self.get8(4) & flags.LOW)
 
     def push_r16(self, op):
         """Push a 16-bit register onto the stack (opcodes 50-57).
