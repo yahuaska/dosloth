@@ -215,6 +215,11 @@ def _decode_opcode(r, op, seg_override):
         reg, rm, is_mem = _modrm(r, seg_override, bits)
         size = ("word " if bits == 16 else "byte ") if is_mem else ""
         return f"{SHIFTS[reg]} {size}{rm}, {'cl' if op & 2 else '1'}"
+    if op in (Op.LES, Op.LDS):
+        reg, rm, is_mem = _modrm(r, seg_override, 16)
+        if not is_mem:  # the CPU wants a pointer in memory
+            return None
+        return f"{'les' if op == Op.LES else 'lds'} {REG16[reg]}, {rm}"
     if op in (Op.RET_NEAR_POP, Op.RETF_POP):
         return f"{'ret' if op == Op.RET_NEAR_POP else 'retf'} {r.u16():04X}"
     if op == Op.INT:

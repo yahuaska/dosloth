@@ -86,6 +86,8 @@ class CPU:
             Op.CALL_NEAR: self.call_near,
             Op.RET_NEAR_POP: self.ret_near_pop,
             Op.RET_NEAR: self.ret_near,
+            Op.LES: self.load_far_pointer,
+            Op.LDS: self.load_far_pointer,
             Op.RETF_POP: self.retf_pop,
             Op.RETF: self.retf,
             Op.JMP_SHORT: self.jmp_short,
@@ -896,6 +898,22 @@ class CPU:
         count = self.fetch16()  # read before IP changes: the number is in the code that is being left
         self.ip = self.pop16()
         self.r[self.SP] = (self.r[self.SP] + count) & 0xFFFF
+
+    def load_far_pointer(self, op):
+        """Load a register and a segment register from a far pointer in memory (LES is C4, LDS is C5).
+
+        A far pointer is two words in memory, the offset first and then the segment. The register named
+        by the ModRM byte receives the offset, and ES (for LES) or DS (for LDS) the segment, so that
+        ES:BX, say, points at whatever the pointer pointed at. One instruction does what two MOVs would.
+        Both words are read before anything is written, so `lds bx, [bx]` works. The operand has to be
+        memory: no register holds four bytes. Flags are not changed.
+        """
+        m = modrm.decode(self, self.seg_override)
+        if m.is_reg:
+            raise NotImplementedError(f"opcode {op:02X} with a register at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        offset, segment = m.rw_pair(self)
+        self.r[m.reg] = offset
+        self.s[self.ES if op == Op.LES else self.DS] = segment
 
     def retf(self, op):
         """Return from a far procedure: pop IP and then CS (opcode CB).

@@ -802,6 +802,7 @@ class TestInstructionsThatLeaveTheFlagsAlone(unittest.TestCase):
         "jmp short": [0xEB, 0x05], "call near": [0xE8, 0x05, 0x00], "call r/m16": [0xFF, 0xD3],
         "jmp r/m16": [0xFF, 0xE3], "ret": [0xC3], "retf": [0xCB],
         "ret n": [0xC2, 0x02, 0x00], "retf n": [0xCA, 0x02, 0x00],
+        "les": [0xC4, 0x1F], "lds": [0xC5, 0x1F],
         "movsb": [0xA4], "movsw": [0xA5], "stosb": [0xAA], "stosw": [0xAB], "lodsb": [0xAC], "lodsw": [0xAD],
         "rep stosb": [0xF3, 0xAA], "rep movsw": [0xF3, 0xA5],
     }
@@ -884,6 +885,67 @@ class TestReturns(unittest.TestCase):
         cpu = self.machine_with_stack(code)
         self.run_until_halt(cpu)
         self.assertEqual(cpu.r[CPU.SP], 0x0200)  # arguments gone, nothing left on the stack
+
+
+class TestLoadFarPointer(unittest.TestCase):
+    """C4 LES and C5 LDS."""
+
+    def test_les_and_lds_into_every_register(self):
+        for op, segment_register in ((0xC4, CPU.ES), (0xC5, CPU.DS)):
+            for reg in range(8):
+                label = f"{op:02X} reg {reg}"
+                cpu = machine(bytes([op, reg << 3 | 7]), False)  # [bx]
+                cpu.ww(0x2000, MEM_ADDR, 0x4CB0)      # the offset
+                cpu.ww(0x2000, MEM_ADDR + 2, 0x1E8A)  # the segment
+                before_segments = list(cpu.s)
+                before = list(cpu.r)
+                cpu.step()
+                before[reg] = 0x4CB0
+                self.assertEqual(cpu.r, before, label)
+                expected = list(before_segments)
+                expected[segment_register] = 0x1E8A
+                self.assertEqual(cpu.s, expected, label)
+                self.assertEqual(cpu.ip, 2, label)
+
+    def test_the_address_register_may_be_the_one_that_is_loaded(self):
+        cpu = machine(bytes([0xC5, 0x1F]), False)  # lds bx, [bx]
+        cpu.ww(0x2000, MEM_ADDR, 0x0777)
+        cpu.ww(0x2000, MEM_ADDR + 2, 0x3333)
+        cpu.step()
+        self.assertEqual((cpu.r[CPU.BX], cpu.s[CPU.DS]), (0x0777, 0x3333))
+
+    def test_les_bx_bp_plus_6_reads_the_stack_from_esetup(self):
+        """C4 5E 06: a far pointer argument on the stack, at [bp+6]."""
+        cpu = machine(bytes([0xC4, 0x5E, 0x06]), False)
+        cpu.s[CPU.SS], cpu.r[CPU.BP] = 0x4000, 0x0100
+        cpu.ww(0x4000, 0x0106, 0x4CB0)
+        cpu.ww(0x4000, 0x0108, 0x1E8A)
+        cpu.ww(0x2000, 0x0106, 0x1111)  # DS must not be used for a BP-based address
+        cpu.step()
+        self.assertEqual((cpu.r[CPU.BX], cpu.s[CPU.ES], cpu.ip), (0x4CB0, 0x1E8A, 3))
+
+    def test_a_segment_prefix_picks_the_segment_of_the_pointer(self):
+        cpu = machine(bytes([0x26, 0xC4, 0x1F]), False)  # les bx, es:[bx]
+        cpu.ww(0x3000, MEM_ADDR, 0x0042)
+        cpu.ww(0x3000, MEM_ADDR + 2, 0x6000)
+        cpu.ww(0x2000, MEM_ADDR, 0x1111)
+        cpu.step()
+        self.assertEqual((cpu.r[CPU.BX], cpu.s[CPU.ES]), (0x0042, 0x6000))
+
+    def test_the_segment_word_wraps_round_the_end_of_the_segment(self):
+        cpu = machine(bytes([0xC4, 0x1F]), False)
+        cpu.r[CPU.BX] = 0xFFFE
+        cpu.ww(0x2000, 0xFFFE, 0x0042)  # the offset is at FFFE-FFFF
+        cpu.mem[0x20000] = 0x00
+        cpu.mem[0x20001] = 0x70  # the segment wraps to offset 0000
+        cpu.step()
+        self.assertEqual((cpu.r[CPU.BX], cpu.s[CPU.ES]), (0x0042, 0x7000))
+
+    def test_a_register_operand_stops_loudly(self):
+        for op in (0xC4, 0xC5):
+            cpu = machine(bytes([op, 0xC3]), False)
+            with self.assertRaises(NotImplementedError):
+                cpu.step()
 
 
 if __name__ == "__main__":

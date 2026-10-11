@@ -56,6 +56,8 @@ class Op(IntEnum):
     MOV_R16_IMM16 = 0xB8  # B8..BF: AX CX DX BX SP BP SI DI <- imm16
     RET_NEAR_POP = 0xC2  # followed by imm16: pops IP, then drops that many bytes of arguments from the stack
     RET_NEAR = 0xC3      # pops IP from the stack
+    LES = 0xC4           # + ModRM (memory): load a register and ES from a far pointer
+    LDS = 0xC5           # + ModRM (memory): load a register and DS from a far pointer
     RETF_POP = 0xCA      # followed by imm16: pops IP and CS, then drops that many bytes of arguments
     RETF = 0xCB          # pops IP, then CS
     MOV_RM_IMM = 0xC6    # C6 (byte) and C7 (word) + ModRM (reg field 0) + the constant: r/m <- imm
