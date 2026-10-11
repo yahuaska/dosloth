@@ -656,5 +656,46 @@ class TestGroup3(unittest.TestCase):
         self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.DX]), (100, 0))
 
 
+class TestSignExtension(unittest.TestCase):
+    """98 CBW and 99 CWD."""
+
+    def test_cbw(self):
+        for al in range(256):
+            for ah in (0x00, 0x5A, 0xFF):  # whatever AH held is replaced
+                cpu = machine(bytes([0x98]), False)
+                cpu.r[CPU.AX] = ah << 8 | al
+                cpu.r[CPU.DX] = 0x1357
+                start_flags = cpu.flags
+                cpu.step()
+                # AX must hold the signed value of AL, as a word
+                self.assertEqual(cpu.r[CPU.AX], signed(al, 8) & 0xFFFF, f"AL={al:02X}")
+                self.assertEqual((cpu.r[CPU.DX], cpu.flags, cpu.ip), (0x1357, start_flags, 1))
+
+    def test_cwd(self):
+        for ax in (0x0000, 0x0001, 0x7FFF, 0x8000, 0x8001, 0xFFFF, 0x1234, 0xA5A5):
+            cpu = machine(bytes([0x99]), False)
+            cpu.r[CPU.AX], cpu.r[CPU.DX] = ax, 0x1357  # the old DX is replaced
+            start_flags = cpu.flags
+            cpu.step()
+            wide = (cpu.r[CPU.DX] << 16) | cpu.r[CPU.AX]
+            self.assertEqual(signed(wide, 32), signed(ax, 16), f"AX={ax:04X}")  # same number, wider
+            self.assertEqual((cpu.r[CPU.AX], cpu.flags, cpu.ip), (ax, start_flags, 1))
+
+    def test_cwd_then_idiv_divides_a_negative_number(self):
+        """The way compilers write -7 / 2: mov ax, -7 ; cwd ; idiv bx."""
+        cpu = machine(bytes([0x99, 0xF7, 0xFB]), False)  # cwd ; idiv bx
+        cpu.r[CPU.AX], cpu.r[CPU.BX] = 0xFFF9, 2  # -7 and 2
+        cpu.step()
+        cpu.step()
+        self.assertEqual((signed(cpu.r[CPU.AX], 16), signed(cpu.r[CPU.DX], 16)), (-3, -1))  # towards zero, remainder -1
+
+    def test_cbw_then_idiv_with_a_byte_divisor(self):
+        cpu = machine(bytes([0x98, 0xF6, 0xFB]), False)  # cbw ; idiv bl
+        cpu.r[CPU.AX], cpu.r[CPU.BX] = 0x00F9, 0x0002  # AL = -7
+        cpu.step()
+        cpu.step()
+        self.assertEqual((signed(cpu.r[CPU.AX] & 0xFF, 8), signed(cpu.r[CPU.AX] >> 8, 8)), (-3, -1))
+
+
 if __name__ == "__main__":
     unittest.main()

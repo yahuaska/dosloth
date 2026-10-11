@@ -63,6 +63,8 @@ class TestText(unittest.TestCase):
             (b"\x43", "inc bx"),
             (b"\x4D", "dec bp"),
             (b"\xFC", "cld"),
+            (b"\x98", "cbw"),
+            (b"\x99", "cwd"),
             (b"\xC3", "ret"),
             (b"\xF7\xD9", "neg cx"),
             (b"\xF7\xEA", "imul dx"),   # from esetup.exe

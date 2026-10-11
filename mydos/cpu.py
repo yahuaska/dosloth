@@ -52,6 +52,8 @@ class CPU:
         # opcode byte -> handler(op). Groups get one entry per opcode value.
         self.ops = {
             Op.NOP: self.nop,
+            Op.CBW: self.cbw,
+            Op.CWD: self.cwd,
             Op.MOV_RM16_SREG: self.mov_rm16_sreg,
             Op.MOV_SREG_RM16: self.mov_sreg_rm16,
             Op.MOV_AL_MOFFS8: self.mov_al_moffs8,
@@ -412,6 +414,23 @@ class CPU:
     def nop(self, op):
         """Do nothing (opcode 90)."""
         pass
+
+    def cbw(self, op):
+        """Widen the signed byte in AL to a signed word in AX (opcode 98).
+
+        AH gets copies of the sign bit of AL: FFh if AL is negative, 00h if not. So -1 (FFh) becomes
+        FFFFh, and 127 (7Fh) becomes 007Fh; `xor ah, ah` would turn FFh into 00FFh, that is 255. No flags
+        change.
+        """
+        self.set8(4, 0xFF if self.get8(0) & 0x80 else 0)  # 8-bit register 4 is AH, 0 is AL
+
+    def cwd(self, op):
+        """Widen the signed word in AX to a signed 32-bit number in DX:AX (opcode 99).
+
+        DX gets copies of the sign bit of AX: FFFFh if AX is negative, 0000h if not. It is how a
+        dividend is prepared for IDIV, which divides DX:AX. No flags change.
+        """
+        self.r[self.DX] = 0xFFFF if self.r[self.AX] & 0x8000 else 0
 
     def inc_dec(self, value, bits, decrement):
         """Add 1 to `value` (or subtract 1) the way INC and DEC do, and return the result.

@@ -34,6 +34,8 @@ class Op(IntEnum):
     MOV_RM16_SREG = 0x8C  # followed by ModRM (reg = segment register): r/m16 <- sreg
     MOV_SREG_RM16 = 0x8E  # followed by ModRM (reg = segment register): sreg <- r/m16
     NOP = 0x90
+    CBW = 0x98           # AL -> AX, the sign copied into AH
+    CWD = 0x99           # AX -> DX:AX, the sign copied into DX
     MOV_AL_MOFFS8 = 0xA0    # followed by a 16-bit offset: AL <- byte at [offset]
     MOV_AX_MOFFS16 = 0xA1   # followed by a 16-bit offset: AX <- word at [offset]
     MOV_MOFFS8_AL = 0xA2    # followed by a 16-bit offset: byte at [offset] <- AL
