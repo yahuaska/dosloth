@@ -148,5 +148,82 @@ class TestGetCurrentDrive(unittest.TestCase):
             self.assertEqual(cpu.flags, start_flags)  # AH keeps its 19h: only AL is the answer
 
 
+class TestSelectDrive(unittest.TestCase):
+    """INT 21h AH=0Eh: make a drive the current one. AH=19h reads it back."""
+
+    def cpu_with(self, code):
+        cpu = CPU()
+        dos.install(cpu)
+        cpu.s[CPU.CS] = 0x1000
+        cpu.mem[0x10000:0x10000 + len(code)] = bytes(code)
+        return cpu
+
+    def select(self, cpu, drive):
+        """Run `mov dl, drive ; mov ah, 0Eh ; int 21h` on this CPU and leave the answer in the CPU."""
+        cpu.mem[0x10100:0x10108] = bytes([0xB2, drive, 0xB4, 0x0E, 0xCD, 0x21, 0x90, 0x90])
+        cpu.ip = 0x0100
+        for _ in range(3):
+            cpu.step()
+
+    def current(self, cpu):
+        cpu.mem[0x10200:0x10204] = bytes([0xB4, 0x19, 0xCD, 0x21])
+        cpu.ip = 0x0200
+        cpu.step()
+        cpu.step()
+        return cpu.get8(0)
+
+    def test_a_program_starts_on_drive_c(self):
+        self.assertEqual(self.current(self.cpu_with([])), 2)
+
+    def test_the_four_drives_can_each_be_selected_and_read_back(self):
+        cpu = self.cpu_with([])
+        for drive in (0, 1, 2, 3, 1, 3, 0):
+            self.select(cpu, drive)
+            self.assertEqual(self.current(cpu), drive, f"drive {drive}")
+
+    def test_the_answer_is_how_many_drives_there_are(self):
+        cpu = self.cpu_with([])
+        for drive in (0, 3, 7, 255):
+            self.select(cpu, drive)
+            self.assertEqual(cpu.get8(0), 4, f"DL={drive}")
+
+    def test_a_drive_that_does_not_exist_changes_nothing_and_is_not_an_error(self):
+        cpu = self.cpu_with([])
+        self.select(cpu, 1)
+        for drive in (4, 5, 25, 26, 127, 255):
+            self.select(cpu, drive)
+            self.assertEqual(self.current(cpu), 1, f"DL={drive}")  # still B:
+            self.assertFalse(cpu.get_flag(flags.CF))
+
+    def test_the_way_programs_find_out_which_drives_exist(self):
+        """As in esetup.exe: remember the drive, select each candidate, read back, compare, put the first one back."""
+        cpu = self.cpu_with([])
+        original = self.current(cpu)
+        existing = []
+        for candidate in range(26):
+            self.select(cpu, candidate)
+            if self.current(cpu) == candidate:
+                existing.append(candidate)
+        self.select(cpu, original)
+        self.assertEqual(existing, [0, 1, 2, 3])
+        self.assertEqual(self.current(cpu), original)
+
+    def test_each_cpu_has_its_own_current_drive(self):
+        first, second = self.cpu_with([]), self.cpu_with([])
+        self.select(first, 0)
+        self.assertEqual((self.current(first), self.current(second)), (0, 2))
+
+    def test_dl_ah_and_the_flags_are_left_alone(self):
+        for carry in (False, True):
+            cpu = self.cpu_with([0xB4, 0x0E, 0xCD, 0x21])
+            cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = 0x0E00, 0x1111, 0x2222, 0x0003
+            cpu.set_flag(flags.CF, carry)
+            start_flags = cpu.flags
+            cpu.step()
+            cpu.step()
+            self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (0x1111, 0x2222, 0x0003))
+            self.assertEqual((cpu.get8(4), cpu.flags), (0x0E, start_flags))
+
+
 if __name__ == "__main__":
     unittest.main()

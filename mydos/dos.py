@@ -7,12 +7,20 @@ DOS_VERSION = (7, 1)  # (major, minor) reported by INT 21h AH=30h
 OEM_MICROSOFT = 0xFF
 CONSOLE_INFO = 0x80D3  # IOCTL answer for the console: a character device, standard input and output
 STANDARD_HANDLES = (0, 1, 2)  # standard input, standard output, standard error: all three are the console
-DEFAULT_DRIVE = 2  # the current drive for INT 21h AH=19h: 0 is A:, 1 is B:, 2 is C: (as the environment says)
+DRIVES = (0, 1, 2, 3)  # the drives that exist: A: B: C: D: (0 is A:). A constant until there is a config
+DEFAULT_DRIVE = 2  # the drive a program starts on: C:, as the environment says
 MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands out nothing above it
 
 
-def int21(cpu):
-    """INT 21h: DOS services, selected by AH. Only 09h, 19h, 25h, 30h, 35h, 40h, 44h, 4Ah and 4Ch so far."""
+class DosState:
+    """What DOS remembers between calls. One of these goes with each CPU."""
+
+    def __init__(self):
+        self.current_drive = DEFAULT_DRIVE
+
+
+def int21(cpu, state):
+    """INT 21h: DOS services, selected by AH. Only 09h, 0Eh, 19h, 25h, 30h, 35h, 40h, 44h, 4Ah and 4Ch so far."""
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
         off = cpu.r[CPU.DX]
@@ -22,8 +30,13 @@ def int21(cpu):
             off = (off + 1) & 0xFFFF
         sys.stdout.write(out.decode("cp437"))
         sys.stdout.flush()
+    elif ah == 0x0E:  # make drive DL the current one (0 is A:, 1 is B:, ...); AL = how many drives there are
+        drive = cpu.get8(2)  # 8-bit register 2 is DL
+        if drive in DRIVES:  # a drive that does not exist is not an error: the call just does nothing
+            state.current_drive = drive
+        cpu.set8(0, len(DRIVES))
     elif ah == 0x19:  # get the current drive into AL: 0 for A:, 1 for B:, 2 for C:, ...
-        cpu.set8(0, DEFAULT_DRIVE)
+        cpu.set8(0, state.current_drive)
     elif ah == 0x25:  # set interrupt vector AL to DS:DX
         # The vector table is real memory at 0000:0000, 4 bytes per interrupt: offset, segment.
         # Nothing jumps through it yet: INT still calls the Python handlers.
@@ -82,4 +95,5 @@ def int21(cpu):
 
 def install(cpu):
     """Hook DOS interrupt handlers into the CPU."""
-    cpu.int_handlers[0x21] = int21
+    state = DosState()
+    cpu.int_handlers[0x21] = lambda cpu: int21(cpu, state)
