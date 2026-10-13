@@ -55,6 +55,7 @@ class CPU:
         # opcode byte -> handler(op). Groups get one entry per opcode value.
         self.ops = {
             Op.NOP: self.nop,
+            Op.LEA: self.lea,
             Op.POP_RM16: self.pop_rm16,
             Op.CALL_FAR: self.call_far_imm,
             Op.PUSHA: self.pusha,
@@ -612,6 +613,20 @@ class CPU:
         self.pop16()  # the saved SP is not loaded back
         for reg in (self.BX, self.DX, self.CX, self.AX):
             self.r[reg] = self.pop16()
+
+    def lea(self, op):
+        """Put the address of a memory operand into a register, instead of what is stored there (opcode 8D).
+
+        "Load effective address": `lea ax, [bp-80h]` works out BP - 80h and puts that number in AX; the
+        memory at that address is not touched. It is the difference between `x` and `&x` in C, and it is
+        also a way of adding up to three things in one instruction, as in `lea ax, [bx+si+5]`, without
+        touching the flags. Only the offset is the result: a segment prefix has no effect. The operand
+        has to be memory, so a register operand stops the emulator. Flags are not changed.
+        """
+        m = modrm.decode(self, self.seg_override)
+        if m.is_reg:
+            raise NotImplementedError(f"LEA with a register at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        self.r[m.reg] = m.off
 
     def pop_rm16(self, op):
         """Take a word off the stack into a register or into memory (opcode 8F + ModRM).

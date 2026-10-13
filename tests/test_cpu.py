@@ -798,7 +798,8 @@ class TestInstructionsThatLeaveTheFlagsAlone(unittest.TestCase):
         "xchg ax,r16": [0x93], "xchg r/m8,r8": [0x86, 0x07], "xchg r/m16,r16": [0x87, 0x07],
         "nop": [0x90], "cbw": [0x98], "cwd": [0x99], "pushf": [0x9C], "lahf": [0x9F],
         "push r16": [0x53], "pop r16": [0x5B], "pusha": [0x60], "popa": [0x61], "push es": [0x06], "pop es": [0x07],
-        "push r/m16": [0xFF, 0x37], "pop r/m16": [0x8F, 0x07], "not r/m8": [0xF6, 0xD3], "not r/m16": [0xF7, 0xD3],
+        "push r/m16": [0xFF, 0x37], "pop r/m16": [0x8F, 0x07], "lea": [0x8D, 0x07],
+        "not r/m8": [0xF6, 0xD3], "not r/m16": [0xF7, 0xD3],
         "jmp short": [0xEB, 0x05], "jmp near": [0xE9, 0x05, 0x00],
         "call near": [0xE8, 0x05, 0x00], "call r/m16": [0xFF, 0xD3],
         "call far": [0x9A, 0x10, 0x00, 0x00, 0x30], "jmp far": [0xEA, 0x10, 0x00, 0x00, 0x30],
@@ -1425,6 +1426,91 @@ class TestPushaPopa(unittest.TestCase):
         cpu.step()
         self.assertEqual(cpu.r, [self.VALUES[0], self.VALUES[1], self.VALUES[2], self.VALUES[3],
                                  0x0004, self.VALUES[5], self.VALUES[6], self.VALUES[7]])
+
+
+class TestLea(unittest.TestCase):
+    """8D: the address of the operand, not what is stored there."""
+
+    BASES = [(CPU.BX, CPU.SI), (CPU.BX, CPU.DI), (CPU.BP, CPU.SI), (CPU.BP, CPU.DI),
+             (CPU.SI,), (CPU.DI,), (CPU.BP,), (CPU.BX,)]  # by the r/m field, for mod 00, 01 and 10
+    REGISTERS = {CPU.BX: 0x1000, CPU.SI: 0x0230, CPU.DI: 0x0045, CPU.BP: 0x0F00}
+
+    def lea(self, code, registers=None):
+        """Run one LEA with the registers of REGISTERS, changed by `registers` (a dict: register number -> value)."""
+        cpu = machine(bytes(code), False)
+        for reg, value in {**self.REGISTERS, **(registers or {})}.items():
+            cpu.r[reg] = value
+        cpu.step()
+        return cpu
+
+    def test_the_address_of_a_local_variable_from_esetup(self):
+        """8D 46 80 = lea ax, [bp-80h]: where the 128-byte buffer starts."""
+        cpu = machine(bytes([0x8D, 0x46, 0x80]), False)
+        cpu.r[CPU.BP] = 0x1000
+        cpu.ww(0x2000, 0x0F80, 0xBEEF)  # something is stored there, and LEA must not read it
+        cpu.step()
+        self.assertEqual((cpu.r[CPU.AX], cpu.ip), (0x0F80, 3))
+
+    def test_every_addressing_mode_into_every_register(self):
+        for mod, size in ((0, 0), (1, 1), (2, 2)):
+            for rm in range(8):
+                if mod == 0 and rm == 6:
+                    continue  # [disp16], tested on its own
+                for reg in range(8):
+                    for disp in ([0] if mod == 0 else [5, -5] if mod == 1 else [0x1234, -0x1234]):
+                        label = f"mod {mod} rm {rm} reg {reg} disp {disp}"
+                        displacement = (disp & ((1 << 8 * size) - 1)).to_bytes(size, "little")
+                        code = [0x8D, mod << 6 | reg << 3 | rm] + list(displacement)
+                        cpu = self.lea(code)
+                        base = sum(self.REGISTERS[b] for b in self.BASES[rm])
+                        before = [self.REGISTERS.get(i, REGS16[i]) for i in range(8)]
+                        self.assertEqual(cpu.r[reg], (base + disp) & 0xFFFF, label)
+                        # nothing else changed, unless the destination is one of the registers of the address
+                        for other in range(8):
+                            if other != reg:
+                                self.assertEqual(cpu.r[other], before[other], label)
+                        self.assertEqual(cpu.ip, 2 + size, label)
+
+    def test_a_direct_address(self):
+        cpu = self.lea([0x8D, 0x06, 0x00, 0x04])  # lea ax, [0400h]
+        self.assertEqual(cpu.r[CPU.AX], 0x0400)
+
+    def test_the_result_wraps_round_64k(self):
+        cpu = self.lea([0x8D, 0x47, 0x05], {CPU.BX: 0xFFFF})  # lea ax, [bx+5]
+        self.assertEqual(cpu.r[CPU.AX], 0x0004)
+        cpu = self.lea([0x8D, 0x46, 0x80], {CPU.BP: 0x0010})  # lea ax, [bp-80h]
+        self.assertEqual(cpu.r[CPU.AX], 0xFF90)
+
+    def test_memory_is_not_read_or_written(self):
+        cpu = machine(bytes([0x8D, 0x07]), False)  # lea ax, [bx]
+        cpu.r[CPU.BX] = 0x0100
+        cpu.ww(0x2000, 0x0100, 0xAAAA)
+        memory_before = bytes(cpu.mem)
+        cpu.step()
+        self.assertEqual((cpu.r[CPU.AX], bytes(cpu.mem)), (0x0100, memory_before))
+
+    def test_a_segment_prefix_changes_nothing(self):
+        plain = self.lea([0x8D, 0x07])
+        for prefix in (0x26, 0x2E, 0x36, 0x3E):
+            cpu = self.lea([prefix, 0x8D, 0x07])
+            self.assertEqual((cpu.r[CPU.AX], cpu.s), (plain.r[CPU.AX], plain.s))
+
+    def test_it_adds_without_touching_the_flags(self):
+        for pattern in (0x0002, 0x0FD7):
+            cpu = machine(bytes([0x8D, 0x40, 0x05]), False)  # lea ax, [bx+si+5]
+            cpu.r[CPU.BX], cpu.r[CPU.SI] = 0xFFFF, 0x0001  # the sum wraps to 5: an ADD would raise CF and ZF
+            cpu.flags = pattern
+            cpu.step()
+            self.assertEqual((cpu.r[CPU.AX], cpu.flags), (0x0005, pattern))
+
+    def test_the_destination_may_be_a_register_of_the_address(self):
+        cpu = self.lea([0x8D, 0x5F, 0x02])  # lea bx, [bx+2]: bx = bx + 2
+        self.assertEqual(cpu.r[CPU.BX], 0x1002)
+
+    def test_a_register_operand_stops_loudly(self):
+        cpu = machine(bytes([0x8D, 0xC3]), False)
+        with self.assertRaises(NotImplementedError):
+            cpu.step()
 
 
 if __name__ == "__main__":

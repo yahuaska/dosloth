@@ -160,6 +160,9 @@ def _decode_opcode(r, op, seg_override):
         return f"{Alu(reg).name.lower()} {size}{rm}, {imm}"
     if Op.XCHG_AX_R16 < op < Op.XCHG_AX_R16 + 8:
         return f"xchg ax, {REG16[op - Op.XCHG_AX_R16]}"
+    if op == Op.LEA:
+        reg, rm, is_mem = _modrm(r, None, 16)  # a segment prefix does nothing to LEA, so it is not shown
+        return f"lea {REG16[reg]}, {rm}" if is_mem else None
     if op == Op.POP_RM16:
         reg, rm, is_mem = _modrm(r, seg_override, 16)
         if reg != 0:

@@ -7,8 +7,8 @@ from mydos.disasm import disasm
 # A ModRM byte that is valid after the opcode: a register operand, and the 'reg' field the opcode needs.
 # Most opcodes accept any; the groups below only know some operations (8F, C6 and C7 /0 = POP and MOV,
 # FE and FF /0 = INC),
-# and LES and LDS need a memory operand ([bx]).
-MODRM_FOR = {0x8F: 0xC0, 0xC6: 0xC0, 0xC7: 0xC0, 0xFE: 0xC0, 0xFF: 0xC0, 0xC4: 0x1F, 0xC5: 0x1F}
+# and LEA, LES and LDS need a memory operand ([bx]).
+MODRM_FOR = {0x8D: 0x1F, 0x8F: 0xC0, 0xC6: 0xC0, 0xC7: 0xC0, 0xFE: 0xC0, 0xFF: 0xC0, 0xC4: 0x1F, 0xC5: 0x1F}
 
 
 def machine(code):
@@ -98,7 +98,11 @@ class TestText(unittest.TestCase):
             (b"\xEE", "out dx, al"),
             (b"\xEF", "out dx, ax"),
             (b"\xC4\x5E\x06", "les bx, [bp+6]"),   # from esetup.exe
-            (b"\x8F\x06\x4E\x21", "pop word [214E]"),   # from esetup.exe
+            (b"\x8D\x46\x80", "lea ax, [bp-80]"),   # from esetup.exe
+            (b"\x8D\x40\x05", "lea ax, [bx+si+5]"),
+            (b"\x8D\x06\x00\x04", "lea ax, [0400]"),
+            (b"\x26\x8D\x07", "lea ax, [bx]"),
+            (b"\x8F\x06\x4E\x21", "pop word [214E]"),
             (b"\x8F\x47\x02", "pop word [bx+2]"),
             (b"\x8F\xC3", "pop bx"),
             (b"\xC5\x37", "lds si, [bx]"),

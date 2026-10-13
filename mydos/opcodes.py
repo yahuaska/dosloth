@@ -36,6 +36,7 @@ class Op(IntEnum):
     XCHG_RM_REG = 0x86   # 86 (byte) and 87 (word) + ModRM: swap a register with a register or memory
     MOV_RM_REG = 0x88    # 88..8B + ModRM: r/m8 <- r8, r/m16 <- r16, r8 <- r/m8, r16 <- r/m16 (see CPU.operands)
     MOV_RM16_SREG = 0x8C  # followed by ModRM (reg = segment register): r/m16 <- sreg
+    LEA = 0x8D           # + ModRM (memory): the address of the operand into a register, memory not read
     MOV_SREG_RM16 = 0x8E  # followed by ModRM (reg = segment register): sreg <- r/m16
     POP_RM16 = 0x8F      # + ModRM (reg field 0): pop a word into a register or memory
     NOP = 0x90           # really XCHG AX, AX, which does nothing
