@@ -57,6 +57,8 @@ class CPU:
             Op.NOP: self.nop,
             Op.POP_RM16: self.pop_rm16,
             Op.CALL_FAR: self.call_far_imm,
+            Op.PUSHA: self.pusha,
+            Op.POPA: self.popa,
             Op.CBW: self.cbw,
             Op.CWD: self.cwd,
             Op.PUSHF: self.pushf,
@@ -584,6 +586,32 @@ class CPU:
         The register is chosen the same way as in PUSH.
         """
         self.r[op - Op.POP_R16] = self.pop16()
+
+    def pusha(self, op):
+        """Push all eight general registers on the stack with one instruction (opcode 60; 80186 and later).
+
+        They go in the order AX, CX, DX, BX, SP, BP, SI, DI, so DI ends up on top. The SP that is pushed
+        is the one from before the instruction, not the one that changes as the others are pushed. Flags
+        are not changed. A compiler uses it at the start of an interrupt handler to save everything.
+        """
+        original_sp = self.r[self.SP]
+        for reg in (self.AX, self.CX, self.DX, self.BX):
+            self.push16(self.r[reg])
+        self.push16(original_sp)
+        for reg in (self.BP, self.SI, self.DI):
+            self.push16(self.r[reg])
+
+    def popa(self, op):
+        """Take the eight general registers back off the stack (opcode 61; 80186 and later).
+
+        The reverse of PUSHA: DI, SI, BP, then the saved SP, which is thrown away (SP simply goes up by
+        the 16 bytes), then BX, DX, CX, AX. Flags are not changed.
+        """
+        for reg in (self.DI, self.SI, self.BP):
+            self.r[reg] = self.pop16()
+        self.pop16()  # the saved SP is not loaded back
+        for reg in (self.BX, self.DX, self.CX, self.AX):
+            self.r[reg] = self.pop16()
 
     def pop_rm16(self, op):
         """Take a word off the stack into a register or into memory (opcode 8F + ModRM).

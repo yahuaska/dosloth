@@ -26,6 +26,8 @@ class Op(IntEnum):
     DEC_R16 = 0x48       # 48..4F: subtract 1 from AX CX DX BX SP BP SI DI
     PUSH_R16 = 0x50      # 50..57: push AX CX DX BX SP BP SI DI
     POP_R16 = 0x58       # 58..5F: pop into AX CX DX BX SP BP SI DI
+    PUSHA = 0x60         # 80186 and later: push AX CX DX BX SP BP SI DI
+    POPA = 0x61          # 80186 and later: pop DI SI BP (skip SP) BX DX CX AX
     JCC = 0x70           # 70..7F: conditional short jump, followed by a signed 8-bit displacement
     ALU_RM8_IMM8 = 0x80    # + ModRM + imm8:  the operation is the ModRM 'reg' field (see Alu)
     ALU_RM16_IMM16 = 0x81  # + ModRM + imm16

@@ -797,7 +797,7 @@ class TestInstructionsThatLeaveTheFlagsAlone(unittest.TestCase):
         "mov r/m8,imm8": [0xC6, 0x07, 0x05], "mov r/m16,imm16": [0xC7, 0x07, 0x05, 0x00],
         "xchg ax,r16": [0x93], "xchg r/m8,r8": [0x86, 0x07], "xchg r/m16,r16": [0x87, 0x07],
         "nop": [0x90], "cbw": [0x98], "cwd": [0x99], "pushf": [0x9C], "lahf": [0x9F],
-        "push r16": [0x53], "pop r16": [0x5B], "push es": [0x06], "pop es": [0x07],
+        "push r16": [0x53], "pop r16": [0x5B], "pusha": [0x60], "popa": [0x61], "push es": [0x06], "pop es": [0x07],
         "push r/m16": [0xFF, 0x37], "pop r/m16": [0x8F, 0x07], "not r/m8": [0xF6, 0xD3], "not r/m16": [0xF7, 0xD3],
         "jmp short": [0xEB, 0x05], "jmp near": [0xE9, 0x05, 0x00],
         "call near": [0xE8, 0x05, 0x00], "call r/m16": [0xFF, 0xD3],
@@ -1360,6 +1360,71 @@ class TestFarCallAndJump(unittest.TestCase):
         registers = lambda cpu: (cpu.s[CPU.CS], cpu.ip, cpu.r[CPU.SP])
         self.assertEqual(registers(direct), registers(indirect))
         self.assertEqual((self.word(direct, 1)), self.word(indirect, 1))  # the same segment under the return address
+
+
+class TestPushaPopa(unittest.TestCase):
+    """60 PUSHA and 61 POPA (80186 and later)."""
+
+    VALUES = [0x1111, 0x2222, 0x3333, 0x4444, 0x0200, 0x6666, 0x7777, 0x8888]  # AX CX DX BX SP BP SI DI
+
+    def machine_with_registers(self, code):
+        cpu = machine(bytes(code), False)
+        cpu.s[CPU.SS] = 0x4000
+        cpu.r[:] = self.VALUES
+        return cpu
+
+    def test_pusha_pushes_the_eight_registers_with_di_on_top(self):
+        cpu = self.machine_with_registers([0x60])
+        start_flags = cpu.flags
+        cpu.step()
+        self.assertEqual(cpu.r[CPU.SP], 0x0200 - 16)
+        # from the top of the stack downwards: DI SI BP SP BX DX CX AX
+        stack = [cpu.rw(0x4000, cpu.r[CPU.SP] + 2 * i) for i in range(8)]
+        self.assertEqual(stack, [0x8888, 0x7777, 0x6666, 0x0200, 0x4444, 0x3333, 0x2222, 0x1111])
+        self.assertEqual((cpu.flags, cpu.ip), (start_flags, 1))
+
+    def test_the_sp_that_is_pushed_is_the_one_from_before_the_instruction(self):
+        for sp in (0x0200, 0x0010, 0x0000, 0xFFF0):
+            cpu = self.machine_with_registers([0x60])
+            cpu.r[CPU.SP] = sp
+            cpu.step()
+            # the fifth word pushed, after AX, CX, DX and BX, lies 10 bytes below where SP started
+            self.assertEqual(cpu.rw(0x4000, (sp - 10) & 0xFFFF), sp, f"SP={sp:04X}")
+
+    def test_pusha_leaves_every_register_but_sp_as_it_was(self):
+        cpu = self.machine_with_registers([0x60])
+        cpu.step()
+        expected = list(self.VALUES)
+        expected[CPU.SP] = 0x0200 - 16
+        self.assertEqual(cpu.r, expected)
+
+    def test_popa_loads_all_but_sp_and_drops_the_saved_sp(self):
+        cpu = self.machine_with_registers([0x61])
+        words = [0xD1, 0x51, 0xBB, 0x5555, 0xB1, 0xD2, 0xC3, 0xA4]  # DI SI BP (SP slot) BX DX CX AX, from the top
+        for i, word in enumerate(words):
+            cpu.ww(0x4000, 0x0200 + 2 * i, word)
+        start_flags = cpu.flags
+        cpu.step()
+        self.assertEqual(cpu.r[CPU.DI], 0xD1)
+        self.assertEqual((cpu.r[CPU.SI], cpu.r[CPU.BP]), (0x51, 0xBB))
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.DX], cpu.r[CPU.CX], cpu.r[CPU.AX]), (0xB1, 0xD2, 0xC3, 0xA4))
+        self.assertEqual(cpu.r[CPU.SP], 0x0210)  # 16 bytes up; the 5555 in the SP slot was not used
+        self.assertEqual((cpu.flags, cpu.ip), (start_flags, 1))
+
+    def test_pusha_then_popa_gives_everything_back(self):
+        # pusha ; mov ax,1234h ; mov bx,5678h ; popa
+        cpu = self.machine_with_registers([0x60, 0xB8, 0x34, 0x12, 0xBB, 0x78, 0x56, 0x61])
+        for _ in range(4):
+            cpu.step()
+        self.assertEqual(cpu.r, self.VALUES)  # SP too: it is back where it started
+
+    def test_the_stack_wraps_round_the_segment(self):
+        cpu = self.machine_with_registers([0x60, 0x61])
+        cpu.r[CPU.SP] = 0x0004  # the eight words need room that wraps through 0000
+        cpu.step()
+        cpu.step()
+        self.assertEqual(cpu.r, [self.VALUES[0], self.VALUES[1], self.VALUES[2], self.VALUES[3],
+                                 0x0004, self.VALUES[5], self.VALUES[6], self.VALUES[7]])
 
 
 if __name__ == "__main__":

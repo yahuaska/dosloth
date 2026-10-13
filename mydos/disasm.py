@@ -18,7 +18,7 @@ SEG_PREFIXES = {Op.ES_PREFIX: "es", Op.CS_PREFIX: "cs", Op.SS_PREFIX: "ss", Op.D
 JCC = ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"]
 # instructions that are a single byte with no operands
 PLAIN = {
-    Op.NOP: "nop", Op.CBW: "cbw", Op.CWD: "cwd", Op.PUSHF: "pushf",
+    Op.NOP: "nop", Op.CBW: "cbw", Op.CWD: "cwd", Op.PUSHF: "pushf", Op.PUSHA: "pusha", Op.POPA: "popa",
     Op.POPF: "popf", Op.SAHF: "sahf", Op.LAHF: "lahf", Op.RET_NEAR: "ret", Op.RETF: "retf", Op.HLT: "hlt",
     Op.CLC: "clc", Op.STC: "stc", Op.CLI: "cli",
     Op.STI: "sti", Op.CLD: "cld", Op.STD: "std", Op.SCASB: "scasb", Op.SCASW: "scasw",
