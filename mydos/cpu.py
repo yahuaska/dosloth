@@ -56,6 +56,7 @@ class CPU:
         self.ops = {
             Op.NOP: self.nop,
             Op.POP_RM16: self.pop_rm16,
+            Op.CALL_FAR: self.call_far_imm,
             Op.CBW: self.cbw,
             Op.CWD: self.cwd,
             Op.PUSHF: self.pushf,
@@ -99,6 +100,7 @@ class CPU:
             Op.RETF_POP: self.retf_pop,
             Op.RETF: self.retf,
             Op.JMP_NEAR: self.jmp_near,
+            Op.JMP_FAR: self.jmp_far_imm,
             Op.JMP_SHORT: self.jmp_short,
             Op.INT: self.int_,
             Op.HLT: self.hlt,
@@ -537,6 +539,35 @@ class CPU:
     def sahf(self, op):
         """Set the five low flags from AH (opcode 9E): SF, ZF, AF, PF and CF. The other flags stay as they were."""
         self.flags = (self.flags & ~flags.LOW) | (self.get8(4) & flags.LOW)
+
+    def call_far(self, offset, segment):
+        """Call a procedure in another code segment: push CS and then IP, and go to segment:offset.
+
+        IP is already the address after the instruction, which is where RETF will come back to.
+        CS is pushed before it is changed, so the stack holds the caller's segment.
+        """
+        self.push16(self.s[self.CS])
+        self.push16(self.ip)
+        self.s[self.CS], self.ip = segment, offset
+
+    def call_far_imm(self, op):
+        """Call a far procedure whose address is in the instruction (opcode 9A + offset + segment).
+
+        The offset comes first and then the segment, as in memory. Only RETF (or RETF n) goes back
+        properly, as it takes both CS and IP off the stack. A C program in the "large" memory model uses
+        this for every call to a function in another segment, `main` included.
+        """
+        offset = self.fetch16()
+        segment = self.fetch16()
+        self.call_far(offset, segment)
+
+    def jmp_far_imm(self, op):
+        """Jump to another code segment, to the address in the instruction (opcode EA + offset + segment).
+
+        Nothing is pushed, so there is no coming back; it is a goto between segments.
+        """
+        offset = self.fetch16()
+        self.s[self.CS], self.ip = self.fetch16(), offset
 
     def push_r16(self, op):
         """Push a 16-bit register onto the stack (opcodes 50-57).
@@ -1217,9 +1248,9 @@ class CPU:
                     f"opcode FF /{m.reg} with a register at {self.s[self.CS]:04X}:{self.start_ip:04X}")
             offset, segment = m.rw_pair(self)
             if m.reg == 3:
-                self.push16(self.s[self.CS])
-                self.push16(self.ip)
-            self.s[self.CS], self.ip = segment, offset
+                self.call_far(offset, segment)
+            else:
+                self.s[self.CS], self.ip = segment, offset
         elif m.reg == 6:  # read first: PUSH SP pushes the value SP had before the push
             self.push16(m.read16(self))
         else:

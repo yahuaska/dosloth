@@ -40,6 +40,7 @@ class Op(IntEnum):
     XCHG_AX_R16 = 0x90   # 91..97: swap AX with CX DX BX SP BP SI DI (90 itself is NOP)
     CBW = 0x98           # AL -> AX, the sign copied into AH
     CWD = 0x99           # AX -> DX:AX, the sign copied into DX
+    CALL_FAR = 0x9A      # followed by offset and segment (two words): a call to another segment
     PUSHF = 0x9C         # flags -> stack
     POPF = 0x9D          # stack -> flags
     SAHF = 0x9E          # AH -> SF ZF AF PF CF
@@ -77,6 +78,7 @@ class Op(IntEnum):
     IO_IMM = 0xE4        # E4..E7: IN AL, IN AX, OUT AL, OUT AX with the port number in the next byte
     CALL_NEAR = 0xE8     # followed by a signed 16-bit displacement; pushes the return IP
     JMP_NEAR = 0xE9      # followed by a signed 16-bit displacement
+    JMP_FAR = 0xEA       # followed by offset and segment (two words): a jump to another segment
     JMP_SHORT = 0xEB     # followed by a signed 8-bit displacement
     IO_DX = 0xEC         # EC..EF: the same four, with the port number in DX
     REPNE_PREFIX = 0xF2  # modifies the next string instruction: repeat while CX != 0 and ZF == 0

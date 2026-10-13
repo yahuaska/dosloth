@@ -51,6 +51,8 @@ class TestText(unittest.TestCase):
             (b"\x81\x3E\x10\x00\x99\x99", "cmp word [0010], 9999"),
             (b"\x75\xFD", "jne 00FF"),          # 0102 - 3
             (b"\xE8\x55\x01", "call 0258"),     # 0103 + 0155
+            (b"\x9A\x0F\x00\xEC\x14", "call 14EC:000F"),   # from esetup.exe
+            (b"\xEA\x00\x01\x00\x20", "jmp 2000:0100"),
             (b"\xE9\x3F\xFF", "jmp 0042"),      # 0103 - 00C1, the bytes from esetup.exe
             (b"\xE9\x00\x00", "jmp 0103"),
             (b"\xE2\xFE", "loop 0100"),

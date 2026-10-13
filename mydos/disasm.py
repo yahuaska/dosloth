@@ -242,6 +242,9 @@ def _decode_opcode(r, op, seg_override):
     if op in LOOPS:
         d = r.s8()
         return f"{LOOPS[op]} {(r.pos + d) & 0xFFFF:04X}"
+    if op in (Op.CALL_FAR, Op.JMP_FAR):
+        offset = r.u16()
+        return f"{'call' if op == Op.CALL_FAR else 'jmp'} {r.u16():04X}:{offset:04X}"
     if op in (Op.CALL_NEAR, Op.JMP_NEAR):
         d = r.u16()
         return f"{'call' if op == Op.CALL_NEAR else 'jmp'} {(r.pos + d) & 0xFFFF:04X}"  # wraps like the CPU

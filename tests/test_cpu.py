@@ -801,6 +801,7 @@ class TestInstructionsThatLeaveTheFlagsAlone(unittest.TestCase):
         "push r/m16": [0xFF, 0x37], "pop r/m16": [0x8F, 0x07], "not r/m8": [0xF6, 0xD3], "not r/m16": [0xF7, 0xD3],
         "jmp short": [0xEB, 0x05], "jmp near": [0xE9, 0x05, 0x00],
         "call near": [0xE8, 0x05, 0x00], "call r/m16": [0xFF, 0xD3],
+        "call far": [0x9A, 0x10, 0x00, 0x00, 0x30], "jmp far": [0xEA, 0x10, 0x00, 0x00, 0x30],
         "jmp r/m16": [0xFF, 0xE3], "ret": [0xC3], "retf": [0xCB],
         "ret n": [0xC2, 0x02, 0x00], "retf n": [0xCA, 0x02, 0x00],
         "les": [0xC4, 0x1F], "lds": [0xC5, 0x1F],
@@ -1303,6 +1304,62 @@ class TestPopIntoOperand(unittest.TestCase):
             cpu = self.machine_with_stack([0x8F, 0xC0 | reg << 3], 0x1234)
             with self.assertRaises(NotImplementedError, msg=f"/{reg}"):
                 cpu.step()
+
+
+class TestFarCallAndJump(unittest.TestCase):
+    """9A CALL FAR and EA JMP FAR, with the address in the instruction."""
+
+    def at(self, code, ip=0x0100):
+        cpu = machine(bytes(code), False)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0200
+        cpu.ip = ip
+        cpu.mem[0x10000 + ip:0x10000 + ip + len(code)] = bytes(code)
+        return cpu
+
+    def test_the_call_from_esetup_goes_to_main(self):
+        """014C: 9A 0F 00 EC 14 is call 14EC:000F; the return address is the next instruction."""
+        cpu = self.at([0x9A, 0x0F, 0x00, 0xEC, 0x14], ip=0x014C)
+        start_flags = cpu.flags
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x14EC, 0x000F))  # the offset comes first in the bytes
+        self.assertEqual((cpu.r[CPU.SP], cpu.rw(0x4000, 0x01FE), cpu.rw(0x4000, 0x01FC)), (0x01FC, 0x1000, 0x0151))
+        self.assertEqual(cpu.flags, start_flags)
+
+    def test_call_far_pushes_cs_then_ip(self):
+        cpu = self.at([0x9A, 0x34, 0x12, 0x78, 0x56], ip=0x0300)
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x5678, 0x1234))
+        # IP is on top and CS under it: exactly what RETF takes off again, in that order
+        self.assertEqual((self.word(cpu, 0), self.word(cpu, 1)), (0x0305, 0x1000))
+
+    def word(self, cpu, depth):
+        return cpu.rw(0x4000, cpu.r[CPU.SP] + 2 * depth)
+
+    def test_retf_comes_back_to_the_instruction_after_a_far_call(self):
+        cpu = self.at([0x9A, 0x10, 0x00, 0x00, 0x50])
+        cpu.mem[0x50010] = 0xCB  # retf, at 5000:0010
+        cpu.step()
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.r[CPU.SP]), (0x1000, 0x0105, 0x0200))
+
+    def test_jmp_far_changes_cs_and_ip_and_pushes_nothing(self):
+        for offset, segment in ((0x0000, 0x0000), (0x0100, 0x2000), (0xFFFF, 0xFFFF), (0x1234, 0x5678)):
+            cpu = self.at([0xEA, offset & 0xFF, offset >> 8, segment & 0xFF, segment >> 8])
+            start_flags = cpu.flags
+            cpu.step()
+            self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.r[CPU.SP], cpu.flags), (segment, offset, 0x0200, start_flags))
+
+    def test_the_far_call_through_memory_does_the_same(self):
+        """FF /3 and 9A are two ways to write one operation: the stack and the registers end up alike."""
+        direct = self.at([0x9A, 0x34, 0x12, 0x78, 0x56], ip=0x0000)
+        direct.step()
+        indirect = self.at([0xFF, 0x1F], ip=0x0000)  # call far [bx]
+        indirect.ww(0x2000, MEM_ADDR, 0x1234)
+        indirect.ww(0x2000, MEM_ADDR + 2, 0x5678)
+        indirect.step()
+        registers = lambda cpu: (cpu.s[CPU.CS], cpu.ip, cpu.r[CPU.SP])
+        self.assertEqual(registers(direct), registers(indirect))
+        self.assertEqual((self.word(direct, 1)), self.word(indirect, 1))  # the same segment under the return address
 
 
 if __name__ == "__main__":
