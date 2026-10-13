@@ -11,7 +11,7 @@ MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands o
 
 
 def int21(cpu):
-    """INT 21h: DOS services, selected by AH. Only 09h, 25h, 30h, 35h, 44h, 4Ah and 4Ch so far."""
+    """INT 21h: DOS services, selected by AH. Only 09h, 25h, 30h, 35h, 40h, 44h, 4Ah and 4Ch so far."""
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
         off = cpu.r[CPU.DX]
@@ -37,6 +37,18 @@ def int21(cpu):
         cpu.set8(7, OEM_MICROSOFT)
         cpu.set8(3, 0)
         cpu.r[CPU.CX] = 0
+    elif ah == 0x40:  # write CX bytes from DS:DX to the file handle in BX; AX = how many were written
+        handle, count = cpu.r[CPU.BX], cpu.r[CPU.CX]
+        if handle in STANDARD_HANDLES:  # the console; error output goes to our own error output
+            data = bytes(cpu.rb(cpu.s[CPU.DS], (cpu.r[CPU.DX] + i) & 0xFFFF) for i in range(count))
+            stream = sys.stderr if handle == 2 else sys.stdout
+            stream.write(data.decode("cp437"))
+            stream.flush()
+            cpu.r[CPU.AX] = count
+            cpu.set_flag(flags.CF, False)
+        else:  # error 06: invalid handle (nothing else is open yet)
+            cpu.set_flag(flags.CF, True)
+            cpu.r[CPU.AX] = 6
     elif ah == 0x44:  # IOCTL: device control through a file handle in BX, subfunction in AL
         al = cpu.get8(0)
         if al != 0x00:
