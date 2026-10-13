@@ -221,6 +221,10 @@ def _decode_opcode(r, op, seg_override):
         if not is_mem:  # the CPU wants a pointer in memory
             return None
         return f"{'les' if op == Op.LES else 'lds'} {REG16[reg]}, {rm}"
+    if Op.IO_IMM <= op < Op.IO_IMM + 4 or Op.IO_DX <= op < Op.IO_DX + 4:
+        reg = "ax" if op & 1 else "al"
+        port = "dx" if op & 8 else f"{r.u8():02X}"
+        return f"out {port}, {reg}" if op & 2 else f"in {reg}, {port}"
     if op in (Op.RET_NEAR_POP, Op.RETF_POP):
         return f"{'ret' if op == Op.RET_NEAR_POP else 'retf'} {r.u16():04X}"
     if op == Op.INT:

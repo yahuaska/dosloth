@@ -1078,5 +1078,103 @@ class TestFlagsRegisterInstructions(unittest.TestCase):
             self.assertEqual(cpu.flags, pattern, f"{pattern:04X}")
 
 
+class FakePorts:
+    """A pretend device on a few ports: remembers what was written, answers reads from a table."""
+
+    def __init__(self, cpu, ports, answers=None):
+        self.written = []  # (port, byte) in the order of the writes
+        self.answers = dict(answers or {})
+        for port in ports:
+            cpu.port_readers[port] = self.read
+            cpu.port_writers[port] = self.write
+
+    def read(self, port):
+        return self.answers[port]
+
+    def write(self, port, value):
+        self.written.append((port, value))
+
+
+class TestPortInstructions(unittest.TestCase):
+    """IN and OUT: E4-E7 with the port in the next byte, EC-EF with the port in DX."""
+
+    def test_out_byte_with_an_immediate_port(self):
+        cpu = machine(bytes([0xE6, 0x43]), False)  # out 43h, al
+        device = FakePorts(cpu, [0x43])
+        cpu.r[CPU.AX] = 0x1234
+        cpu.step()
+        self.assertEqual((device.written, cpu.ip, cpu.r[CPU.AX]), ([(0x43, 0x34)], 2, 0x1234))
+
+    def test_in_byte_with_an_immediate_port_leaves_ah_alone(self):
+        cpu = machine(bytes([0xE4, 0x40]), False)  # in al, 40h
+        FakePorts(cpu, [0x40], {0x40: 0xAB})
+        cpu.r[CPU.AX] = 0x1234
+        cpu.step()
+        self.assertEqual((cpu.r[CPU.AX], cpu.ip), (0x12AB, 2))
+
+    def test_the_port_in_dx_may_be_any_of_65536(self):
+        for port in (0x0000, 0x0060, 0x03F8, 0xFFFE):
+            cpu = machine(bytes([0xEE, 0xEC]), False)  # out dx, al ; in al, dx
+            device = FakePorts(cpu, [port], {port: 0x5A})
+            cpu.r[CPU.DX], cpu.r[CPU.AX] = port, 0x00C3
+            cpu.step()
+            cpu.step()
+            self.assertEqual(device.written, [(port, 0xC3)], f"{port:04X}")
+            self.assertEqual(cpu.r[CPU.AX], 0x005A, f"{port:04X}")
+
+    def test_a_word_goes_to_two_neighbouring_ports_low_byte_first(self):
+        cpu = machine(bytes([0xE7, 0x20]), False)  # out 20h, ax
+        device = FakePorts(cpu, [0x20, 0x21])
+        cpu.r[CPU.AX] = 0xBEEF
+        cpu.step()
+        self.assertEqual(device.written, [(0x20, 0xEF), (0x21, 0xBE)])
+
+    def test_a_word_is_read_from_two_neighbouring_ports(self):
+        cpu = machine(bytes([0xED]), False)  # in ax, dx
+        FakePorts(cpu, [0x70, 0x71], {0x70: 0x34, 0x71: 0x12})
+        cpu.r[CPU.DX] = 0x70
+        cpu.step()
+        self.assertEqual(cpu.r[CPU.AX], 0x1234)
+
+    def test_the_second_port_of_a_word_wraps_from_ffff_to_0000(self):
+        cpu = machine(bytes([0xEF]), False)  # out dx, ax
+        device = FakePorts(cpu, [0xFFFF, 0x0000])
+        cpu.r[CPU.DX], cpu.r[CPU.AX] = 0xFFFF, 0xA1B2
+        cpu.step()
+        self.assertEqual(device.written, [(0xFFFF, 0xB2), (0x0000, 0xA1)])
+
+    def test_the_immediate_port_is_one_byte_only(self):
+        cpu = machine(bytes([0xE6, 0xFF]), False)  # out FFh, al: the highest port the short form reaches
+        device = FakePorts(cpu, [0xFF])
+        cpu.step()
+        self.assertEqual(device.written[0][0], 0xFF)
+
+    def test_a_device_answer_is_cut_to_a_byte(self):
+        cpu = machine(bytes([0xE4, 0x40]), False)
+        FakePorts(cpu, [0x40], {0x40: 0x1FF})
+        cpu.step()
+        self.assertEqual(cpu.r[CPU.AX] & 0xFFFF, REGS16[0] & 0xFF00 | 0xFF)
+
+    def test_flags_stay_as_they_were(self):
+        for code in ([0xE4, 0x40], [0xE5, 0x40], [0xE6, 0x40], [0xE7, 0x40], [0xEC], [0xED], [0xEE], [0xEF]):
+            for pattern in (0x0002, 0x0FD7):
+                cpu = machine(bytes(code), False)
+                FakePorts(cpu, [0x40, 0x41, 0x00, 0x01, 0x0100], {0x40: 1, 0x41: 2, 0x00: 3, 0x01: 4, 0x0100: 5})
+                cpu.r[CPU.DX] = 0x40
+                cpu.flags = pattern
+                cpu.step()
+                self.assertEqual(cpu.flags, pattern, f"{bytes(code).hex()} {pattern:04X}")
+
+    def test_a_port_with_no_device_stops_loudly_and_says_which(self):
+        for code, text in (([0xE6, 0x43], "OUT to port 0043"), ([0xE4, 0x40], "IN from port 0040"),
+                           ([0xEE], "OUT to port 03F8"), ([0xEC], "IN from port 03F8")):
+            cpu = machine(bytes(code), False)
+            cpu.r[CPU.DX] = 0x03F8
+            with self.assertRaises(NotImplementedError) as caught:
+                cpu.step()
+            self.assertIn(text, str(caught.exception))
+            self.assertIn("1000:0000", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

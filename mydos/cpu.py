@@ -44,6 +44,8 @@ class CPU:
         self.ip = 0
         self.flags = 0x0002
         self.int_handlers = {}  # int number -> fn(cpu)
+        self.port_readers = {}  # I/O port number -> fn(port): a byte read from the device behind that port
+        self.port_writers = {}  # I/O port number -> fn(port, byte): a byte written to that device
         self.start_ip = 0  # set by step(): IP of the instruction being executed
         self.seg_override = None  # set by step(): segment register from a prefix, or None
         self.trace = None  # optional fn(cpu), called before every instruction (for the -d log)
@@ -139,6 +141,9 @@ class CPU:
             self.ops[Op.SHIFT_RM + form] = self.shift_rm
         for size in range(2):
             self.ops[Op.GROUP3_RM + size] = self.group3_rm
+        for form in range(4):
+            self.ops[Op.IO_IMM + form] = self.in_out
+            self.ops[Op.IO_DX + form] = self.in_out
 
         for i in range(8):
             self.ops[Op.INC_R16 + i] = self.inc_r16
@@ -376,6 +381,21 @@ class CPU:
         self.set_flag(flags.AF, bool((a ^ b ^ result) & 0x10))
         self.set_szp(result, bits)
         return result
+
+    # --- I/O ports ---
+    def port_in(self, port):
+        """Read one byte from an I/O port. A port with no device behind it stops the emulator."""
+        reader = self.port_readers.get(port)
+        if reader is None:
+            raise NotImplementedError(f"IN from port {port:04X} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        return reader(port) & 0xFF
+
+    def port_out(self, port, value):
+        """Write one byte to an I/O port. A port with no device behind it stops the emulator."""
+        writer = self.port_writers.get(port)
+        if writer is None:
+            raise NotImplementedError(f"OUT to port {port:04X} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        writer(port, value & 0xFF)
 
     # --- stack ---
     def push16(self, val):
@@ -1167,6 +1187,31 @@ class CPU:
             self.push16(m.read16(self))
         else:
             raise NotImplementedError(f"opcode FF /{m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+
+    def in_out(self, op):
+        """Read from or write to an I/O port: IN and OUT (opcodes E4-E7 and EC-EF).
+
+        Ports are a second address space, apart from memory, with numbers 0000-FFFF; each belongs to a
+        device (timer, keyboard, ...), and only these instructions reach it. Three bits of the opcode
+        say which of the eight it is:
+            bit 0: the size, 0 = a byte (AL), 1 = a word (AX)
+            bit 1: the direction, 0 = IN (the port into AL or AX), 1 = OUT (AL or AX to the port)
+            bit 3: where the port number is, 0 = in the byte after the opcode, 1 = in DX
+        The devices are Python functions listed in self.port_readers and self.port_writers. A word goes
+        to two neighbouring ports, the low byte to the port and the high byte to the next one, which is
+        what an 8-bit device sees on the bus. Flags are not changed.
+        """
+        port = self.r[self.DX] if op & 8 else self.fetch8()
+        bits = 16 if op & 1 else 8
+        if op & 2:  # OUT
+            self.port_out(port, self.get_reg(0, bits))  # register 0 is AL or AX
+            if bits == 16:
+                self.port_out((port + 1) & 0xFFFF, self.r[self.AX] >> 8)
+        else:  # IN
+            value = self.port_in(port)
+            if bits == 16:
+                value |= self.port_in((port + 1) & 0xFFFF) << 8
+            self.set_reg(0, bits, value)
 
     def clc(self, op):
         """Clear the carry flag (opcode F8)."""
