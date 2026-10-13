@@ -100,6 +100,7 @@ class CPU:
             Op.RET_NEAR: self.ret_near,
             Op.LES: self.load_far_pointer,
             Op.LDS: self.load_far_pointer,
+            Op.LEAVE: self.leave,
             Op.RETF_POP: self.retf_pop,
             Op.RETF: self.retf,
             Op.JMP_NEAR: self.jmp_near,
@@ -1089,6 +1090,16 @@ class CPU:
         offset, segment = m.rw_pair(self)
         self.r[m.reg] = offset
         self.s[self.ES if op == Op.LES else self.DS] = segment
+
+    def leave(self, op):
+        """Tear down a procedure's stack frame (opcode C9; 80186 and later).
+
+        The end of a procedure that began with `push bp` and `mov bp, sp`: it gives back the room taken
+        for local variables, then restores the caller's BP. It is exactly `mov sp, bp` followed by
+        `pop bp`, in one byte. Flags are not changed. A RET normally follows.
+        """
+        self.r[self.SP] = self.r[self.BP]
+        self.r[self.BP] = self.pop16()
 
     def retf(self, op):
         """Return from a far procedure: pop IP and then CS (opcode CB).

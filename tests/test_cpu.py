@@ -803,7 +803,7 @@ class TestInstructionsThatLeaveTheFlagsAlone(unittest.TestCase):
         "jmp short": [0xEB, 0x05], "jmp near": [0xE9, 0x05, 0x00],
         "call near": [0xE8, 0x05, 0x00], "call r/m16": [0xFF, 0xD3],
         "call far": [0x9A, 0x10, 0x00, 0x00, 0x30], "jmp far": [0xEA, 0x10, 0x00, 0x00, 0x30],
-        "jmp r/m16": [0xFF, 0xE3], "ret": [0xC3], "retf": [0xCB],
+        "jmp r/m16": [0xFF, 0xE3], "ret": [0xC3], "retf": [0xCB], "leave": [0xC9],
         "ret n": [0xC2, 0x02, 0x00], "retf n": [0xCA, 0x02, 0x00],
         "les": [0xC4, 0x1F], "lds": [0xC5, 0x1F],
         "movsb": [0xA4], "movsw": [0xA5], "stosb": [0xAA], "stosw": [0xAB], "lodsb": [0xAC], "lodsw": [0xAD],
@@ -1511,6 +1511,49 @@ class TestLea(unittest.TestCase):
         cpu = machine(bytes([0x8D, 0xC3]), False)
         with self.assertRaises(NotImplementedError):
             cpu.step()
+
+
+class TestLeave(unittest.TestCase):
+    """C9 LEAVE (80186 and later): mov sp, bp ; pop bp."""
+
+    def machine_with_frame(self, code, bp=0x01F0, sp=0x0100, saved_bp=0xABCD):
+        cpu = machine(bytes(code), False)
+        cpu.s[CPU.SS] = 0x4000
+        cpu.r[CPU.BP], cpu.r[CPU.SP] = bp, sp
+        cpu.ww(0x4000, bp, saved_bp)  # the caller's BP, which the procedure pushed
+        return cpu
+
+    def test_sp_goes_back_to_the_frame_and_bp_is_restored(self):
+        cpu = self.machine_with_frame([0xC9])
+        start_flags = cpu.flags
+        cpu.step()
+        self.assertEqual((cpu.r[CPU.BP], cpu.r[CPU.SP], cpu.ip, cpu.flags), (0xABCD, 0x01F2, 1, start_flags))
+
+    def test_it_does_what_the_two_instructions_it_replaces_do(self):
+        for bp, sp in ((0x01F0, 0x0100), (0x0200, 0x0200), (0x0010, 0xFFF0), (0xFFFE, 0x0000)):
+            leave = self.machine_with_frame([0xC9], bp=bp, sp=sp)
+            two = self.machine_with_frame([0x8B, 0xE5, 0x5D], bp=bp, sp=sp)  # mov sp,bp ; pop bp
+            leave.step()
+            two.step()
+            two.step()
+            self.assertEqual((leave.r, leave.flags), (two.r, two.flags), f"BP={bp:04X} SP={sp:04X}")
+
+    def test_the_value_of_sp_before_it_does_not_matter(self):
+        for sp in (0x0000, 0x0100, 0x0F00, 0xFFFF):
+            cpu = self.machine_with_frame([0xC9], sp=sp)
+            cpu.step()
+            self.assertEqual(cpu.r[CPU.SP], 0x01F2, f"SP={sp:04X}")
+
+    def test_a_procedure_from_start_to_finish(self):
+        """push bp ; mov bp,sp ; sub sp,10h ; (the locals are used) ; leave ; ret"""
+        code = [0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x10, 0x50, 0x53, 0xC9, 0xC3]  # ... push ax ; push bx ; leave ; ret
+        cpu = machine(bytes(code), False)
+        cpu.s[CPU.SS] = 0x4000
+        cpu.r[CPU.SP], cpu.r[CPU.BP] = 0x01FE, 0x1234
+        cpu.ww(0x4000, 0x01FE, 0x0777)  # the return address, as a call would have pushed it
+        for _ in range(7):  # up to and including the ret
+            cpu.step()
+        self.assertEqual((cpu.r[CPU.BP], cpu.r[CPU.SP], cpu.ip), (0x1234, 0x0200, 0x0777))
 
 
 if __name__ == "__main__":

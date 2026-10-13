@@ -89,6 +89,7 @@ class TestText(unittest.TestCase):
             (b"\x9F", "lahf"),
             (b"\xC3", "ret"),
             (b"\xCB", "retf"),
+            (b"\xC9", "leave"),   # from esetup.exe
             (b"\xE6\x43", "out 43, al"),   # from esetup.exe
             (b"\xE4\x40", "in al, 40"),
             (b"\xE5\x61", "in ax, 61"),

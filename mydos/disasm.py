@@ -18,11 +18,11 @@ SEG_PREFIXES = {Op.ES_PREFIX: "es", Op.CS_PREFIX: "cs", Op.SS_PREFIX: "ss", Op.D
 JCC = ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"]
 # instructions that are a single byte with no operands
 PLAIN = {
-    Op.NOP: "nop", Op.CBW: "cbw", Op.CWD: "cwd", Op.PUSHF: "pushf", Op.PUSHA: "pusha", Op.POPA: "popa",
-    Op.POPF: "popf", Op.SAHF: "sahf", Op.LAHF: "lahf", Op.RET_NEAR: "ret", Op.RETF: "retf", Op.HLT: "hlt",
-    Op.CLC: "clc", Op.STC: "stc", Op.CLI: "cli",
-    Op.STI: "sti", Op.CLD: "cld", Op.STD: "std", Op.SCASB: "scasb", Op.SCASW: "scasw",
-    Op.MOVSB: "movsb", Op.MOVSW: "movsw", Op.CMPSB: "cmpsb", Op.CMPSW: "cmpsw",
+    Op.NOP: "nop", Op.CBW: "cbw", Op.CWD: "cwd", Op.HLT: "hlt",
+    Op.PUSHF: "pushf", Op.POPF: "popf", Op.SAHF: "sahf", Op.LAHF: "lahf", Op.PUSHA: "pusha", Op.POPA: "popa",
+    Op.RET_NEAR: "ret", Op.RETF: "retf", Op.LEAVE: "leave",
+    Op.CLC: "clc", Op.STC: "stc", Op.CLI: "cli", Op.STI: "sti", Op.CLD: "cld", Op.STD: "std",
+    Op.SCASB: "scasb", Op.SCASW: "scasw", Op.MOVSB: "movsb", Op.MOVSW: "movsw", Op.CMPSB: "cmpsb", Op.CMPSW: "cmpsw",
     Op.STOSB: "stosb", Op.STOSW: "stosw", Op.LODSB: "lodsb", Op.LODSW: "lodsw",
 }
 COMPARING = (Op.CMPSB, Op.CMPSW, Op.SCASB, Op.SCASW)  # these look at ZF, so a prefix F3 reads "repe"

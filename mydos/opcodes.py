@@ -69,6 +69,7 @@ class Op(IntEnum):
     RET_NEAR = 0xC3      # pops IP from the stack
     LES = 0xC4           # + ModRM (memory): load a register and ES from a far pointer
     LDS = 0xC5           # + ModRM (memory): load a register and DS from a far pointer
+    LEAVE = 0xC9         # 80186 and later: mov sp, bp ; pop bp
     RETF_POP = 0xCA      # followed by imm16: pops IP and CS, then drops that many bytes of arguments
     RETF = 0xCB          # pops IP, then CS
     MOV_RM_IMM = 0xC6    # C6 (byte) and C7 (word) + ModRM (reg field 0) + the constant: r/m <- imm
