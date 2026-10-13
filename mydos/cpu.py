@@ -44,6 +44,7 @@ class CPU:
         self.ip = 0
         self.flags = 0x0002
         self.int_handlers = {}  # int number -> fn(cpu)
+        self.instructions = 0  # how many instructions have been started: the emulated time
         self.port_readers = {}  # I/O port number -> fn(port): a byte read from the device behind that port
         self.port_writers = {}  # I/O port number -> fn(port, byte): a byte written to that device
         self.start_ip = 0  # set by step(): IP of the instruction being executed
@@ -434,6 +435,7 @@ class CPU:
         stops the emulator with an error showing where it happened and the bytes around it, so the
         next thing to implement is always obvious.
         """
+        self.instructions += 1
         if self.trace:
             self.trace(self)
         self.start_ip = self.ip  # where this instruction began (for error messages)

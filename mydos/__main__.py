@@ -3,7 +3,7 @@ import struct
 import sys
 from dataclasses import dataclass
 
-from . import bios, disasm, dos, dump
+from . import bios, disasm, dos, dump, timer
 from .cpu import CPU
 
 PSP_SEG = 0x1000
@@ -106,6 +106,7 @@ def main():
     cpu = CPU()
     bios.install(cpu)
     dos.install(cpu)
+    timer.install(cpu)
     load(cpu, args.program)
     log = open(args.d, "w") if args.d else None
     if log:

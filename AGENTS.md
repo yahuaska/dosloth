@@ -14,6 +14,7 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/cpu.py`  - memory, registers, flags, instruction loop
 - `mydos/dos.py`  - INT 21h and friends (Python-side handlers)
 - `mydos/bios.py` - BIOS interrupts (INT 1Ah time of day so far), also Python-side handlers
+- `mydos/timer.py` - the 8253/8254 timer on ports 40h-43h; its time is the count of executed instructions
 - `mydos/disasm.py` - bytes -> text like `mov ax, bx`, only used for the trace. Teach it every opcode the CPU learns
   (`tests/test_disasm.py` fails if it is out of step)
 - `mydos/__main__.py` - loads a .COM/.EXE and runs it: `python -m mydos tests/hello.com`;
