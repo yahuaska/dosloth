@@ -121,5 +121,32 @@ class TestWriteToHandle(unittest.TestCase):
         self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.s[CPU.DS]), (1, 3, 0x0100, 0x2000))
 
 
+class TestGetCurrentDrive(unittest.TestCase):
+    """INT 21h AH=19h: which drive is the current one?"""
+
+    def test_the_answer_is_drive_c(self):
+        cpu = int21(0x1900)
+        self.assertEqual(cpu.get8(0), 2)  # 0 is A:, 1 is B:, 2 is C:
+
+    def test_it_agrees_with_the_drive_in_the_environment_the_program_is_given(self):
+        from mydos import psp
+        drive_letter = psp.environment("x.exe").split(b"=")[1][:1]  # the C of COMSPEC=C:\...
+        self.assertEqual(chr(ord("A") + int21(0x1900).get8(0)).encode(), drive_letter)
+
+    def test_other_registers_and_the_flags_are_left_alone(self):
+        for carry in (False, True):
+            cpu = CPU()
+            dos.install(cpu)
+            cpu.s[CPU.CS] = 0x1000
+            cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+            cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = 0x1900, 0x1111, 0x2222, 0x3333
+            cpu.set_flag(flags.CF, carry)
+            start_flags = cpu.flags
+            cpu.step()
+            registers = (cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX])
+            self.assertEqual(registers, (0x1902, 0x1111, 0x2222, 0x3333))
+            self.assertEqual(cpu.flags, start_flags)  # AH keeps its 19h: only AL is the answer
+
+
 if __name__ == "__main__":
     unittest.main()

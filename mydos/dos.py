@@ -7,11 +7,12 @@ DOS_VERSION = (7, 1)  # (major, minor) reported by INT 21h AH=30h
 OEM_MICROSOFT = 0xFF
 CONSOLE_INFO = 0x80D3  # IOCTL answer for the console: a character device, standard input and output
 STANDARD_HANDLES = (0, 1, 2)  # standard input, standard output, standard error: all three are the console
+DEFAULT_DRIVE = 2  # the current drive for INT 21h AH=19h: 0 is A:, 1 is B:, 2 is C: (as the environment says)
 MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands out nothing above it
 
 
 def int21(cpu):
-    """INT 21h: DOS services, selected by AH. Only 09h, 25h, 30h, 35h, 40h, 44h, 4Ah and 4Ch so far."""
+    """INT 21h: DOS services, selected by AH. Only 09h, 19h, 25h, 30h, 35h, 40h, 44h, 4Ah and 4Ch so far."""
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
         off = cpu.r[CPU.DX]
@@ -21,6 +22,8 @@ def int21(cpu):
             off = (off + 1) & 0xFFFF
         sys.stdout.write(out.decode("cp437"))
         sys.stdout.flush()
+    elif ah == 0x19:  # get the current drive into AL: 0 for A:, 1 for B:, 2 for C:, ...
+        cpu.set8(0, DEFAULT_DRIVE)
     elif ah == 0x25:  # set interrupt vector AL to DS:DX
         # The vector table is real memory at 0000:0000, 4 bytes per interrupt: offset, segment.
         # Nothing jumps through it yet: INT still calls the Python handlers.
