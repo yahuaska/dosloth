@@ -225,5 +225,65 @@ class TestSelectDrive(unittest.TestCase):
             self.assertEqual((cpu.get8(4), cpu.flags), (0x0E, start_flags))
 
 
+class TestIoctlRemovable(unittest.TestCase):
+    """INT 21h AH=44h AL=08h: is the medium of this drive removable? BL counts from 1; 0 is the current drive."""
+
+    def ask(self, bl, current=None, carry=False):
+        """Run `mov ax,4408h ; mov bl,BL ; int 21h`, after selecting `current` as the drive if given."""
+        cpu = CPU()
+        dos.install(cpu)
+        cpu.s[CPU.CS] = 0x1000
+        code = []
+        if current is not None:
+            code += [0xB2, current, 0xB4, 0x0E, 0xCD, 0x21]  # mov dl,current ; mov ah,0Eh ; int 21h
+        code += [0xB8, 0x08, 0x44, 0xB3, bl, 0xCD, 0x21]  # mov ax,4408h ; mov bl,BL ; int 21h
+        cpu.mem[0x10000:0x10000 + len(code)] = bytes(code)
+        cpu.r[CPU.CX], cpu.r[CPU.DX] = 0x2222, 0x3333
+        steps = 6 if current is not None else 3
+        for i in range(steps):
+            cpu.step()
+            if i == 2 and current is not None:
+                cpu.set_flag(flags.CF, carry)  # the carry before the call, whatever the selection did to it
+        return cpu
+
+    def test_the_floppies_are_removable(self):
+        for bl in (1, 2):  # A: and B:
+            cpu = self.ask(bl)
+            self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX]), (False, 0), f"BL={bl}")
+
+    def test_the_hard_disk_is_fixed(self):
+        cpu = self.ask(3)  # C:
+        self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX]), (False, 1))
+
+    def test_the_cd_rom_is_removable(self):
+        cpu = self.ask(4)  # D:
+        self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX]), (False, 0))
+
+    def test_bl_0_asks_about_the_current_drive(self):
+        for current, answer in ((0, 0), (1, 0), (2, 1), (3, 0)):
+            cpu = self.ask(0, current=current)
+            self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX]), (False, answer), f"current drive {current}")
+        self.assertEqual(self.ask(0).r[CPU.AX], 1)  # a program starts on C:, the hard disk
+
+    def test_a_drive_that_does_not_exist_is_error_0fh(self):
+        for bl in (5, 6, 26, 27, 255):  # E: and beyond
+            cpu = self.ask(bl)
+            self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX]), (True, 0x0F), f"BL={bl}")
+
+    def test_the_carry_is_cleared_on_success(self):
+        cpu = self.ask(3, current=2, carry=True)
+        self.assertFalse(cpu.get_flag(flags.CF))
+
+    def test_other_registers_are_left_alone(self):
+        cpu = self.ask(3)
+        self.assertEqual((cpu.r[CPU.BX] & 0xFF, cpu.r[CPU.CX], cpu.r[CPU.DX]), (3, 0x2222, 0x3333))
+
+    def test_the_numbers_of_the_three_functions_do_not_agree_and_the_program_copes(self):
+        """esetup.exe selects drive CL (from 0), then asks about drive CL+1 (from 1): the same disk."""
+        for drive in range(4):
+            cpu = self.ask(drive + 1)
+            self.assertEqual(cpu.r[CPU.AX], 0 if drive in (0, 1, 3) else 1, f"drive {drive}")
+
+
 if __name__ == "__main__":
     unittest.main()

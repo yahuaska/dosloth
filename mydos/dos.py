@@ -8,6 +8,7 @@ OEM_MICROSOFT = 0xFF
 CONSOLE_INFO = 0x80D3  # IOCTL answer for the console: a character device, standard input and output
 STANDARD_HANDLES = (0, 1, 2)  # standard input, standard output, standard error: all three are the console
 DRIVES = (0, 1, 2, 3)  # the drives that exist: A: B: C: D: (0 is A:). A constant until there is a config
+REMOVABLE_DRIVES = (0, 1, 3)  # A: and B: are floppies, D: is a CD-ROM; C: is a hard disk and stays put
 DEFAULT_DRIVE = 2  # the drive a program starts on: C:, as the environment says
 MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands out nothing above it
 
@@ -67,16 +68,28 @@ def int21(cpu, state):
             cpu.r[CPU.AX] = 6
     elif ah == 0x44:  # IOCTL: device control through a file handle in BX, subfunction in AL
         al = cpu.get8(0)
-        if al != 0x00:
+        if al == 0x00:
+            # Subfunction 0: get device information into DX. C libraries use it to ask "is this handle a
+            # terminal or a file?", which decides whether output is buffered. Bit 7 of DX set means a device.
+            if cpu.r[CPU.BX] in STANDARD_HANDLES:
+                cpu.r[CPU.DX] = CONSOLE_INFO
+                cpu.set_flag(flags.CF, False)
+            else:  # error 06: invalid handle (nothing else is open yet)
+                cpu.set_flag(flags.CF, True)
+                cpu.r[CPU.AX] = 6
+        elif al == 0x08:
+            # Subfunction 8: is the medium of the drive in BL removable? BL counts from 1 here (0 is the
+            # current drive), unlike AH=0Eh and AH=19h. AX = 0 means removable, 1 means fixed.
+            number = cpu.get8(3)  # 8-bit register 3 is BL
+            drive = state.current_drive if number == 0 else number - 1
+            if drive in DRIVES:
+                cpu.set_flag(flags.CF, False)
+                cpu.r[CPU.AX] = 0 if drive in REMOVABLE_DRIVES else 1
+            else:  # error 0Fh: invalid drive
+                cpu.set_flag(flags.CF, True)
+                cpu.r[CPU.AX] = 0x0F
+        else:
             raise NotImplementedError(f"INT 21h AH=44 AL={al:02X}")
-        # Subfunction 0: get device information into DX. C libraries use it to ask "is this handle a
-        # terminal or a file?", which decides whether output is buffered. Bit 7 of DX set means a device.
-        if cpu.r[CPU.BX] in STANDARD_HANDLES:
-            cpu.r[CPU.DX] = CONSOLE_INFO
-            cpu.set_flag(flags.CF, False)
-        else:  # error 06: invalid handle (nothing else is open yet)
-            cpu.set_flag(flags.CF, True)
-            cpu.r[CPU.AX] = 6
     elif ah == 0x4A:  # resize the memory block that starts at segment ES to BX paragraphs
         # Naive: we keep no list of blocks, only the top of memory. A block can grow or shrink as
         # long as it ends below that top. (DOS error 09, "not a block", cannot be told apart yet.)
