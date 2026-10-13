@@ -24,3 +24,5 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 ## Memory model
 1 MB flat bytearray, address = seg*16 + off (no A20 wrap yet).
 .COM loads at PSP:0100, CS=DS=ES=SS=PSP segment, SP=FFFE.
+The PSP is at segment 1000 (psp.py fills in the fields programs read: top of memory at PSP:0002, the
+environment segment at PSP:002C, the handle table, an empty command line); the environment is at 0FF0.

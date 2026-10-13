@@ -3,10 +3,11 @@ import struct
 import sys
 from dataclasses import dataclass
 
-from . import bios, disasm, dos, dump, timer
+from . import bios, disasm, dos, dump, psp, timer
 from .cpu import CPU
 
 PSP_SEG = 0x1000
+ENV_SEG = PSP_SEG - 0x10  # the environment block sits in the 256 bytes just below the PSP
 
 
 def load_com(cpu, data):
@@ -77,6 +78,7 @@ def load_exe(cpu, data):
 def load(cpu, path):
     """Pick the loader by file content, like DOS: MZ/ZM signature means EXE, else COM."""
     data = open(path, "rb").read()
+    psp.build(cpu, PSP_SEG, ENV_SEG, dos.MEMORY_TOP_SEG, path)
     if data[:2] in (b"MZ", b"ZM"):
         load_exe(cpu, data)
     else:
