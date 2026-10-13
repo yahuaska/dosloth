@@ -68,6 +68,11 @@ class TestText(unittest.TestCase):
             (b"\xFC", "cld"),
             (b"\x98", "cbw"),
             (b"\x92", "xchg ax, dx"),   # from esetup.exe
+            (b"\xA9\x01\x00", "test ax, 0001"),   # from esetup.exe
+            (b"\xA8\x80", "test al, 80"),
+            (b"\x84\xC3", "test bl, al"),
+            (b"\x85\x07", "test [bx], ax"),
+            (b"\x85\xD9", "test cx, bx"),
             (b"\x97", "xchg ax, di"),
             (b"\x87\xD8", "xchg bx, ax"),   # reg field BX first, r/m AX second
             (b"\x86\x07", "xchg al, [bx]"),

@@ -160,6 +160,11 @@ def _decode_opcode(r, op, seg_override):
         return f"{Alu(reg).name.lower()} {size}{rm}, {imm}"
     if Op.XCHG_AX_R16 < op < Op.XCHG_AX_R16 + 8:
         return f"xchg ax, {REG16[op - Op.XCHG_AX_R16]}"
+    if op in (Op.TEST_RM_REG, Op.TEST_RM_REG + 1):
+        dst, src = _operands(r, op, seg_override)  # the opcode's direction bit is 0: r/m comes first
+        return f"test {dst}, {src}"
+    if op in (Op.TEST_ACC_IMM, Op.TEST_ACC_IMM + 1):
+        return f"test ax, {r.u16():04X}" if op & 1 else f"test al, {r.u8():02X}"
     if op in (Op.XCHG_RM_REG, Op.XCHG_RM_REG + 1):
         dst, src = _operands(r, op, seg_override)  # the layout puts the register first for these opcodes
         return f"xchg {dst}, {src}"

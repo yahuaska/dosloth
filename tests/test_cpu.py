@@ -1176,5 +1176,75 @@ class TestPortInstructions(unittest.TestCase):
             self.assertIn("1000:0000", str(caught.exception))
 
 
+class TestTestInstruction(unittest.TestCase):
+    """TEST: AND for the flags only. 84 and 85 take ModRM; A8 and A9 take AL or AX and a constant."""
+
+    VALUES = {8: [0x00, 0x01, 0x02, 0x07, 0x7F, 0x80, 0xFF, 0x10],
+              16: [0x0000, 0x0001, 0x0002, 0x7FFF, 0x8000, 0xFFFF, 0x1234, 0x0100]}
+
+    def test_register_with_register(self):
+        for op in (0x84, 0x85):
+            bits = 16 if op & 1 else 8
+            for reg in range(8):
+                for rm in range(8):
+                    for cf in (False, True):
+                        label = f"{op:02X} reg {reg} rm {rm} cf {cf}"
+                        cpu = machine(bytes([op, 0xC0 | reg << 3 | rm]), cf)
+                        model = list(REGS16)
+                        model[CPU.BX] = MEM_ADDR
+                        cpu.step()
+                        shared = get(model, rm, bits) & get(model, reg, bits)
+                        self.assertEqual(cpu.r, model, label)  # nothing is stored
+                        self.assertEqual(cpu_flags(cpu), logic_flags(shared, bits), label)
+                        self.assertEqual(cpu.ip, 2, label)
+
+    def test_register_with_memory(self):
+        for op in (0x84, 0x85):
+            bits = 16 if op & 1 else 8
+            size = bits // 8
+            for reg in range(8):
+                label = f"{op:02X} reg {reg}"
+                cpu = machine(bytes([op, reg << 3 | 7]), False)  # [bx]
+                cpu.mem[0x20000 + MEM_ADDR - 1:0x20000 + MEM_ADDR + 4] = bytes(MEM_BYTES)
+                model = list(REGS16)
+                model[CPU.BX] = MEM_ADDR
+                from_memory = int.from_bytes(bytes(MEM_BYTES)[1:1 + size], "little")
+                cpu.step()
+                self.assertEqual(cpu.r, model, label)
+                self.assertEqual(bytes(cpu.mem[0x20000 + MEM_ADDR - 1:0x20000 + MEM_ADDR + 4]), bytes(MEM_BYTES), label)
+                self.assertEqual(cpu_flags(cpu), logic_flags(from_memory & get(model, reg, bits), bits), label)
+
+    def test_accumulator_with_constant(self):
+        for op in (0xA8, 0xA9):
+            bits = 16 if op & 1 else 8
+            for imm in self.VALUES[bits]:
+                for ax in (0x1234, 0x0000, 0xFFFF, 0x8001):
+                    label = f"{op:02X} imm {imm:X} AX {ax:04X}"
+                    code = bytes([op]) + imm.to_bytes(bits // 8, "little")
+                    cpu = machine(code, False)
+                    cpu.r[CPU.AX] = ax
+                    cpu.step()
+                    self.assertEqual(cpu.r[CPU.AX], ax, label)  # AX is not changed
+                    self.assertEqual(cpu_flags(cpu), logic_flags(ax & mask(bits) & imm, bits), label)
+                    self.assertEqual(cpu.ip, len(code), label)
+
+    def test_a_segment_prefix_picks_the_segment_of_the_memory_operand(self):
+        cpu = machine(bytes([0x26, 0x85, 0x07]), False)  # test es:[bx], ax
+        cpu.ww(0x3000, MEM_ADDR, 0x0001)
+        cpu.ww(0x2000, MEM_ADDR, 0x0000)
+        cpu.r[CPU.AX] = 0x0001
+        cpu.step()
+        self.assertFalse(cpu.get_flag(flags.ZF))  # ES holds a 1: they share a bit; DS holds 0: they would not
+
+    def test_the_odd_number_check_from_esetup(self):
+        """test ax, 1 ; jne +0Eh: taken when the number is odd."""
+        for ax, taken in ((5, True), (4, False), (0xFFFF, True), (0, False), (0x8000, False)):
+            cpu = machine(bytes([0xA9, 0x01, 0x00, 0x75, 0x0E]), False)
+            cpu.r[CPU.AX] = ax
+            cpu.step()
+            cpu.step()
+            self.assertEqual(cpu.ip, 5 + 0x0E if taken else 5, f"AX={ax:04X}")
+
+
 if __name__ == "__main__":
     unittest.main()

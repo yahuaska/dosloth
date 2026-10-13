@@ -134,6 +134,8 @@ class CPU:
             self.ops[Op.MOV_RM_REG + form] = self.mov_rm_reg
         for size in range(2):
             self.ops[Op.XCHG_RM_REG + size] = self.xchg_rm_reg
+            self.ops[Op.TEST_RM_REG + size] = self.test_rm_reg
+            self.ops[Op.TEST_ACC_IMM + size] = self.test_acc_imm
         for i in range(1, 8):  # 90 is NOP
             self.ops[Op.XCHG_AX_R16 + i] = self.xchg_ax_r16
         for size in range(2):
@@ -593,6 +595,25 @@ class CPU:
         bits = 16 if op & 1 else 8
         imm = self.fetch16() if bits == 16 else self.fetch8()  # read after the ModRM bytes, which decode ate
         m.write(self, bits, imm)
+
+    def test_rm_reg(self, op):
+        """Find out which bits two operands have in common, and keep only the flags (opcodes 84, 85 + ModRM).
+
+        TEST is AND with the result thrown away, as CMP is SUB with the result thrown away. The flags then
+        say whether the operands share any bit: ZF is set if they share none. Nothing is written, so
+        the direction bit of the opcode means nothing; only the size bit does.
+        """
+        m, bits, _ = self.operands(op)
+        self.set_logic_flags(m.read(self, bits) & self.get_reg(m.reg, bits), bits)
+
+    def test_acc_imm(self, op):
+        """The same for AL (opcode A8) or AX (opcode A9) and a constant after the opcode.
+
+        `test ax, 1` asks whether the lowest bit is set, that is, whether the number is odd.
+        """
+        bits = 16 if op & 1 else 8
+        imm = self.fetch16() if bits == 16 else self.fetch8()
+        self.set_logic_flags(self.get_reg(0, bits) & imm, bits)  # register 0 is AL or AX
 
     def xchg_rm_reg(self, op):
         """Swap a register with a register or a memory operand (opcodes 86 for bytes, 87 for words + ModRM).

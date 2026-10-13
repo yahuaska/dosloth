@@ -30,6 +30,7 @@ class Op(IntEnum):
     ALU_RM8_IMM8 = 0x80    # + ModRM + imm8:  the operation is the ModRM 'reg' field (see Alu)
     ALU_RM16_IMM16 = 0x81  # + ModRM + imm16
     ALU_RM16_IMM8 = 0x83   # + ModRM + imm8, sign-extended to 16 bits
+    TEST_RM_REG = 0x84   # 84 (byte) and 85 (word) + ModRM: AND a register with r/m, flags only
     XCHG_RM_REG = 0x86   # 86 (byte) and 87 (word) + ModRM: swap a register with a register or memory
     MOV_RM_REG = 0x88    # 88..8B + ModRM: r/m8 <- r8, r/m16 <- r16, r8 <- r/m8, r16 <- r/m16 (see CPU.operands)
     MOV_RM16_SREG = 0x8C  # followed by ModRM (reg = segment register): r/m16 <- sreg
@@ -50,6 +51,7 @@ class Op(IntEnum):
     MOVSW = 0xA5         # copy DS:SI to ES:DI
     CMPSB = 0xA6         # compare DS:SI with ES:DI
     CMPSW = 0xA7
+    TEST_ACC_IMM = 0xA8  # A8 (AL, imm8) and A9 (AX, imm16): AND the accumulator with a constant, flags only
     STOSB = 0xAA         # store AL/AX at ES:DI
     STOSW = 0xAB
     LODSB = 0xAC         # load AL/AX from DS:SI
