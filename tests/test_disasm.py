@@ -5,9 +5,10 @@ from mydos.disasm import disasm
 
 
 # A ModRM byte that is valid after the opcode: a register operand, and the 'reg' field the opcode needs.
-# Most opcodes accept any; the groups below only know some operations (C6 and C7 /0 = MOV, FE and FF /0 = INC),
+# Most opcodes accept any; the groups below only know some operations (8F, C6 and C7 /0 = POP and MOV,
+# FE and FF /0 = INC),
 # and LES and LDS need a memory operand ([bx]).
-MODRM_FOR = {0xC6: 0xC0, 0xC7: 0xC0, 0xFE: 0xC0, 0xFF: 0xC0, 0xC4: 0x1F, 0xC5: 0x1F}
+MODRM_FOR = {0x8F: 0xC0, 0xC6: 0xC0, 0xC7: 0xC0, 0xFE: 0xC0, 0xFF: 0xC0, 0xC4: 0x1F, 0xC5: 0x1F}
 
 
 def machine(code):
@@ -93,6 +94,9 @@ class TestText(unittest.TestCase):
             (b"\xEE", "out dx, al"),
             (b"\xEF", "out dx, ax"),
             (b"\xC4\x5E\x06", "les bx, [bp+6]"),   # from esetup.exe
+            (b"\x8F\x06\x4E\x21", "pop word [214E]"),   # from esetup.exe
+            (b"\x8F\x47\x02", "pop word [bx+2]"),
+            (b"\x8F\xC3", "pop bx"),
             (b"\xC5\x37", "lds si, [bx]"),
             (b"\xC2\x06\x00", "ret 0006"),
             (b"\xCA\x04\x00", "retf 0004"),

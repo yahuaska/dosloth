@@ -160,6 +160,11 @@ def _decode_opcode(r, op, seg_override):
         return f"{Alu(reg).name.lower()} {size}{rm}, {imm}"
     if Op.XCHG_AX_R16 < op < Op.XCHG_AX_R16 + 8:
         return f"xchg ax, {REG16[op - Op.XCHG_AX_R16]}"
+    if op == Op.POP_RM16:
+        reg, rm, is_mem = _modrm(r, seg_override, 16)
+        if reg != 0:
+            return None
+        return f"pop {'word ' if is_mem else ''}{rm}"
     if op in (Op.TEST_RM_REG, Op.TEST_RM_REG + 1):
         dst, src = _operands(r, op, seg_override)  # the opcode's direction bit is 0: r/m comes first
         return f"test {dst}, {src}"

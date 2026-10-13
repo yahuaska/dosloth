@@ -55,6 +55,7 @@ class CPU:
         # opcode byte -> handler(op). Groups get one entry per opcode value.
         self.ops = {
             Op.NOP: self.nop,
+            Op.POP_RM16: self.pop_rm16,
             Op.CBW: self.cbw,
             Op.CWD: self.cwd,
             Op.PUSHF: self.pushf,
@@ -552,6 +553,19 @@ class CPU:
         The register is chosen the same way as in PUSH.
         """
         self.r[op - Op.POP_R16] = self.pop16()
+
+    def pop_rm16(self, op):
+        """Take a word off the stack into a register or into memory (opcode 8F + ModRM).
+
+        The only way to pop straight into a memory cell: `pop word [214E]`. The ModRM byte (whose 'reg'
+        field has to be 0; the other values mean nothing) says where the word goes. The word is taken
+        off the stack first and then written, so `pop sp` leaves SP holding the word that was popped.
+        Flags are not changed.
+        """
+        m = modrm.decode(self, self.seg_override)
+        if m.reg != 0:
+            raise NotImplementedError(f"opcode 8F /{m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        m.write16(self, self.pop16())
 
     def push_sreg(self, op):
         """Push a segment register onto the stack (opcodes 06, 0E, 16, 1E for ES, CS, SS, DS).

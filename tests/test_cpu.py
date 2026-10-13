@@ -798,7 +798,7 @@ class TestInstructionsThatLeaveTheFlagsAlone(unittest.TestCase):
         "xchg ax,r16": [0x93], "xchg r/m8,r8": [0x86, 0x07], "xchg r/m16,r16": [0x87, 0x07],
         "nop": [0x90], "cbw": [0x98], "cwd": [0x99], "pushf": [0x9C], "lahf": [0x9F],
         "push r16": [0x53], "pop r16": [0x5B], "push es": [0x06], "pop es": [0x07],
-        "push r/m16": [0xFF, 0x37], "not r/m8": [0xF6, 0xD3], "not r/m16": [0xF7, 0xD3],
+        "push r/m16": [0xFF, 0x37], "pop r/m16": [0x8F, 0x07], "not r/m8": [0xF6, 0xD3], "not r/m16": [0xF7, 0xD3],
         "jmp short": [0xEB, 0x05], "jmp near": [0xE9, 0x05, 0x00],
         "call near": [0xE8, 0x05, 0x00], "call r/m16": [0xFF, 0xD3],
         "jmp r/m16": [0xFF, 0xE3], "ret": [0xC3], "retf": [0xCB],
@@ -1244,6 +1244,65 @@ class TestTestInstruction(unittest.TestCase):
             cpu.step()
             cpu.step()
             self.assertEqual(cpu.ip, 5 + 0x0E if taken else 5, f"AX={ax:04X}")
+
+
+class TestPopIntoOperand(unittest.TestCase):
+    """8F /0: pop word into a register or memory."""
+
+    def machine_with_stack(self, code, *words):
+        cpu = machine(bytes(code), False)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0200
+        for i, word in enumerate(words):
+            cpu.ww(0x4000, 0x0200 + 2 * i, word)
+        return cpu
+
+    def test_into_memory_at_a_direct_address_from_esetup(self):
+        cpu = self.machine_with_stack([0x8F, 0x06, 0x4E, 0x21, 0x8F, 0x06, 0x50, 0x21], 0x1234, 0xABCD, 0x9999)
+        cpu.step()
+        cpu.step()
+        self.assertEqual((cpu.rw(0x2000, 0x214E), cpu.rw(0x2000, 0x2150)), (0x1234, 0xABCD))  # the first word first
+        self.assertEqual((cpu.r[CPU.SP], cpu.ip), (0x0204, 8))
+
+    def test_into_every_register(self):
+        for reg in range(8):
+            cpu = self.machine_with_stack([0x8F, 0xC0 | reg], 0xBEEF)
+            before = list(cpu.r)
+            start_flags = cpu.flags
+            cpu.step()
+            before[reg] = 0xBEEF
+            before[CPU.SP] = 0xBEEF if reg == CPU.SP else 0x0202  # pop sp leaves the popped word in SP
+            self.assertEqual(cpu.r, before, f"reg {reg}")
+            self.assertEqual(cpu.flags, start_flags)
+
+    def test_the_address_may_use_registers_and_a_displacement(self):
+        cpu = self.machine_with_stack([0x8F, 0x47, 0xFE], 0x7777)  # pop word [bx-2]
+        cpu.step()
+        self.assertEqual(cpu.rw(0x2000, MEM_ADDR - 2), 0x7777)
+
+    def test_a_segment_prefix_picks_the_segment_of_the_destination(self):
+        cpu = self.machine_with_stack([0x26, 0x8F, 0x07], 0x5555)  # pop word es:[bx]
+        cpu.step()
+        self.assertEqual((cpu.rw(0x3000, MEM_ADDR), cpu.rw(0x2000, MEM_ADDR)), (0x5555, 0))
+
+    def test_only_a_word_is_written(self):
+        cpu = self.machine_with_stack([0x8F, 0x07], 0x1122)  # pop word [bx]
+        cpu.mem[0x20000 + MEM_ADDR - 1] = 0xDD
+        cpu.mem[0x20000 + MEM_ADDR + 2] = 0xEE
+        cpu.step()
+        self.assertEqual((cpu.mem[0x20000 + MEM_ADDR - 1], cpu.mem[0x20000 + MEM_ADDR + 2]), (0xDD, 0xEE))
+
+    def test_push_and_pop_of_memory_round_trip(self):
+        cpu = self.machine_with_stack([0xFF, 0x37, 0x8F, 0x47, 0x04])  # push word [bx] ; pop word [bx+4]
+        cpu.ww(0x2000, MEM_ADDR, 0xC0DE)
+        cpu.step()
+        cpu.step()
+        self.assertEqual((cpu.rw(0x2000, MEM_ADDR + 4), cpu.r[CPU.SP]), (0xC0DE, 0x0200))
+
+    def test_the_other_values_of_the_reg_field_stop_loudly(self):
+        for reg in range(1, 8):
+            cpu = self.machine_with_stack([0x8F, 0xC0 | reg << 3], 0x1234)
+            with self.assertRaises(NotImplementedError, msg=f"/{reg}"):
+                cpu.step()
 
 
 if __name__ == "__main__":
