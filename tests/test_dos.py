@@ -285,5 +285,88 @@ class TestIoctlRemovable(unittest.TestCase):
             self.assertEqual(cpu.r[CPU.AX], 0 if drive in (0, 1, 3) else 1, f"drive {drive}")
 
 
+class TestCloseHandle(unittest.TestCase):
+    """INT 21h AH=3Eh: close a file handle."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        dos.install(self.cpu)
+        self.cpu.s[CPU.CS], self.cpu.s[CPU.DS] = 0x1000, 0x2000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        for i, byte in enumerate(b"text"):
+            self.cpu.wb(0x2000, 0x0100 + i, byte)
+
+    def call(self, ax, bx=0, cx=0, dx=0):
+        """Run one INT 21h with these registers on the CPU of this test; returns (printed, error output)."""
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = ax, bx, cx, dx
+        cpu.ip = 0
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            cpu.step()
+        return out.getvalue(), err.getvalue()
+
+    def close(self, handle):
+        self.call(0x3E00, bx=handle)
+        return self.cpu.get_flag(flags.CF), self.cpu.r[CPU.AX] if self.cpu.get_flag(flags.CF) else None
+
+    def test_the_standard_handles_can_be_closed(self):
+        for handle in (0, 1, 2):
+            self.assertEqual(self.close(handle), (False, None), f"handle {handle}")
+
+    def test_closing_a_handle_twice_is_error_6(self):
+        self.assertEqual(self.close(1), (False, None))
+        self.assertEqual(self.close(1), (True, 6))
+
+    def test_a_handle_that_was_never_open_is_error_6(self):
+        for handle in (3, 5, 19, 255, 0xFFFF):
+            self.assertEqual(self.close(handle), (True, 6), f"handle {handle}")
+
+    def test_writing_to_a_closed_handle_fails_and_prints_nothing(self):
+        self.assertEqual(self.call(0x4000, bx=1, cx=4, dx=0x0100), ("text", ""))  # open: it prints
+        self.close(1)
+        self.assertEqual(self.call(0x4000, bx=1, cx=4, dx=0x0100), ("", ""))  # closed: nothing
+        self.assertEqual((self.cpu.get_flag(flags.CF), self.cpu.r[CPU.AX]), (True, 6))
+
+    def test_closing_one_handle_leaves_the_others_open(self):
+        self.close(1)
+        self.assertEqual(self.call(0x4000, bx=2, cx=4, dx=0x0100), ("", "text"))  # stderr still works
+        self.assertFalse(self.cpu.get_flag(flags.CF))
+        self.call(0x4400, bx=0)  # and so does the IOCTL question about stdin
+        self.assertFalse(self.cpu.get_flag(flags.CF))
+
+    def test_the_ioctl_question_about_a_closed_handle_is_error_6(self):
+        self.close(0)
+        self.call(0x4400, bx=0)
+        self.assertEqual((self.cpu.get_flag(flags.CF), self.cpu.r[CPU.AX]), (True, 6))
+
+    def test_closing_everything_the_way_a_program_does_at_exit(self):
+        """The C library closes the streams one by one when the program ends."""
+        for handle in range(3):
+            self.assertEqual(self.close(handle), (False, None), f"handle {handle}")
+        for handle in range(3):
+            self.assertEqual(self.close(handle), (True, 6), f"handle {handle} again")
+
+    def test_a_carry_set_before_is_cleared_on_success(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.call(0x3E00, bx=2)
+        self.assertFalse(self.cpu.get_flag(flags.CF))
+
+    def test_other_registers_are_left_alone(self):
+        self.call(0x3E00, bx=1, cx=0x2222, dx=0x3333)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.get8(4)), (1, 0x2222, 0x3333, 0x3E))
+
+    def test_each_cpu_has_its_own_open_handles(self):
+        self.close(1)
+        other = CPU()
+        dos.install(other)
+        other.s[CPU.CS] = 0x1000
+        other.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        other.r[CPU.AX], other.r[CPU.BX] = 0x3E00, 1
+        other.step()
+        self.assertFalse(other.get_flag(flags.CF))  # for the other machine handle 1 was still open
+
+
 if __name__ == "__main__":
     unittest.main()

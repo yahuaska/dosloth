@@ -18,10 +18,11 @@ class DosState:
 
     def __init__(self):
         self.current_drive = DEFAULT_DRIVE
+        self.open_handles = set(STANDARD_HANDLES)  # the file handles that are open; closing takes one out
 
 
 def int21(cpu, state):
-    """INT 21h: DOS services, selected by AH. Only 09h, 0Eh, 19h, 25h, 30h, 35h, 40h, 44h, 4Ah and 4Ch so far."""
+    """INT 21h: DOS services, selected by AH. Only 09h, 0Eh, 19h, 25h, 30h, 35h, 3Eh, 40h, 44h, 4Ah, 4Ch so far."""
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
         off = cpu.r[CPU.DX]
@@ -54,16 +55,24 @@ def int21(cpu, state):
         cpu.set8(7, OEM_MICROSOFT)
         cpu.set8(3, 0)
         cpu.r[CPU.CX] = 0
+    elif ah == 0x3E:  # close the file handle in BX
+        handle = cpu.r[CPU.BX]
+        if handle in state.open_handles:  # the standard handles may be closed too; writing to one then fails
+            state.open_handles.discard(handle)
+            cpu.set_flag(flags.CF, False)
+        else:  # error 06: invalid handle: never opened, or already closed
+            cpu.set_flag(flags.CF, True)
+            cpu.r[CPU.AX] = 6
     elif ah == 0x40:  # write CX bytes from DS:DX to the file handle in BX; AX = how many were written
         handle, count = cpu.r[CPU.BX], cpu.r[CPU.CX]
-        if handle in STANDARD_HANDLES:  # the console; error output goes to our own error output
+        if handle in state.open_handles:  # the console (the only thing open so far); error output goes to ours
             data = bytes(cpu.rb(cpu.s[CPU.DS], (cpu.r[CPU.DX] + i) & 0xFFFF) for i in range(count))
             stream = sys.stderr if handle == 2 else sys.stdout
             stream.write(data.decode("cp437"))
             stream.flush()
             cpu.r[CPU.AX] = count
             cpu.set_flag(flags.CF, False)
-        else:  # error 06: invalid handle (nothing else is open yet)
+        else:  # error 06: invalid handle: not open
             cpu.set_flag(flags.CF, True)
             cpu.r[CPU.AX] = 6
     elif ah == 0x44:  # IOCTL: device control through a file handle in BX, subfunction in AL
@@ -71,10 +80,10 @@ def int21(cpu, state):
         if al == 0x00:
             # Subfunction 0: get device information into DX. C libraries use it to ask "is this handle a
             # terminal or a file?", which decides whether output is buffered. Bit 7 of DX set means a device.
-            if cpu.r[CPU.BX] in STANDARD_HANDLES:
+            if cpu.r[CPU.BX] in state.open_handles:  # all of them are the console so far
                 cpu.r[CPU.DX] = CONSOLE_INFO
                 cpu.set_flag(flags.CF, False)
-            else:  # error 06: invalid handle (nothing else is open yet)
+            else:  # error 06: invalid handle: not open
                 cpu.set_flag(flags.CF, True)
                 cpu.r[CPU.AX] = 6
         elif al == 0x08:
