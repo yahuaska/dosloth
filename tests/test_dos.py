@@ -6,6 +6,7 @@ from pathlib import Path
 
 from mydos import config, dos, flags
 from mydos.cpu import CPU
+from mydos.volumes import Volumes
 
 
 def int21(ax, bx=0, dx=0x1111):
@@ -376,7 +377,7 @@ class TestTheDrivesComeFromTheConfig(unittest.TestCase):
     def cpu_for(self, text):
         """A CPU with DOS installed for the machine in `text`; the media are all in memory, so no host path is used."""
         cpu = CPU()
-        dos.install(cpu, config.parse(tomllib.loads(text), Path.cwd()))
+        dos.install(cpu, Volumes(config.parse(tomllib.loads(text), Path.cwd())))
         cpu.s[CPU.CS] = 0x1000
         cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
         return cpu

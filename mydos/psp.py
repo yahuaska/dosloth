@@ -7,24 +7,23 @@ that there is no memory at all.
 
 Only the fields programs are known to read are filled in; the rest stay 0.
 """
-import os
 
 JFT_OFFSET = 0x18  # the table of file handles that starts at PSP:0018
 JFT_SIZE = 20  # how many handles a program may have open
 
 
-def environment(program_path):
+def environment(dos_path):
     """The bytes of an environment block: NAME=value strings, an empty string to end them, the program's name.
 
     After the strings come a word with the number of strings that follow (always 1), and the full name of
-    the program, which is how a program learns where it was started from.
+    the program as DOS writes it (`C:\\SETUP\\ESETUP.EXE`), which is how a program learns where it was started from.
     """
     strings = [b"COMSPEC=C:\\COMMAND.COM", b"PATH=C:\\"]
-    name = b"C:\\" + os.path.basename(program_path).upper().encode("ascii", "replace")
+    name = dos_path.upper().encode("ascii", "replace")
     return b"\0".join(strings) + b"\0\0" + (1).to_bytes(2, "little") + name + b"\0"
 
 
-def build(cpu, psp_seg, env_seg, top_seg, program_path):
+def build(cpu, psp_seg, env_seg, top_seg, dos_path):
     """Write the PSP at psp_seg:0000 and the environment block at env_seg:0000.
 
     `top_seg` is the segment just above the memory the program may use; it goes to PSP:0002, and the
@@ -45,5 +44,5 @@ def build(cpu, psp_seg, env_seg, top_seg, program_path):
         psp[fcb + 1:fcb + 12] = b" " * 11  # a blank file name
     psp[0x80:0x82] = b"\x00\x0D"  # the command line: no characters, and the carriage return that ends it
     cpu.mem[psp_seg * 16:psp_seg * 16 + 256] = psp
-    env = environment(program_path)
+    env = environment(dos_path)
     cpu.mem[env_seg * 16:env_seg * 16 + len(env)] = env

@@ -20,6 +20,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   used for drive numbers and types; the mounted media will matter when the file functions arrive
 - `mydos/filesystem.py` - the file systems of the drives: HostDir (a host directory, names matched without
   regard to case, only 8.3 names visible) and MemFs (in memory), with one interface and DOS error numbers
+- `mydos/volumes.py` - the drives as a program uses them: a file system per drive, the current directory of each, and
+  resolve(): a DOS path (`D:\X`, `..\Y`, `a/b`) -> file system + names. The program on the command line is named this way too
 - `mydos/timer.py` - the 8253/8254 timer on ports 40h-43h; its time is the count of executed instructions
 - `mydos/disasm.py` - bytes -> text like `mov ax, bx`, only used for the trace. Teach it every opcode the CPU learns
   (`tests/test_disasm.py` fails if it is out of step)

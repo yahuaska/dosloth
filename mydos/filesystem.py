@@ -33,6 +33,8 @@ from pathlib import Path
 FILE_NOT_FOUND = 2
 PATH_NOT_FOUND = 3
 ACCESS_DENIED = 5
+INVALID_DRIVE = 15
+DRIVE_NOT_READY = 21
 
 # the bits of a DOS file's attributes
 ATTR_READONLY = 0x01
@@ -123,6 +125,10 @@ class HostDir:
                 raise FsError(PATH_NOT_FOUND, f"{name!r} is not a directory")
             here = found
         return here
+
+    def host_path(self, parts):
+        """Where on the host the file or directory is. For a message, or for a file to put beside it."""
+        return self._find(parts)
 
     def _directory(self, parts):
         """The host path of a directory, which must be there."""
@@ -305,6 +311,12 @@ class MemFile:
 
     def close(self):
         self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exception):
+        self.close()
 
 
 class MemFs:

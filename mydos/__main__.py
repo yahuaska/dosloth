@@ -6,6 +6,8 @@ from pathlib import Path
 
 from . import bios, config, disasm, dos, dump, psp, timer
 from .cpu import CPU
+from .filesystem import FsError
+from .volumes import Volumes
 
 PSP_SEG = 0x1000
 ENV_SEG = PSP_SEG - 0x10  # the environment block sits in the 256 bytes just below the PSP
@@ -76,10 +78,13 @@ def load_exe(cpu, data):
     cpu.ip = h.ip
 
 
-def load(cpu, path):
-    """Pick the loader by file content, like DOS: MZ/ZM signature means EXE, else COM."""
-    data = open(path, "rb").read()
-    psp.build(cpu, PSP_SEG, ENV_SEG, dos.MEMORY_TOP_SEG, path)
+def load(cpu, data, dos_path):
+    """Pick the loader by file content, like DOS: MZ/ZM signature means EXE, else COM.
+
+    `data` is the program file and `dos_path` its full DOS name (`C:\\SETUP\\ESETUP.EXE`), which goes to the program
+    in its environment.
+    """
+    psp.build(cpu, PSP_SEG, ENV_SEG, dos.MEMORY_TOP_SEG, dos_path)
     if data[:2] in (b"MZ", b"ZM"):
         load_exe(cpu, data)
     else:
@@ -105,25 +110,41 @@ def main():
     parser.add_argument("-c", metavar="FILE", help="the configuration (TOML): drives, mounts, starting directory; "
                         "without it the current directory is the hard disk C:")
     parser.add_argument("-d", metavar="LOGFILE", help="write every executed instruction to LOGFILE")
-    parser.add_argument("program", help="the .COM or .EXE file to run")
+    parser.add_argument("program", help="the .COM or .EXE file to run, named as DOS names it: `ESETUP.EXE`, "
+                        "`C:\\SETUP\\ESETUP.EXE`, `setup/esetup.exe`; relative to the current directory of the "
+                        "starting drive (the `cwd` of the configuration)")
     args = parser.parse_args()
     try:
         machine = config.load(args.c) if args.c else config.default(Path.cwd())
     except config.ConfigError as error:
         parser.error(str(error))  # prints the message with the usage and exits with status 2, before anything runs
 
+    volumes = Volumes(machine)
+    try:
+        where = volumes.resolve(args.program)
+        with where.filesystem.open(where.parts) as program:
+            data = program.read()
+    except FsError as error:
+        # not found, not a file, or on a drive that is not there or has nothing in it
+        parser.error(f"cannot run {args.program}: {error} (the program is named as DOS names a file, from the "
+                     "starting directory; to run one that is elsewhere on the host, mount its directory with -c)")
+    # the dump of a crash goes beside the program on the host, when the program is there
+    host_path = args.program
+    if hasattr(where.filesystem, "host_path"):
+        host_path = str(where.filesystem.host_path(where.parts))
+
     cpu = CPU()
     bios.install(cpu)
-    dos.install(cpu, machine)
+    dos.install(cpu, volumes)
     timer.install(cpu)
-    load(cpu, args.program)
+    load(cpu, data, where.dos_path())
     log = open(args.d, "w") if args.d else None
     if log:
         cpu.trace = make_trace(log)
     try:
         code = cpu.run()
     except Exception as e:
-        dump.write(cpu, args.program, e)  # leave something to debug with, then fail as usual
+        dump.write(cpu, host_path, e)  # leave something to debug with, then fail as usual
         raise
     finally:
         if log:

@@ -5,6 +5,7 @@ from pathlib import Path
 from . import flags
 from .config import default as default_config
 from .cpu import CPU, Exit
+from .volumes import Volumes
 
 DOS_VERSION = (7, 1)  # (major, minor) reported by INT 21h AH=30h
 OEM_MICROSOFT = 0xFF
@@ -16,9 +17,9 @@ MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands o
 class DosState:
     """What DOS remembers between calls. One of these goes with each CPU."""
 
-    def __init__(self, config):
-        self.config = config  # the machine: its drives, and where a program starts (see config.py)
-        self.current_drive = config.cwd_drive
+    def __init__(self, volumes):
+        self.volumes = volumes  # the drives, with the current drive and the current directory of each
+        self.config = volumes.config  # the machine: its drives, and where a program starts (see config.py)
         self.open_handles = set(STANDARD_HANDLES)  # the file handles that are open; closing takes one out
 
 
@@ -36,10 +37,10 @@ def int21(cpu, state):
     elif ah == 0x0E:  # make drive DL the current one (0 is A:, 1 is B:, ...); AL = how many drives there are
         drive = cpu.get8(2)  # 8-bit register 2 is DL
         if drive in state.config.disks:  # a drive that does not exist is not an error: the call just does nothing
-            state.current_drive = drive
+            state.volumes.current_drive = drive
         cpu.set8(0, state.config.drive_count)
     elif ah == 0x19:  # get the current drive into AL: 0 for A:, 1 for B:, 2 for C:, ...
-        cpu.set8(0, state.current_drive)
+        cpu.set8(0, state.volumes.current_drive)
     elif ah == 0x25:  # set interrupt vector AL to DS:DX
         # The vector table is real memory at 0000:0000, 4 bytes per interrupt: offset, segment.
         # Nothing jumps through it yet: INT still calls the Python handlers.
@@ -91,7 +92,7 @@ def int21(cpu, state):
             # Subfunction 8: is the medium of the drive in BL removable? BL counts from 1 here (0 is the
             # current drive), unlike AH=0Eh and AH=19h. AX = 0 means removable, 1 means fixed.
             number = cpu.get8(3)  # 8-bit register 3 is BL
-            drive = state.current_drive if number == 0 else number - 1
+            drive = state.volumes.current_drive if number == 0 else number - 1
             if drive in state.config.disks:
                 cpu.set_flag(flags.CF, False)
                 cpu.r[CPU.AX] = 0 if state.config.disks[drive].removable else 1
@@ -116,10 +117,10 @@ def int21(cpu, state):
         raise NotImplementedError(f"INT 21h AH={ah:02X}")
 
 
-def install(cpu, config=None):
-    """Hook DOS interrupt handlers into the CPU, for the machine that `config` describes.
+def install(cpu, volumes=None):
+    """Hook DOS interrupt handlers into the CPU, for the drives in `volumes` (see volumes.py).
 
-    Without one, the machine is the built-in one: the directory the emulator was started in is the hard disk C:.
+    Without any, the machine is the built-in one: the directory the emulator was started in is the hard disk C:.
     """
-    state = DosState(config if config is not None else default_config(Path.cwd()))
+    state = DosState(volumes if volumes is not None else Volumes(default_config(Path.cwd())))
     cpu.int_handlers[0x21] = lambda cpu: int21(cpu, state)

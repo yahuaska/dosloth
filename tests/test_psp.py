@@ -13,9 +13,9 @@ def word(cpu, seg, off):
 
 
 class TestBuild(unittest.TestCase):
-    def build(self, path="samples/esetup.exe"):
+    def build(self, dos_path="C:\\ESETUP.EXE"):
         cpu = CPU()
-        psp.build(cpu, 0x1000, 0x0FF0, 0xA000, path)
+        psp.build(cpu, 0x1000, 0x0FF0, 0xA000, dos_path)
         return cpu
 
     def test_the_fields_programs_read(self):
@@ -48,17 +48,20 @@ class TestBuild(unittest.TestCase):
         self.assertEqual(bytes(cpu.mem[0x0FEFF:0x0FF00]), b"\0")  # nothing is written below the environment
 
     def test_the_environment_block(self):
-        cpu = self.build("some/dir/esetup.exe")
+        cpu = self.build("C:\\SOME\\DIR\\ESETUP.EXE")
         env = bytes(cpu.mem[0x0FF00:0x0FF00 + 256])
         strings, rest = env.split(b"\0\0", 1)
         self.assertEqual(strings.split(b"\0"), [b"COMSPEC=C:\\COMMAND.COM", b"PATH=C:\\"])
         self.assertEqual(rest[:2], b"\x01\x00")  # one more string follows
-        self.assertEqual(rest[2:].split(b"\0")[0], b"C:\\ESETUP.EXE")  # the program's name, in capitals
+        self.assertEqual(rest[2:].split(b"\0")[0], b"C:\\SOME\\DIR\\ESETUP.EXE")  # the program's name, in full
 
     def test_the_environment_ends_with_two_zero_bytes_before_the_name(self):
         """A C library finds the end of the strings by looking for an empty one."""
-        env = psp.environment("x.com")
-        self.assertIn(b"\0\0\x01\x00C:\\X.COM\0", env)
+        env = psp.environment("C:\\GAMES\\X.COM")
+        self.assertIn(b"\0\0\x01\x00C:\\GAMES\\X.COM\0", env)
+
+    def test_the_name_is_shown_in_capitals(self):
+        self.assertIn(b"\x01\x00D:\\DIR\\PROG.EXE\0", psp.environment("d:\\dir\\prog.exe"))
 
 
 class TestAProgramSeesIt(unittest.TestCase):
@@ -69,8 +72,11 @@ class TestAProgramSeesIt(unittest.TestCase):
             path = os.path.join(directory, "t.com")
             with open(path, "wb") as f:
                 f.write(program)
-            result = subprocess.run([sys.executable, "-m", "mydos", path], capture_output=True, timeout=30,
-                                    cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            repository = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            environment = {**os.environ, "PYTHONPATH": repository}
+            # the program is C:\T.COM: the directory it was written to is the root of the built-in drive C:
+            result = subprocess.run([sys.executable, "-m", "mydos", "t.com"], capture_output=True, timeout=30,
+                                    cwd=directory, env=environment)
             self.assertEqual(result.stderr, b"", result.stderr)
             return result.returncode
 
