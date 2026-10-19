@@ -1,0 +1,27 @@
+# An example configuration for the emulator: python -m mydos -c config.example.toml PROGRAM
+#
+# A drive and the medium in it are described apart. [disks] says what kind of device each drive is, and
+# [mounts] says what is in it. A drive with no entry in [mounts] has nothing in it, like an empty floppy
+# drive; only a removable drive may be left empty.
+#
+# Relative paths are taken from the directory this file is in.
+
+# Where the program starts: a drive and a directory, inside DOS. Single quotes keep the backslash as it is.
+cwd = 'C:\'
+
+[disks.A]
+removable = true     # a floppy drive, with no disk in it
+
+[disks.B]
+removable = true
+
+[disks.C]
+removable = false    # a hard disk: it must have something mounted
+
+[disks.D]
+removable = true     # a CD-ROM
+
+[mounts]
+B = { type = "tmpfs" }                                  # a floppy in memory: gone when the emulator exits
+C = { type = "dir", path = "." }                        # the directory of this file is the root of C:
+D = { type = "dir", path = "samples", readonly = true } # a disc that cannot be written to
