@@ -17,11 +17,12 @@ It is a TOML file. A drive and the medium in it are described apart, as they are
 Every mistake in the file is a ConfigError with a message that says where it is, so a bad config stops the
 emulator before any program runs.
 """
-import os
 import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+from .filesystem import FsError, for_mount
 
 TOP_LEVEL_KEYS = {"cwd", "disks", "mounts"}
 DISK_KEYS = {"removable"}
@@ -60,22 +61,6 @@ class Config:
     def drive_count(self):
         """What INT 21h AH=0Eh answers: one more than the highest drive number, as there can be gaps."""
         return max(self.disks) + 1
-
-
-def find_ignoring_case(directory, name):
-    """The entry of a host directory called `name`, whatever the case, or None.
-
-    DOS does not tell ABC from abc, and Linux does. An exact match wins; failing that, the first of the
-    entries that differ only in case, in alphabetical order.
-    """
-    exact = directory / name
-    if exact.exists():
-        return exact
-    wanted = name.upper()
-    for entry in sorted(os.listdir(directory)):
-        if entry.upper() == wanted:
-            return directory / entry
-    return None
 
 
 def _table(value, where):
@@ -171,14 +156,13 @@ def _parse_cwd(text, disks):
         raise ConfigError(f"cwd: the drive {letter}: has nothing mounted, a program cannot start there")
     if any(part in (".", "..") for part in parts):
         raise ConfigError(f"cwd: {text!r} must name the directory itself, without . or ..")
-    shown = []
-    here = mount.path
-    for part in parts:
-        found = find_ignoring_case(here, part) if here is not None else None
-        if found is None or not found.is_dir():
-            raise ConfigError(f"cwd: there is no directory {part!r} on {letter}: in {text!r}")
-        here = found
-        shown.append(part.upper())
+    try:
+        is_dir = for_mount(mount).stat(parts).is_dir  # the same lookup the programs will get: without regard to case
+    except FsError:
+        is_dir = False
+    if not is_dir:
+        raise ConfigError(f"cwd: there is no directory {text!r} on {letter}:")
+    shown = [part.upper() for part in parts]
     return ord(letter) - ord("A"), "\\" + "\\".join(shown)
 
 

@@ -18,6 +18,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   `config.example.toml` shows the format. `python -m mydos -c FILE program` uses it; without `-c` the machine is
   built in: A: B: D: empty removable drives, the current directory as the hard disk C:. So far the drives are
   used for drive numbers and types; the mounted media will matter when the file functions arrive
+- `mydos/filesystem.py` - the file systems of the drives: HostDir (a host directory, names matched without
+  regard to case, only 8.3 names visible) and MemFs (in memory), with one interface and DOS error numbers
 - `mydos/timer.py` - the 8253/8254 timer on ports 40h-43h; its time is the count of executed instructions
 - `mydos/disasm.py` - bytes -> text like `mov ax, bx`, only used for the trace. Teach it every opcode the CPU learns
   (`tests/test_disasm.py` fails if it is out of step)

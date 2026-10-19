@@ -3,7 +3,6 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from mydos import config
 from mydos.config import ConfigError
@@ -324,34 +323,6 @@ class TestTheBuiltInMachine(ConfigTest):
         self.assertEqual([c.disks[n].mount for n in (0, 1, 3)], [None, None, None])
         self.assertEqual(c.disks[2].mount, config.Mount("dir", self.base, False))
         self.assertEqual((c.cwd_drive, c.cwd, c.drive_count), (2, "\\", 4))
-
-
-class TestFindingAFileWhateverItsCase(ConfigTest):
-    def test_an_exact_match_wins(self):
-        (self.base / "ABC").write_text("1")
-        (self.base / "abc").write_text("2")
-        self.assertEqual(config.find_ignoring_case(self.base, "abc"), self.base / "abc")
-        self.assertEqual(config.find_ignoring_case(self.base, "ABC"), self.base / "ABC")
-
-    def test_otherwise_the_case_does_not_matter(self):
-        (self.base / "Readme.Txt").write_text("x")
-        self.assertEqual(config.find_ignoring_case(self.base, "README.TXT"), self.base / "Readme.Txt")
-        self.assertEqual(config.find_ignoring_case(self.base, "readme.txt"), self.base / "Readme.Txt")
-
-    def test_two_that_differ_only_in_case_give_the_first_in_alphabetical_order(self):
-        (self.base / "Aa").write_text("1")
-        (self.base / "aA").write_text("2")
-        self.assertEqual(config.find_ignoring_case(self.base, "AA"), self.base / "Aa")
-
-    def test_the_choice_does_not_depend_on_the_order_the_system_lists_the_files_in(self):
-        (self.base / "Aa").write_text("1")
-        (self.base / "aA").write_text("2")
-        for listing in (["Aa", "aA"], ["aA", "Aa"]):
-            with self.subTest(listing=listing), mock.patch.object(config.os, "listdir", return_value=listing):
-                self.assertEqual(config.find_ignoring_case(self.base, "AA"), self.base / "Aa")
-
-    def test_nothing_found_is_none(self):
-        self.assertIsNone(config.find_ignoring_case(self.base, "nothing"))
 
 
 if __name__ == "__main__":
