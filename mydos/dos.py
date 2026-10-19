@@ -5,13 +5,15 @@ from pathlib import Path
 from . import flags
 from .config import default as default_config
 from .cpu import CPU, Exit
-from .filesystem import PATH_NOT_FOUND, FsError
+from .filesystem import ACCESS_DENIED, ATTR_DIRECTORY, ATTR_READONLY, ATTR_VOLUME, PATH_NOT_FOUND, FsError
+from .handles import Console, HandleTable, NullDevice, OpenFile
 from .volumes import Volumes
 
 DOS_VERSION = (7, 1)  # (major, minor) reported by INT 21h AH=30h
 OEM_MICROSOFT = 0xFF
 CONSOLE_INFO = 0x80D3  # IOCTL answer for the console: a character device, standard input and output
-STANDARD_HANDLES = (0, 1, 2)  # standard input, standard output, standard error: all three are the console
+DEVICE_INFO = 0x80C0  # the IOCTL answer for the auxiliary and printer devices: a character device, nothing special
+TOO_MANY_OPEN_FILES = 4
 MAX_PATH = 260  # how long a path from a program may be, with its ending zero
 MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands out nothing above it
 
@@ -40,11 +42,11 @@ class DosState:
     def __init__(self, volumes):
         self.volumes = volumes  # the drives, with the current drive and the current directory of each
         self.config = volumes.config  # the machine: its drives, and where a program starts (see config.py)
-        self.open_handles = set(STANDARD_HANDLES)  # the file handles that are open; closing takes one out
+        self.handles = HandleTable()  # what the program's file handles stand for
 
 
 def int21(cpu, state):
-    """INT 21h: DOS services, selected by AH. Only 09h, 0Eh, 19h, 25h, 30h, 35h, 3Eh, 40h, 43h, 44h, 4Ah, 4Ch so far."""
+    """INT 21h: DOS services, selected by AH. So far 09h, 0Eh, 19h, 25h, 30h, 35h, 3Ch, 3Eh, 40h, 43h, 44h, 4Ah, 4Ch."""
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
         off = cpu.r[CPU.DX]
@@ -77,26 +79,42 @@ def int21(cpu, state):
         cpu.set8(7, OEM_MICROSOFT)
         cpu.set8(3, 0)
         cpu.r[CPU.CX] = 0
+    elif ah == 0x3C:  # create (or empty) the file named at DS:DX, with attributes CX; AX = its handle
+        try:
+            if cpu.r[CPU.CX] & (ATTR_DIRECTORY | ATTR_VOLUME):
+                raise FsError(ACCESS_DENIED, "a file cannot be created as a directory or a label")
+            where = state.volumes.resolve(read_path(cpu))
+            if not state.handles.has_free():
+                raise FsError(TOO_MANY_OPEN_FILES, "all the handles are in use")
+            file = where.filesystem.create(where.parts)
+            if cpu.r[CPU.CX] & ATTR_READONLY:  # the file is read-only from now on, but this handle may still write
+                where.filesystem.set_attributes(where.parts, cpu.r[CPU.CX])
+            cpu.r[CPU.AX] = state.handles.allocate(OpenFile(file, where.dos_path()))
+            cpu.set_flag(flags.CF, False)
+        except FsError as error:
+            fail(cpu, error)
     elif ah == 0x3E:  # close the file handle in BX
-        handle = cpu.r[CPU.BX]
-        if handle in state.open_handles:  # the standard handles may be closed too; writing to one then fails
-            state.open_handles.discard(handle)
+        if state.handles.close(cpu.r[CPU.BX]):  # the standard handles may be closed too; writing to one then fails
             cpu.set_flag(flags.CF, False)
         else:  # error 06: invalid handle: never opened, or already closed
             cpu.set_flag(flags.CF, True)
             cpu.r[CPU.AX] = 6
     elif ah == 0x40:  # write CX bytes from DS:DX to the file handle in BX; AX = how many were written
         handle, count = cpu.r[CPU.BX], cpu.r[CPU.CX]
-        if handle in state.open_handles:  # the console (the only thing open so far); error output goes to ours
-            data = bytes(cpu.rb(cpu.s[CPU.DS], (cpu.r[CPU.DX] + i) & 0xFFFF) for i in range(count))
-            stream = sys.stderr if handle == 2 else sys.stdout
-            stream.write(data.decode("cp437"))
-            stream.flush()
-            cpu.r[CPU.AX] = count
-            cpu.set_flag(flags.CF, False)
-        else:  # error 06: invalid handle: not open
+        entry = state.handles.get(handle)
+        if isinstance(entry, OpenFile):
+            raise NotImplementedError(f"INT 21h AH=40 on the file {entry.dos_path}")
+        if entry is None:  # error 06: invalid handle: not open
             cpu.set_flag(flags.CF, True)
             cpu.r[CPU.AX] = 6
+        else:
+            if isinstance(entry, Console):  # the screen; error output goes to ours. The devices just swallow it.
+                data = bytes(cpu.rb(cpu.s[CPU.DS], (cpu.r[CPU.DX] + i) & 0xFFFF) for i in range(count))
+                stream = sys.stderr if entry.stream == "stderr" else sys.stdout
+                stream.write(data.decode("cp437"))
+                stream.flush()
+            cpu.r[CPU.AX] = count
+            cpu.set_flag(flags.CF, False)
     elif ah == 0x43:  # file attributes, by name at DS:DX: AL=0 get them into CX, AL=1 set them from CX
         al = cpu.get8(0)
         if al not in (0, 1):
@@ -115,12 +133,15 @@ def int21(cpu, state):
         if al == 0x00:
             # Subfunction 0: get device information into DX. C libraries use it to ask "is this handle a
             # terminal or a file?", which decides whether output is buffered. Bit 7 of DX set means a device.
-            if cpu.r[CPU.BX] in state.open_handles:  # all of them are the console so far
-                cpu.r[CPU.DX] = CONSOLE_INFO
-                cpu.set_flag(flags.CF, False)
-            else:  # error 06: invalid handle: not open
+            entry = state.handles.get(cpu.r[CPU.BX])
+            if isinstance(entry, OpenFile):
+                raise NotImplementedError(f"INT 21h AH=44 AL=00 on the file {entry.dos_path}")
+            if entry is None:  # error 06: invalid handle: not open
                 cpu.set_flag(flags.CF, True)
                 cpu.r[CPU.AX] = 6
+            else:
+                cpu.r[CPU.DX] = CONSOLE_INFO if isinstance(entry, Console) else DEVICE_INFO
+                cpu.set_flag(flags.CF, False)
         elif al == 0x08:
             # Subfunction 8: is the medium of the drive in BL removable? BL counts from 1 here (0 is the
             # current drive), unlike AH=0Eh and AH=19h. AX = 0 means removable, 1 means fixed.
@@ -145,6 +166,7 @@ def int21(cpu, state):
             cpu.r[CPU.AX] = 8
             cpu.r[CPU.BX] = available
     elif ah == 0x4C:  # exit with code in AL
+        state.handles.close_all()  # a file left open is closed, and what was written to it is kept
         raise Exit(cpu.get8(0))
     else:
         raise NotImplementedError(f"INT 21h AH={ah:02X}")
@@ -157,3 +179,4 @@ def install(cpu, volumes=None):
     """
     state = DosState(volumes if volumes is not None else Volumes(default_config(Path.cwd())))
     cpu.int_handlers[0x21] = lambda cpu: int21(cpu, state)
+    return state  # for whoever wants to look at what DOS holds, the tests in particular

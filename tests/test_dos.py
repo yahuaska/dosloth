@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from mydos import config, dos, flags
-from mydos.cpu import CPU
+from mydos.cpu import CPU, Exit
 from mydos.volumes import Volumes
 
 
@@ -38,7 +38,7 @@ class TestIoctlGetDeviceInfo(unittest.TestCase):
             self.assertFalse(cpu.get_flag(flags.CF), f"handle {handle}")
 
     def test_a_handle_that_is_not_open_is_error_6(self):
-        for handle in (3, 5, 19, 0x8000, 0xFFFF):
+        for handle in (5, 19, 20, 0x8000, 0xFFFF):  # 3 and 4 are the auxiliary and printer devices: open
             cpu = int21(0x4400, bx=handle)
             self.assertTrue(cpu.get_flag(flags.CF), f"handle {handle}")
             self.assertEqual(cpu.r[CPU.AX], 6, f"handle {handle}")
@@ -120,7 +120,7 @@ class TestWriteToHandle(unittest.TestCase):
         self.assertEqual((len(out), cpu.r[CPU.AX]), (1000, 1000))
 
     def test_a_handle_that_is_not_open_is_error_6_and_prints_nothing(self):
-        for handle in (3, 5, 19, 0xFFFF):
+        for handle in (5, 19, 20, 0xFFFF):
             cpu, out, err = self.write(handle, b"text")
             self.assertEqual((out, err), ("", ""), f"handle {handle}")
             self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX]), (True, 6), f"handle {handle}")
@@ -328,7 +328,7 @@ class TestCloseHandle(unittest.TestCase):
         self.assertEqual(self.close(1), (True, 6))
 
     def test_a_handle_that_was_never_open_is_error_6(self):
-        for handle in (3, 5, 19, 255, 0xFFFF):
+        for handle in (5, 19, 20, 255, 0xFFFF):
             self.assertEqual(self.close(handle), (True, 6), f"handle {handle}")
 
     def test_writing_to_a_closed_handle_fails_and_prints_nothing(self):
@@ -482,12 +482,13 @@ class FileFunctionsTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(lambda: self.state.handles.close_all())
         self.base = Path(self.tmp.name).resolve()
         (self.base / "GAMES").mkdir()
         (self.base / "NOTES.TXT").write_bytes(b"some notes")
         self.volumes = Volumes(config.parse(tomllib.loads(self.TEXT), self.base))
         self.cpu = CPU()
-        dos.install(self.cpu, self.volumes)
+        self.state = dos.install(self.cpu, self.volumes)
         self.cpu.s[CPU.CS], self.cpu.s[CPU.DS] = 0x1000, 0x2000
         self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
 
@@ -606,6 +607,163 @@ class TestFileAttributes(FileFunctionsTest):
         for al in (2, 3, 6, 0xFF):
             with self.assertRaises(NotImplementedError, msg=f"AL={al:02X}"):
                 self.call(0x4300 | al, "NOTES.TXT")
+
+
+class TestCreateFile(FileFunctionsTest):
+    """INT 21h AH=3Ch: create a file, or empty one that is there; AX is its handle."""
+
+    def create(self, name, cx=0):
+        self.call(0x3C00, name, cx=cx)
+        return self.failed(), self.cpu.r[CPU.AX]  # (the error number or None, the handle if all went well)
+
+    def entry(self, handle):
+        return self.state.handles.get(handle)
+
+    def test_a_new_file_is_made_empty_on_the_host_and_gets_handle_5(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.assertEqual(self.create("dummy.out"), (None, 5))
+        self.assertEqual((self.base / "DUMMY.OUT").read_bytes(), b"")  # in capitals, as DOS stores it
+        self.assertEqual(self.entry(5).dos_path, "C:\\DUMMY.OUT")
+
+    def test_the_handles_count_up(self):
+        self.assertEqual([self.create(name)[1] for name in ("A", "B", "C")], [5, 6, 7])
+
+    def test_a_file_that_is_there_is_emptied_and_keeps_its_name(self):
+        self.assertEqual(self.create("notes.txt"), (None, 5))
+        self.assertEqual(sorted(os.listdir(self.base)), ["GAMES", "NOTES.TXT"])  # no second file
+        self.assertEqual((self.base / "NOTES.TXT").read_bytes(), b"")
+
+    def test_on_the_memory_disk_and_with_a_relative_name(self):
+        self.assertEqual(self.create("D:\\F"), (None, 5))
+        self.assertEqual(self.volumes.filesystems[3].stat(["F"]).size, 0)
+        self.volumes.filesystems[3].mkdir(["SUB"])
+        self.volumes.chdir("D:\\SUB")
+        self.assertEqual(self.create("D:G"), (None, 6))
+        self.assertEqual([e.name for e in self.volumes.filesystems[3].listdir(["SUB"])], ["G"])
+
+    def test_the_handle_reads_and_writes_from_the_start_of_the_file(self):
+        handle = self.create("DATA.BIN")[1]
+        file = self.entry(handle).file
+        self.assertEqual(file.tell(), 0)
+        file.write(b"hello")
+        file.seek(0)
+        self.assertEqual(file.read(), b"hello")  # read and write: it was opened for both
+
+    def test_what_was_written_is_in_the_host_file_once_the_handle_is_closed(self):
+        handle = self.create("DATA.BIN")[1]
+        self.entry(handle).file.write(b"abc")
+        self.call(0x3E00, bx=handle)
+        self.assertIsNone(self.failed())
+        self.assertEqual((self.base / "DATA.BIN").read_bytes(), b"abc")
+        self.call(0x3E00, bx=handle)
+        self.assertEqual(self.failed(), 6)  # already closed
+
+    def test_closing_the_handle_closes_the_file_object(self):
+        handle = self.create("DATA.BIN")[1]
+        file = self.entry(handle).file
+        self.call(0x3E00, bx=handle)
+        self.assertTrue(file.closed)
+
+    def test_attribute_1_makes_the_file_read_only_but_the_handle_can_still_write(self):
+        handle = self.create("D:\\RO", cx=1)[1]  # the memory disk, where no user can write to anything
+        self.assertEqual(self.volumes.filesystems[3].stat(["RO"]).attributes, 0x21)
+        self.assertEqual(self.entry(handle).file.write(b"still writable"), 14)
+
+    def test_attribute_1_on_the_host_takes_the_write_permissions_away_after_the_file_exists(self):
+        self.skip_if_root()
+        handle = self.create("RO.TXT", cx=1)[1]
+        self.assertEqual(stat_mode(self.base / "RO.TXT") & 0o222, 0)
+        self.assertEqual(self.entry(handle).file.write(b"x"), 1)  # the open handle may write
+
+    def test_hidden_system_and_archive_attributes_are_accepted(self):
+        self.assertEqual(self.create("D:\\H", cx=0x27 & ~0x01)[0], None)
+        self.assertEqual(self.volumes.filesystems[3].stat(["H"]).attributes, 0x20)
+
+    def test_a_directory_or_label_attribute_is_refused_and_nothing_is_made(self):
+        for attributes in (0x10, 0x08, 0x18):
+            self.assertEqual(self.create("NEWFILE", cx=attributes), (5, 5))  # AX is the error, 5 again by chance
+        self.assertNotIn("NEWFILE", os.listdir(self.base))
+        self.assertIsNone(self.entry(5))
+
+    def test_the_errors_are_the_ones_dos_gives(self):
+        self.assertEqual(self.create("NODIR\\X")[0], 3)  # path not found
+        self.assertEqual(self.create("TOOLONGNAME.TXT")[0], 3)  # a name DOS cannot have
+        self.assertEqual(self.create("")[0], 3)
+        self.assertEqual(self.create("GAMES")[0], 5)  # a directory is in the way
+        self.assertEqual(self.create("Z:\\X")[0], 15)  # no such drive
+        self.assertEqual(self.create("A:\\X")[0], 21)  # nothing in the drive
+        self.assertEqual(self.create("..\\X")[0], 3)  # above the root
+
+    def test_an_error_takes_no_handle_and_changes_no_file(self):
+        before = sorted(os.listdir(self.base))
+        self.create("NODIR\\X")
+        self.create("GAMES")
+        self.assertEqual(sorted(os.listdir(self.base)), before)
+        self.assertEqual(self.create("OK")[1], 5)  # still the first free handle
+
+    def test_a_read_only_file_cannot_be_emptied(self):
+        self.volumes.filesystems[3].create(["F"]).close()
+        self.volumes.filesystems[3].set_attributes(["F"], 1)
+        self.assertEqual(self.create("D:\\F")[0], 5)
+
+    def test_a_read_only_disk_cannot_be_written_to(self):
+        text = self.TEXT.replace('D = { type = "tmpfs" }', 'D = { type = "tmpfs", readonly = true }')
+        self.state = dos.install(self.cpu, Volumes(config.parse(tomllib.loads(text), self.base)))
+        self.assertEqual(self.create("D:\\F")[0], 5)
+
+    def test_twenty_handles_are_all_there_are(self):
+        handles = [self.create(f"F{i}")[1] for i in range(15)]
+        self.assertEqual(handles, list(range(5, 20)))
+        self.assertEqual(self.create("ONEMORE")[0], 4)  # too many open files
+        self.assertNotIn("ONEMORE", os.listdir(self.base))  # and the file was not made
+        self.call(0x3E00, bx=12)
+        self.assertEqual(self.create("ONEMORE"), (None, 12))  # a freed handle is the next one
+
+    def test_a_standard_handle_that_was_closed_is_given_out_again(self):
+        self.call(0x3E00, bx=0)
+        self.assertEqual(self.create("F")[1], 0)
+        self.call(0x3E00, bx=3)
+        self.assertEqual(self.create("G")[1], 3)
+
+    def test_the_other_registers_are_left_alone(self):
+        self.call(0x3C00, "F", cx=0x0000, bx=0x1234, dx=0x0100)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (0x1234, 0, 0x0100))
+
+    def test_the_name_may_run_over_the_end_of_the_segment(self):
+        self.call(0x3C00, "WRAP.TXT", dx=0xFFFC)
+        self.assertEqual((self.failed(), self.cpu.r[CPU.AX]), (None, 5))
+        self.assertTrue((self.base / "WRAP.TXT").exists())
+
+    def test_the_end_of_the_program_closes_every_file_and_keeps_what_was_written(self):
+        handle = self.create("LEFT.TXT")[1]
+        self.entry(handle).file.write(b"left open")
+        file = self.entry(handle).file
+        with self.assertRaises(Exit):
+            self.call(0x4C00)
+        self.assertTrue(file.closed)
+        self.assertEqual((self.base / "LEFT.TXT").read_bytes(), b"left open")
+
+    def test_writing_and_asking_about_a_file_handle_are_not_done_yet(self):
+        handle = self.create("F")[1]
+        with self.assertRaises(NotImplementedError):
+            self.call(0x4000, "text", bx=handle, cx=4)
+        with self.assertRaises(NotImplementedError):
+            self.call(0x4400, bx=handle)
+
+    def test_the_auxiliary_and_printer_devices_are_open_and_swallow_what_is_written(self):
+        for handle in (3, 4):
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                self.call(0x4000, "text", bx=handle, cx=4)
+            self.assertEqual((out.getvalue(), err.getvalue()), ("", ""))
+            self.assertEqual((self.failed(), self.cpu.r[CPU.AX]), (None, 4))
+            self.call(0x4400, bx=handle)
+            self.assertEqual((self.failed(), self.cpu.r[CPU.DX]), (None, 0x80C0))
+
+    def test_the_state_install_returns_has_the_table(self):
+        names = [type(self.entry(handle)).__name__ for handle in range(6)]
+        self.assertEqual(names, ["Console"] * 3 + ["NullDevice"] * 2 + ["NoneType"])
 
 
 if __name__ == "__main__":
