@@ -5,13 +5,33 @@ from pathlib import Path
 from . import flags
 from .config import default as default_config
 from .cpu import CPU, Exit
+from .filesystem import PATH_NOT_FOUND, FsError
 from .volumes import Volumes
 
 DOS_VERSION = (7, 1)  # (major, minor) reported by INT 21h AH=30h
 OEM_MICROSOFT = 0xFF
 CONSOLE_INFO = 0x80D3  # IOCTL answer for the console: a character device, standard input and output
 STANDARD_HANDLES = (0, 1, 2)  # standard input, standard output, standard error: all three are the console
+MAX_PATH = 260  # how long a path from a program may be, with its ending zero
 MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands out nothing above it
+
+
+def read_path(cpu):
+    """The path in the zero-ended string at DS:DX, which is how DOS functions are given a file name."""
+    segment, offset = cpu.s[CPU.DS], cpu.r[CPU.DX]
+    characters = bytearray()
+    for i in range(MAX_PATH):
+        byte = cpu.rb(segment, (offset + i) & 0xFFFF)
+        if byte == 0:
+            return characters.decode("cp437")
+        characters.append(byte)
+    raise FsError(PATH_NOT_FOUND, "the path is too long, or has no end")
+
+
+def fail(cpu, error):
+    """Report a failed call the DOS way: the carry flag is set and AX is the error number."""
+    cpu.set_flag(flags.CF, True)
+    cpu.r[CPU.AX] = error.code
 
 
 class DosState:
@@ -24,7 +44,7 @@ class DosState:
 
 
 def int21(cpu, state):
-    """INT 21h: DOS services, selected by AH. Only 09h, 0Eh, 19h, 25h, 30h, 35h, 3Eh, 40h, 44h, 4Ah, 4Ch so far."""
+    """INT 21h: DOS services, selected by AH. Only 09h, 0Eh, 19h, 25h, 30h, 35h, 3Eh, 40h, 43h, 44h, 4Ah, 4Ch so far."""
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
         off = cpu.r[CPU.DX]
@@ -77,6 +97,19 @@ def int21(cpu, state):
         else:  # error 06: invalid handle: not open
             cpu.set_flag(flags.CF, True)
             cpu.r[CPU.AX] = 6
+    elif ah == 0x43:  # file attributes, by name at DS:DX: AL=0 get them into CX, AL=1 set them from CX
+        al = cpu.get8(0)
+        if al not in (0, 1):
+            raise NotImplementedError(f"INT 21h AH=43 AL={al:02X}")
+        try:
+            where = state.volumes.resolve(read_path(cpu))
+            if al == 0:
+                cpu.r[CPU.CX] = where.filesystem.stat(where.parts).attributes
+            else:
+                where.filesystem.set_attributes(where.parts, cpu.r[CPU.CX])
+            cpu.set_flag(flags.CF, False)
+        except FsError as error:
+            fail(cpu, error)
     elif ah == 0x44:  # IOCTL: device control through a file handle in BX, subfunction in AL
         al = cpu.get8(0)
         if al == 0x00:

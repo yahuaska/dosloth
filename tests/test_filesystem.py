@@ -8,8 +8,14 @@ from unittest import mock
 
 from mydos import filesystem
 from mydos.config import Mount
-from mydos.filesystem import (ACCESS_DENIED, ATTR_ARCHIVE, ATTR_DIRECTORY, ATTR_READONLY, FILE_NOT_FOUND,
-                              PATH_NOT_FOUND, FsError, HostDir, MemFs, find_ignoring_case, is_dos_name)
+from mydos.filesystem import (ACCESS_DENIED, ATTR_ARCHIVE, ATTR_DIRECTORY, ATTR_HIDDEN, ATTR_READONLY, ATTR_SYSTEM,
+                              ATTR_VOLUME, FILE_NOT_FOUND, PATH_NOT_FOUND, FsError, HostDir, MemFs, find_ignoring_case,
+                              is_dos_name)
+
+
+def stat_mode(path):
+    """The permission bits of a host file."""
+    return os.stat(path).st_mode & 0o777
 
 
 class Contract:
@@ -269,6 +275,56 @@ class Contract:
         self.assertFails(ACCESS_DENIED, self.fs.rename, ["D", "F.TXT"], ["G.TXT"])
         self.assertEqual(self.get(["D", "F.TXT"]), b"data")  # still all there
 
+    # -- the attributes of a file --
+
+    def skip_if_read_only_cannot_be_seen(self):
+        """A hook: HostDir cannot show a read-only file to a user who may write to anything."""
+
+    def test_a_file_can_be_made_read_only_and_writable_again(self):
+        self.skip_if_read_only_cannot_be_seen()
+        self.put(["F.TXT"], b"data")
+        self.fs.set_attributes(["f.txt"], ATTR_READONLY)
+        self.assertEqual(self.fs.stat(["F.TXT"]).attributes, ATTR_ARCHIVE | ATTR_READONLY)
+        self.assertFails(ACCESS_DENIED, self.fs.open, ["F.TXT"], True)  # not for writing
+        self.assertFails(ACCESS_DENIED, self.fs.create, ["F.TXT"])  # not for emptying
+        self.assertFails(ACCESS_DENIED, self.fs.remove, ["F.TXT"])  # not for deleting
+        self.assertEqual(self.get(["F.TXT"]), b"data")  # for reading it is fine
+        self.fs.set_attributes(["F.TXT"], 0)
+        self.assertEqual(self.fs.stat(["F.TXT"]).attributes, ATTR_ARCHIVE)
+        self.put(["F.TXT"], b"new")  # writable again
+        self.assertEqual(self.get(["F.TXT"]), b"new")
+
+    def test_the_other_attribute_bits_are_accepted_and_change_nothing_that_is_seen(self):
+        self.put(["F"])
+        for bits in (ATTR_HIDDEN, ATTR_SYSTEM, ATTR_ARCHIVE, ATTR_HIDDEN | ATTR_SYSTEM | ATTR_ARCHIVE, 0):
+            with self.subTest(bits=bits):
+                self.fs.set_attributes(["F"], bits)
+                self.assertEqual(self.fs.stat(["F"]).attributes, ATTR_ARCHIVE)
+
+    def test_the_read_only_bit_among_others_is_the_one_that_counts(self):
+        self.skip_if_read_only_cannot_be_seen()
+        self.put(["F"])
+        self.fs.set_attributes(["F"], ATTR_READONLY | ATTR_HIDDEN | ATTR_ARCHIVE)
+        self.assertTrue(self.fs.stat(["F"]).attributes & ATTR_READONLY)
+
+    def test_the_attributes_of_a_directory_cannot_be_changed_and_a_file_cannot_become_one(self):
+        self.fs.mkdir(["D"])
+        self.put(["F"])
+        self.assertFails(ACCESS_DENIED, self.fs.set_attributes, ["D"], 0)
+        self.assertFails(ACCESS_DENIED, self.fs.set_attributes, [], 0)  # the root is one too
+        self.assertFails(ACCESS_DENIED, self.fs.set_attributes, ["F"], ATTR_DIRECTORY)
+        self.assertFails(ACCESS_DENIED, self.fs.set_attributes, ["F"], ATTR_VOLUME)
+        self.assertEqual(self.fs.stat(["F"]).attributes, ATTR_ARCHIVE)
+
+    def test_the_attributes_of_something_that_is_not_there(self):
+        self.assertFails(FILE_NOT_FOUND, self.fs.set_attributes, ["NOPE"], 0)
+        self.assertFails(PATH_NOT_FOUND, self.fs.set_attributes, ["NODIR", "F"], 0)
+
+    def test_the_attributes_cannot_be_changed_on_a_disk_that_cannot_be_written_to(self):
+        self.put(["F"])
+        self.fs.readonly = True
+        self.assertFails(ACCESS_DENIED, self.fs.set_attributes, ["F"], ATTR_READONLY)
+
     def test_a_disk_that_can_be_written_to_says_so_in_the_attributes(self):
         self.put(["F"])
         self.assertFalse(self.fs.stat(["F"]).attributes & ATTR_READONLY)
@@ -285,6 +341,28 @@ class TestHostDir(Contract, unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
         self.fs = HostDir(self.root)
+
+    def skip_if_read_only_cannot_be_seen(self):
+        if os.geteuid() == 0:
+            self.skipTest("the host lets root write to anything, so a read-only file looks writable")
+
+    def test_making_a_file_read_only_takes_the_write_permissions_away_on_the_host(self):
+        self.skip_if_read_only_cannot_be_seen()
+        self.put(["F.TXT"], b"x")
+        os.chmod(self.root / "F.TXT", 0o664)
+        self.fs.set_attributes(["F.TXT"], ATTR_READONLY)
+        self.assertEqual(stat_mode(self.root / "F.TXT"), 0o444)  # nobody may write
+        self.fs.set_attributes(["F.TXT"], 0)
+        self.assertEqual(stat_mode(self.root / "F.TXT"), 0o644)  # the owner may, as before; the rest as it was
+
+    def test_other_permission_bits_are_left_alone(self):
+        self.skip_if_read_only_cannot_be_seen()
+        self.put(["X.SH"], b"x")
+        os.chmod(self.root / "X.SH", 0o755)
+        self.fs.set_attributes(["X.SH"], ATTR_READONLY)
+        self.assertEqual(stat_mode(self.root / "X.SH"), 0o555)
+        self.fs.set_attributes(["X.SH"], 0)
+        self.assertEqual(stat_mode(self.root / "X.SH"), 0o755)
 
     def test_new_names_are_made_in_capitals_on_the_host(self):
         self.put(["lower.txt"], b"x")

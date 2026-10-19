@@ -1,5 +1,7 @@
 import contextlib
 import io
+import os
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -7,6 +9,10 @@ from pathlib import Path
 from mydos import config, dos, flags
 from mydos.cpu import CPU
 from mydos.volumes import Volumes
+
+
+def stat_mode(path):
+    return os.stat(path).st_mode & 0o777
 
 
 def int21(ax, bx=0, dx=0x1111):
@@ -456,6 +462,150 @@ class TestTheDrivesComeFromTheConfig(unittest.TestCase):
         self.assertEqual(cpu.get8(0), 4)  # A: B: C: D:
         self.call(cpu, 0x1900)
         self.assertEqual(cpu.get8(0), 0)  # the call moved to A:
+
+
+class FileFunctionsTest(unittest.TestCase):
+    """A machine to try the file functions on: C: is a host directory, D: a memory disk, A: has no disk in it."""
+
+    TEXT = """
+        [disks.A]
+        removable = true
+        [disks.C]
+        removable = false
+        [disks.D]
+        removable = true
+        [mounts]
+        C = { type = "dir", path = "." }
+        D = { type = "tmpfs" }
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name).resolve()
+        (self.base / "GAMES").mkdir()
+        (self.base / "NOTES.TXT").write_bytes(b"some notes")
+        self.volumes = Volumes(config.parse(tomllib.loads(self.TEXT), self.base))
+        self.cpu = CPU()
+        dos.install(self.cpu, self.volumes)
+        self.cpu.s[CPU.CS], self.cpu.s[CPU.DS] = 0x1000, 0x2000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+
+    def call(self, ax, name=None, cx=0, bx=0, dx=0x0100):
+        """Run INT 21h with `name` as a zero-ended string at DS:DX."""
+        cpu = self.cpu
+        if name is not None:
+            for i, byte in enumerate(name.encode("cp437") + b"\0"):
+                cpu.wb(0x2000, (dx + i) & 0xFFFF, byte)
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = ax, bx, cx, dx
+        cpu.ip = 0
+        cpu.step()
+
+    def failed(self):
+        """None if the last call went well, else the error number it gave."""
+        return self.cpu.r[CPU.AX] if self.cpu.get_flag(flags.CF) else None
+
+    def skip_if_root(self):
+        if os.geteuid() == 0:
+            self.skipTest("the host lets root write to anything, so a read-only file looks writable")
+
+
+class TestFileAttributes(FileFunctionsTest):
+    """INT 21h AH=43h: AL=0 gets the attributes of a file into CX, AL=1 sets them."""
+
+    def get(self, name):
+        self.call(0x4300, name)
+        return self.failed(), self.cpu.r[CPU.CX]
+
+    def test_a_file_a_directory_and_the_root(self):
+        self.assertEqual(self.get("NOTES.TXT"), (None, 0x20))  # archive
+        self.assertEqual(self.get("GAMES"), (None, 0x10))  # directory
+        self.assertEqual(self.get("\\"), (None, 0x10))  # the root is a directory too
+
+    def test_names_are_matched_without_regard_to_case_and_with_either_separator(self):
+        self.assertEqual(self.get("notes.txt"), (None, 0x20))
+        self.assertEqual(self.get("C:/Games"), (None, 0x10))
+        self.assertEqual(self.get("games\\..\\NOTES.TXT"), (None, 0x20))
+
+    def test_a_read_only_file(self):
+        self.skip_if_root()
+        (self.base / "LOCKED.TXT").write_bytes(b"x")
+        os.chmod(self.base / "LOCKED.TXT", 0o444)
+        self.assertEqual(self.get("LOCKED.TXT"), (None, 0x21))
+
+    def test_a_file_on_the_memory_disk(self):
+        self.volumes.filesystems[3].create(["F"]).close()
+        self.assertEqual(self.get("D:\\F"), (None, 0x20))
+
+    def test_the_current_directory_is_where_a_relative_name_is_looked_for(self):
+        self.volumes.filesystems[3].mkdir(["SUB"])
+        self.volumes.filesystems[3].create(["SUB", "F"]).close()
+        self.assertEqual(self.get("D:F")[0], 2)  # D: is in its root, which has no F
+        self.volumes.chdir("D:\\SUB")
+        self.assertEqual(self.get("D:F"), (None, 0x20))
+
+    def test_the_errors_are_the_ones_dos_gives(self):
+        self.assertEqual(self.get("NOPE.TXT")[0], 2)  # file not found
+        self.assertEqual(self.get("GAMES\\NOPE.TXT")[0], 2)
+        self.assertEqual(self.get("NODIR\\NOPE.TXT")[0], 3)  # path not found
+        self.assertEqual(self.get("NOTES.TXT\\INSIDE")[0], 3)  # a file in the middle of the path
+        self.assertEqual(self.get("..\\X")[0], 3)  # above the root
+        self.assertEqual(self.get("Z:\\X")[0], 15)  # no such drive
+        self.assertEqual(self.get("A:\\X")[0], 21)  # a drive with nothing in it
+        self.assertEqual(self.get("LONGFILENAME.TXT")[0], 2)  # a name DOS cannot have is not a file it has
+        self.assertEqual(self.get("\u00e9.TXT")[0], 2)
+
+    def test_an_empty_name_and_a_name_with_no_end(self):
+        self.assertEqual(self.get("")[0], 3)
+        for i in range(300):  # no zero within the longest path
+            self.cpu.wb(0x2000, 0x0100 + i, ord("A"))
+        self.call(0x4300)
+        self.assertEqual(self.failed(), 3)
+
+    def test_the_name_may_run_over_the_end_of_the_segment(self):
+        self.call(0x4300, "NOTES.TXT", dx=0xFFFC)  # FFFC, FFFD, ..., FFFF, 0000, ...
+        self.assertEqual((self.failed(), self.cpu.r[CPU.CX]), (None, 0x20))
+
+    def test_registers_after_a_good_get(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.call(0x4300, "NOTES.TXT", cx=0x7777, bx=0x1234)
+        cpu = self.cpu
+        self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX], cpu.r[CPU.BX]), (False, 0x4300, 0x1234))
+
+    def test_registers_after_a_failed_get(self):
+        self.call(0x4300, "NOPE.TXT", cx=0x7777)
+        self.assertEqual((self.failed(), self.cpu.r[CPU.CX]), (2, 0x7777))  # CX is not touched when it fails
+
+    def test_setting_read_only_and_clearing_it_on_the_memory_disk(self):
+        self.volumes.filesystems[3].create(["F"]).close()
+        self.call(0x4301, "D:\\F", cx=0x01)
+        self.assertEqual((self.failed(), self.cpu.r[CPU.CX]), (None, 0x01))  # CX is what was given
+        self.assertEqual(self.get("D:\\F"), (None, 0x21))
+        self.call(0x4301, "D:\\F", cx=0x20)
+        self.assertEqual(self.get("D:\\F"), (None, 0x20))
+
+    def test_setting_read_only_on_a_host_file(self):
+        self.skip_if_root()
+        self.call(0x4301, "NOTES.TXT", cx=0x21)
+        self.assertIsNone(self.failed())
+        self.assertEqual(stat_mode(self.base / "NOTES.TXT") & 0o222, 0)
+        self.call(0x4301, "NOTES.TXT", cx=0x20)
+        self.assertEqual(stat_mode(self.base / "NOTES.TXT") & 0o200, 0o200)
+
+    def test_what_cannot_be_set(self):
+        self.call(0x4301, "GAMES", cx=0)  # a directory's attributes
+        self.assertEqual(self.failed(), 5)
+        self.call(0x4301, "NOTES.TXT", cx=0x10)  # a file cannot become a directory
+        self.assertEqual(self.failed(), 5)
+        self.call(0x4301, "NOPE.TXT", cx=0)
+        self.assertEqual(self.failed(), 2)
+        self.call(0x4301, "Z:\\X", cx=0)
+        self.assertEqual(self.failed(), 15)
+
+    def test_the_other_subfunctions_stop_loudly(self):
+        for al in (2, 3, 6, 0xFF):
+            with self.assertRaises(NotImplementedError, msg=f"AL={al:02X}"):
+                self.call(0x4300 | al, "NOTES.TXT")
 
 
 if __name__ == "__main__":

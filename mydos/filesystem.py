@@ -8,6 +8,7 @@ questions in the same way, so a program cannot tell them apart:
     open(parts, write)   an existing file, as a file object
     create(parts)        a new file, or an old one emptied, as a file object
     mkdir, rmdir, remove, rename
+    set_attributes(parts, bits)   change the read-only bit of a file (the other bits are accepted and ignored)
     free_space()         (the size of the disk, the free space) in bytes
 
 A path is a list of names, the way a DOS path splits at the backslashes: ["SETUP", "README.TXT"]. The empty
@@ -38,6 +39,9 @@ DRIVE_NOT_READY = 21
 
 # the bits of a DOS file's attributes
 ATTR_READONLY = 0x01
+ATTR_HIDDEN = 0x02
+ATTR_SYSTEM = 0x04
+ATTR_VOLUME = 0x08
 ATTR_DIRECTORY = 0x10
 ATTR_ARCHIVE = 0x20
 
@@ -83,6 +87,12 @@ def find_ignoring_case(directory, name):
         if entry.upper() == wanted:
             return directory / entry
     return None
+
+
+def _check_settable(attributes):
+    """DOS lets a program change the attributes of a file, but not turn a file into a directory or a label."""
+    if attributes & (ATTR_DIRECTORY | ATTR_VOLUME):
+        raise FsError(ACCESS_DENIED, "the directory and volume label bits cannot be set")
 
 
 def _parent_and_name(parts):
@@ -243,6 +253,20 @@ class HostDir:
         except OSError:
             raise FsError(ACCESS_DENIED, f"{old[-1]!r} cannot be renamed") from None
 
+    def set_attributes(self, parts, attributes):
+        """Make a file read-only or writable. Hidden, system and archive are accepted and not kept: the host has
+        no such bits, and every file reads as archived."""
+        self._may_change()
+        path = self._find(parts)
+        if path.is_dir():
+            raise FsError(ACCESS_DENIED, "the attributes of a directory cannot be changed")
+        _check_settable(attributes)
+        mode = path.stat().st_mode
+        try:
+            os.chmod(path, mode & ~0o222 if attributes & ATTR_READONLY else mode | 0o200)
+        except OSError:
+            raise FsError(ACCESS_DENIED, f"{parts[-1]!r} cannot be changed") from None
+
     def free_space(self):
         usage = shutil.disk_usage(self.root)
         return usage.total, usage.free
@@ -252,6 +276,7 @@ class _File:
     def __init__(self):
         self.data = bytearray()
         self.mtime = time.time()
+        self.readonly = False  # the read-only attribute of this file
 
 
 class _Directory:
@@ -354,6 +379,7 @@ class MemFs:
         locked = ATTR_READONLY if self.readonly else 0
         if isinstance(node, _Directory):
             return Entry(name.upper(), True, 0, node.mtime, ATTR_DIRECTORY | locked)
+        locked |= ATTR_READONLY if node.readonly else 0
         return Entry(name.upper(), False, len(node.data), node.mtime, ATTR_ARCHIVE | locked)
 
     def _may_change(self):
@@ -375,6 +401,8 @@ class MemFs:
             raise FsError(ACCESS_DENIED, f"{parts[-1]!r} is a directory")
         if write:
             self._may_change()
+            if node.readonly:
+                raise FsError(ACCESS_DENIED, f"{parts[-1]!r} is read-only")
         return MemFile(node, write)
 
     def create(self, parts):
@@ -383,8 +411,8 @@ class MemFs:
         _check_name(name)
         directory = self._directory(folder) if folder else self.root
         existing = self._child(directory, name)
-        if isinstance(existing, _Directory):
-            raise FsError(ACCESS_DENIED, f"{name!r} is a directory")
+        if isinstance(existing, _Directory) or (existing is not None and existing.readonly):
+            raise FsError(ACCESS_DENIED, f"{name!r} is a directory or read-only")
         node = existing if existing is not None else _File()
         node.data.clear()
         node.mtime = time.time()
@@ -412,8 +440,8 @@ class MemFs:
         self._may_change()
         folder, name = _parent_and_name(parts)
         node = self._find(parts)
-        if isinstance(node, _Directory):
-            raise FsError(ACCESS_DENIED, f"{name!r} is a directory")
+        if isinstance(node, _Directory) or node.readonly:
+            raise FsError(ACCESS_DENIED, f"{name!r} is a directory or read-only")
         del (self._directory(folder) if folder else self.root).children[name.upper()]
 
     def rename(self, old, new):
@@ -430,6 +458,14 @@ class MemFs:
             raise FsError(ACCESS_DENIED, f"{old_name!r} cannot be moved into itself")
         del (self._directory(old_folder) if old_folder else self.root).children[old_name.upper()]
         directory.children[name.upper()] = node
+
+    def set_attributes(self, parts, attributes):
+        self._may_change()
+        node = self._find(parts)
+        if isinstance(node, _Directory):
+            raise FsError(ACCESS_DENIED, "the attributes of a directory cannot be changed")
+        _check_settable(attributes)
+        node.readonly = bool(attributes & ATTR_READONLY)
 
     def free_space(self):
         def used(directory):
