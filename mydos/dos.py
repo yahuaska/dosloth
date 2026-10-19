@@ -1,23 +1,24 @@
 import sys
 
+from pathlib import Path
+
 from . import flags
+from .config import default as default_config
 from .cpu import CPU, Exit
 
 DOS_VERSION = (7, 1)  # (major, minor) reported by INT 21h AH=30h
 OEM_MICROSOFT = 0xFF
 CONSOLE_INFO = 0x80D3  # IOCTL answer for the console: a character device, standard input and output
 STANDARD_HANDLES = (0, 1, 2)  # standard input, standard output, standard error: all three are the console
-DRIVES = (0, 1, 2, 3)  # the drives that exist: A: B: C: D: (0 is A:). A constant until there is a config
-REMOVABLE_DRIVES = (0, 1, 3)  # A: and B: are floppies, D: is a CD-ROM; C: is a hard disk and stays put
-DEFAULT_DRIVE = 2  # the drive a program starts on: C:, as the environment says
 MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands out nothing above it
 
 
 class DosState:
     """What DOS remembers between calls. One of these goes with each CPU."""
 
-    def __init__(self):
-        self.current_drive = DEFAULT_DRIVE
+    def __init__(self, config):
+        self.config = config  # the machine: its drives, and where a program starts (see config.py)
+        self.current_drive = config.cwd_drive
         self.open_handles = set(STANDARD_HANDLES)  # the file handles that are open; closing takes one out
 
 
@@ -34,9 +35,9 @@ def int21(cpu, state):
         sys.stdout.flush()
     elif ah == 0x0E:  # make drive DL the current one (0 is A:, 1 is B:, ...); AL = how many drives there are
         drive = cpu.get8(2)  # 8-bit register 2 is DL
-        if drive in DRIVES:  # a drive that does not exist is not an error: the call just does nothing
+        if drive in state.config.disks:  # a drive that does not exist is not an error: the call just does nothing
             state.current_drive = drive
-        cpu.set8(0, len(DRIVES))
+        cpu.set8(0, state.config.drive_count)
     elif ah == 0x19:  # get the current drive into AL: 0 for A:, 1 for B:, 2 for C:, ...
         cpu.set8(0, state.current_drive)
     elif ah == 0x25:  # set interrupt vector AL to DS:DX
@@ -91,9 +92,9 @@ def int21(cpu, state):
             # current drive), unlike AH=0Eh and AH=19h. AX = 0 means removable, 1 means fixed.
             number = cpu.get8(3)  # 8-bit register 3 is BL
             drive = state.current_drive if number == 0 else number - 1
-            if drive in DRIVES:
+            if drive in state.config.disks:
                 cpu.set_flag(flags.CF, False)
-                cpu.r[CPU.AX] = 0 if drive in REMOVABLE_DRIVES else 1
+                cpu.r[CPU.AX] = 0 if state.config.disks[drive].removable else 1
             else:  # error 0Fh: invalid drive
                 cpu.set_flag(flags.CF, True)
                 cpu.r[CPU.AX] = 0x0F
@@ -115,7 +116,10 @@ def int21(cpu, state):
         raise NotImplementedError(f"INT 21h AH={ah:02X}")
 
 
-def install(cpu):
-    """Hook DOS interrupt handlers into the CPU."""
-    state = DosState()
+def install(cpu, config=None):
+    """Hook DOS interrupt handlers into the CPU, for the machine that `config` describes.
+
+    Without one, the machine is the built-in one: the directory the emulator was started in is the hard disk C:.
+    """
+    state = DosState(config if config is not None else default_config(Path.cwd()))
     cpu.int_handlers[0x21] = lambda cpu: int21(cpu, state)

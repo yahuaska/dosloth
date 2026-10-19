@@ -2,8 +2,9 @@ import argparse
 import struct
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
-from . import bios, disasm, dos, dump, psp, timer
+from . import bios, config, disasm, dos, dump, psp, timer
 from .cpu import CPU
 
 PSP_SEG = 0x1000
@@ -101,13 +102,19 @@ def make_trace(log):
 def main():
     """Run the program named on the command line; exit with the program's exit code."""
     parser = argparse.ArgumentParser(prog="python -m mydos", description="Run a DOS .COM or .EXE program.")
+    parser.add_argument("-c", metavar="FILE", help="the configuration (TOML): drives, mounts, starting directory; "
+                        "without it the current directory is the hard disk C:")
     parser.add_argument("-d", metavar="LOGFILE", help="write every executed instruction to LOGFILE")
     parser.add_argument("program", help="the .COM or .EXE file to run")
     args = parser.parse_args()
+    try:
+        machine = config.load(args.c) if args.c else config.default(Path.cwd())
+    except config.ConfigError as error:
+        parser.error(str(error))  # prints the message with the usage and exits with status 2, before anything runs
 
     cpu = CPU()
     bios.install(cpu)
-    dos.install(cpu)
+    dos.install(cpu, machine)
     timer.install(cpu)
     load(cpu, args.program)
     log = open(args.d, "w") if args.d else None

@@ -1,8 +1,10 @@
 import contextlib
 import io
+import tomllib
 import unittest
+from pathlib import Path
 
-from mydos import dos, flags
+from mydos import config, dos, flags
 from mydos.cpu import CPU
 
 
@@ -366,6 +368,93 @@ class TestCloseHandle(unittest.TestCase):
         other.r[CPU.AX], other.r[CPU.BX] = 0x3E00, 1
         other.step()
         self.assertFalse(other.get_flag(flags.CF))  # for the other machine handle 1 was still open
+
+
+class TestTheDrivesComeFromTheConfig(unittest.TestCase):
+    """The drive functions answer for the machine the configuration describes, not for a fixed one."""
+
+    def cpu_for(self, text):
+        """A CPU with DOS installed for the machine in `text`; the media are all in memory, so no host path is used."""
+        cpu = CPU()
+        dos.install(cpu, config.parse(tomllib.loads(text), Path.cwd()))
+        cpu.s[CPU.CS] = 0x1000
+        cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        return cpu
+
+    def call(self, cpu, ax, bx=0, dx=0):
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.DX] = ax, bx, dx
+        cpu.ip = 0
+        cpu.step()
+
+    # a floppy A:, a hard disk C:, a floppy F: (with gaps between), starting on F:
+    GAPS = """
+        cwd = 'F:\\'
+        [disks.A]
+        removable = true
+        [disks.C]
+        removable = false
+        [disks.F]
+        removable = true
+        [mounts]
+        C = { type = "tmpfs" }
+        F = { type = "tmpfs" }
+    """
+
+    def test_a_program_starts_on_the_drive_of_the_starting_directory(self):
+        cpu = self.cpu_for(self.GAPS)
+        self.call(cpu, 0x1900)
+        self.assertEqual(cpu.get8(0), 5)  # F:
+
+    def test_only_the_drives_in_the_config_can_be_selected(self):
+        cpu = self.cpu_for(self.GAPS)
+        for drive, expected in ((0, 0), (1, 0), (2, 2), (3, 2), (4, 2), (5, 5), (6, 5)):  # B: D: E: G: do not exist
+            self.call(cpu, 0x0E00, dx=drive)
+            self.call(cpu, 0x1900)
+            self.assertEqual(cpu.get8(0), expected, f"selected {drive}")
+
+    def test_the_number_of_drives_is_the_highest_number_plus_one(self):
+        cpu = self.cpu_for(self.GAPS)
+        self.call(cpu, 0x0E00, dx=2)
+        self.assertEqual(cpu.get8(0), 6)  # F: is drive 5, and there are gaps, so 6 and not 3
+
+    def test_a_machine_with_only_a_hard_disk(self):
+        cpu = self.cpu_for('[disks.C]\nremovable = false\n[mounts]\nC = { type = "tmpfs" }\n')
+        self.call(cpu, 0x1900)
+        self.assertEqual(cpu.get8(0), 2)
+        self.call(cpu, 0x0E00, dx=0)  # A: is not there
+        self.assertEqual(cpu.get8(0), 3)  # the highest number is 2
+        self.call(cpu, 0x1900)
+        self.assertEqual(cpu.get8(0), 2)
+
+    def test_removable_comes_from_the_config(self):
+        cpu = self.cpu_for(self.GAPS)
+        for bl, removable in ((1, True), (3, False), (6, True)):  # A:, C:, F: numbered from 1 here
+            self.call(cpu, 0x4408, bx=bl)
+            self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX]), (False, 0 if removable else 1), f"BL={bl}")
+
+    def test_a_drive_that_is_not_in_the_config_is_an_invalid_drive_for_ioctl(self):
+        cpu = self.cpu_for(self.GAPS)
+        for bl in (2, 4, 5, 7):  # B: D: E: G:
+            self.call(cpu, 0x4408, bx=bl)
+            self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX]), (True, 0x0F), f"BL={bl}")
+
+    def test_bl_0_means_the_current_drive_of_this_machine(self):
+        cpu = self.cpu_for(self.GAPS)  # starts on F:, which is removable
+        self.call(cpu, 0x4408, bx=0)
+        self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX]), (False, 0))
+        self.call(cpu, 0x0E00, dx=2)  # to C:, the hard disk
+        self.call(cpu, 0x4408, bx=0)
+        self.assertEqual(cpu.r[CPU.AX], 1)
+
+    def test_without_a_config_the_built_in_machine_is_used(self):
+        cpu = CPU()
+        dos.install(cpu)
+        cpu.s[CPU.CS] = 0x1000
+        cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        self.call(cpu, 0x0E00, dx=0)
+        self.assertEqual(cpu.get8(0), 4)  # A: B: C: D:
+        self.call(cpu, 0x1900)
+        self.assertEqual(cpu.get8(0), 0)  # the call moved to A:
 
 
 if __name__ == "__main__":
