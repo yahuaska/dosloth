@@ -4,7 +4,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import bios, config, disasm, dos, dump, psp, timer
+from . import bios, config, disasm, dos, dump, psp, timer, vga
 from .cpu import CPU
 from .filesystem import FsError
 from .volumes import Volumes
@@ -137,6 +137,7 @@ def main():
     bios.install(cpu)
     dos.install(cpu, volumes)
     timer.install(cpu)
+    vga.install(cpu)
     load(cpu, data, where.dos_path())
     log = open(args.d, "w") if args.d else None
     if log:
