@@ -221,6 +221,23 @@ class TestTheDumpOfACrash(CommandLineTest):
 WHITE_PIXEL = bytes([0xB8, 0x00, 0xA0, 0x8E, 0xC0, 0x26, 0xC6, 0x06, 0x00, 0x00, 0x80, 0xB4, 0x4C, 0xCD, 0x21])
 
 
+class TestTheWindow(CommandLineTest):
+    def test_without_a_screen_to_open_it_on_the_emulator_says_so_and_does_not_run(self):
+        self.program(WHITE_PIXEL)
+        environment = {name: value for name, value in os.environ.items()
+                       if name not in ("DISPLAY", "WAYLAND_DISPLAY")}
+        environment["PYTHONPATH"] = str(REPOSITORY)
+        result = subprocess.run([sys.executable, "-m", "mydos", "-w", "t.com"], capture_output=True, text=True,
+                                timeout=30, cwd=self.dir, env=environment)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("cannot open a window", result.stderr)
+        self.assertEqual(os.listdir(self.dir), ["t.com"])
+
+    def test_the_window_is_in_the_help(self):
+        result = self.run_emulator("-h")
+        self.assertIn("-w", result.stdout)
+
+
 class TestTheScreenFile(CommandLineTest):
     def check_picture(self, path):
         width, height, rgb = decode(path.read_bytes())

@@ -9,7 +9,10 @@ Only the layout of mode 12h is known here: 640 by 480 pixels, 80 bytes a line, t
 of the planes. The start address and the line length that the CRT controller could change are not looked at, and the
 colors are the standard 16 of the EGA, whatever palette the program has set up.
 """
+import time
 from dataclasses import dataclass
+
+from .cpu import Exit
 
 WIDTH = 640
 HEIGHT = 480
@@ -53,3 +56,41 @@ def render(planes, palette=EGA_COLORS, width=WIDTH, height=HEIGHT):
         table = bytes(color[channel] for color in palette) + bytes(256 - len(palette))
         rgb[channel::3] = indexes.translate(table)
     return Frame(width, height, bytes(rgb))
+
+
+class Monitor:
+    """Everything that shows the picture of the card, looked after together.
+
+    The emulator calls tick() often, and show() at the end. A tick lets every display look after its window, and
+    gives them the picture again if the card has been drawn on since the last time. Closing a window stops the
+    program, as turning a monitor off would stop a person.
+    """
+
+    def __init__(self, card, displays):
+        self.card = card
+        self.displays = displays
+
+    def show(self):
+        """Give every display the picture as it is now."""
+        frame = render(self.card.planes)
+        self.card.changed = False
+        for display in self.displays:
+            display.present(frame)
+
+    def tick(self):
+        for display in self.displays:
+            display.poll()
+        if any(display.closed for display in self.displays):
+            raise Exit(1)
+        if self.card.changed:
+            self.show()
+
+    def wait_for_key(self, keyboard):
+        """Let the displays go on working until a key is in the keyboard's buffer: what INT 16h AH=00 waits for."""
+        while not keyboard.buffer:
+            self.tick()
+            time.sleep(0.01)  # the person is slow, and nothing else is going on
+
+    def close(self):
+        for display in self.displays:
+            display.close()

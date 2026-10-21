@@ -317,6 +317,34 @@ class TestWriteModes(unittest.TestCase):
         self.assertEqual(self.chip.latches, [0x77, 0, 0, 0])
 
 
+class TestChanged(unittest.TestCase):
+    """The card remembers that it was drawn on, for whoever shows the screen."""
+
+    def test_a_new_card_has_not_been_drawn_on(self):
+        self.assertFalse(Vga().changed)
+
+    def test_a_write_in_any_mode_marks_it(self):
+        for mode in (0, 1, 2, 3):
+            chip = Vga()
+            configure(chip, mode=mode)
+            chip.write_memory(0, 0)
+            self.assertTrue(chip.changed, f"write mode {mode}")
+
+    def test_a_read_or_a_port_write_does_not(self):
+        chip = Vga()
+        chip.read_memory(0)
+        chip.write(0x3C8, 5)
+        configure(chip, mode=2, map_mask=1)
+        self.assertFalse(chip.changed)
+
+    def test_whoever_looked_clears_it_and_the_next_write_sets_it_again(self):
+        chip = Vga()
+        chip.write_memory(0, 0)
+        chip.changed = False
+        chip.write_memory(0, 0)
+        self.assertTrue(chip.changed)
+
+
 class TestReadModes(unittest.TestCase):
     def setUp(self):
         self.chip = Vga()

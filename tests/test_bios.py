@@ -54,6 +54,48 @@ class TestKeyboard(unittest.TestCase):
         self.call(0x0100, zf=False)
         self.assertTrue(self.cpu.get_flag(flags.ZF))
 
+    def test_the_buffer_holds_15_keys_and_loses_the_ones_after_them(self):
+        for number in range(20):
+            self.keyboard.press(0x02, 0x30 + number)
+        self.assertEqual(len(self.keyboard.buffer), 15)
+        self.call(0x0000)
+        self.assertEqual(self.cpu.r[CPU.AX], 0x0230)  # the first is the first
+        for number in range(1, 15):
+            self.call(0x0000)
+        self.assertEqual(self.cpu.r[CPU.AX], 0x0230 + 14)  # the 15th; the five after it are gone
+        self.call(0x0100)
+        self.assertTrue(self.cpu.get_flag(flags.ZF))
+
+    def test_a_freed_place_takes_the_next_key(self):
+        for _ in range(15):
+            self.keyboard.press(0x1E, 0x61)
+        self.call(0x0000)
+        self.keyboard.press(0x30, 0x62)
+        self.assertEqual(len(self.keyboard.buffer), 15)
+        self.assertEqual(self.keyboard.buffer[-1], 0x3062)
+
+    def test_ah_00_waits_through_the_waiter_when_there_is_one(self):
+        calls = []
+
+        def waiter():
+            calls.append(len(self.keyboard.buffer))
+            self.keyboard.press(0x1C, 0x0D)  # the key comes while it waits
+
+        self.keyboard.waiter = waiter
+        self.call(0x0000)
+        self.assertEqual((calls, self.cpu.r[CPU.AX]), ([0], 0x1C0D))
+
+    def test_the_waiter_is_not_called_when_a_key_is_already_there(self):
+        self.keyboard.waiter = lambda: self.fail("it should not wait")
+        self.keyboard.press(0x1E, 0x61)
+        self.call(0x0000)
+        self.assertEqual(self.cpu.r[CPU.AX], 0x1E61)
+
+    def test_ah_01_never_waits(self):
+        self.keyboard.waiter = lambda: self.fail("it should not wait")
+        self.call(0x0100)
+        self.assertTrue(self.cpu.get_flag(flags.ZF))
+
     def test_ah_00_with_no_key_stops_the_emulator_instead_of_waiting_for_ever(self):
         with self.assertRaises(NotImplementedError):
             self.call(0x0000)

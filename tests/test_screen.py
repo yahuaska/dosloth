@@ -2,7 +2,11 @@ import random
 import unittest
 
 from mydos import screen
-from mydos.screen import EGA_COLORS, Frame, render
+from mydos.bios import Keyboard
+from mydos.cpu import Exit
+from mydos.display import Display
+from mydos.screen import EGA_COLORS, Frame, Monitor, render
+from mydos.vga import Vga
 
 
 def reference(planes, palette, width, height):
@@ -136,6 +140,122 @@ class TestRender(unittest.TestCase):
 
     def test_the_constants(self):
         self.assertEqual((screen.WIDTH, screen.HEIGHT), (640, 480))
+
+
+class Recorder(Display):
+    """A display that only writes down what was done to it."""
+
+    def __init__(self, on_poll=None):
+        self.calls = []
+        self.frames = []
+        self.on_poll = on_poll
+
+    def present(self, frame):
+        self.calls.append("present")
+        self.frames.append(frame)
+
+    def poll(self):
+        self.calls.append("poll")
+        if self.on_poll:
+            self.on_poll(self)
+
+    def close(self):
+        self.calls.append("close")
+
+
+class TestMonitor(unittest.TestCase):
+    def setUp(self):
+        self.card = Vga()
+        self.first, self.second = Recorder(), Recorder()
+        self.monitor = Monitor(self.card, [self.first, self.second])
+
+    def test_a_card_nobody_has_drawn_on_is_not_shown_again(self):
+        self.monitor.tick()
+        self.monitor.tick()
+        self.assertEqual(self.first.calls, ["poll", "poll"])
+        self.assertEqual(self.second.calls, ["poll", "poll"])
+
+    def test_a_tick_after_drawing_shows_the_picture_on_every_display_once(self):
+        self.card.write_memory(0, 0x80)  # all four planes: the first pixel is white
+        self.monitor.tick()
+        self.monitor.tick()
+        for display in (self.first, self.second):
+            self.assertEqual(display.calls, ["poll", "present", "poll"])
+            self.assertEqual(display.frames[0].rgb[:3], b"\xFF\xFF\xFF")
+        self.assertFalse(self.card.changed)
+
+    def test_every_display_is_polled_before_any_is_shown_the_picture(self):
+        order = []
+        for name, display in (("first", self.first), ("second", self.second)):
+            display.on_poll = lambda display, name=name: order.append(name)
+        self.card.write_memory(0, 1)
+        self.monitor.tick()
+        self.assertEqual(order, ["first", "second"])
+        self.assertEqual(self.second.calls, ["poll", "present"])
+
+    def test_show_gives_the_same_picture_to_all_even_when_nothing_changed(self):
+        self.monitor.show()
+        self.assertEqual(self.first.calls, ["present"])
+        self.assertIs(self.first.frames[0], self.second.frames[0])
+        self.assertEqual((self.first.frames[0].width, self.first.frames[0].height), (640, 480))
+
+    def test_a_picture_that_is_drawn_again_is_shown_again(self):
+        self.card.write_memory(0, 0xFF)
+        self.monitor.tick()
+        self.card.write_memory(1, 0xFF)
+        self.monitor.tick()
+        self.assertEqual(self.first.calls, ["poll", "present", "poll", "present"])
+
+    def test_reading_the_planes_is_not_drawing(self):
+        self.card.read_memory(0)
+        self.monitor.tick()
+        self.assertNotIn("present", self.first.calls)
+
+    def test_a_closed_window_stops_the_program_with_status_1(self):
+        self.second.closed = True
+        self.card.write_memory(0, 1)
+        with self.assertRaises(Exit) as caught:
+            self.monitor.tick()
+        self.assertEqual(caught.exception.code, 1)
+        self.assertEqual(self.first.calls, ["poll"])  # and nothing is shown to the others
+
+    def test_waiting_for_a_key_goes_on_with_the_displays_until_one_is_there(self):
+        keyboard = Keyboard()
+        self.first.on_poll = lambda display: keyboard.press(0x1C, 0x0D) if display.calls.count("poll") == 3 else None
+        self.monitor.wait_for_key(keyboard)
+        self.assertEqual(self.first.calls.count("poll"), 3)
+        self.assertEqual(list(keyboard.buffer), [0x1C0D])
+
+    def test_waiting_for_a_key_shows_what_is_drawn_meanwhile(self):
+        keyboard = Keyboard()
+        self.first.on_poll = lambda display: (self.card.write_memory(0, 0x80) if len(display.calls) == 1 else
+                                              keyboard.press(0x01, 0x1B) if len(display.calls) > 3 else None)
+        self.monitor.wait_for_key(keyboard)
+        self.assertIn("present", self.second.calls)
+
+    def test_it_does_not_wait_when_a_key_is_there(self):
+        keyboard = Keyboard()
+        keyboard.press(0x1E, 0x61)
+        self.monitor.wait_for_key(keyboard)
+        self.assertEqual(self.first.calls, [])
+
+    def test_waiting_with_the_window_closed_ends_the_program(self):
+        keyboard = Keyboard()
+        self.first.on_poll = lambda display: setattr(display, "closed", True)
+        with self.assertRaises(Exit):
+            self.monitor.wait_for_key(keyboard)
+
+    def test_close_closes_every_display(self):
+        self.monitor.close()
+        self.assertEqual((self.first.calls, self.second.calls), (["close"], ["close"]))
+
+    def test_no_displays_at_all_is_fine(self):
+        monitor = Monitor(self.card, [])
+        self.card.write_memory(0, 1)
+        monitor.tick()
+        monitor.show()
+        monitor.close()
+        self.assertFalse(self.card.changed)
 
 
 if __name__ == "__main__":

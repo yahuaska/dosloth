@@ -10,11 +10,20 @@ import zlib
 
 
 class Display:
-    """What shows pictures. Make one of these by giving it `present`."""
+    """What shows pictures. Make one of these by giving it `present`.
+
+    A display that has a window, or anything else that wants to be looked after, also gives `poll`, which the
+    emulator calls often, and sets `closed` when the person who watches has closed the window.
+    """
+
+    closed = False
 
     def present(self, frame):
         """Show the picture (a screen.Frame). It replaces the one shown before."""
         raise NotImplementedError
+
+    def poll(self):
+        """Look after what the display needs to be looked after: its window's events, for one."""
 
     def close(self):
         """Nothing more will be shown."""

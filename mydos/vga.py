@@ -54,6 +54,7 @@ class Vga:
         self.status = 0
         self.planes = [bytearray(PLANE_SIZE) for _ in range(4)]
         self.latches = [0, 0, 0, 0]
+        self.changed = False  # a byte was written to the planes since whoever shows the screen last looked
 
     def write(self, port, value):
         """A byte written to one of the ports."""
@@ -103,6 +104,7 @@ class Vga:
         """A byte written to the window. For each plane the map mask allows, the byte that goes in is worked out
         from the byte of the CPU, the set/reset, the latch and the bit mask; which way depends on the write mode."""
         self.check_mode()
+        self.changed = True
         mode = self.graphics(5) & 3
         map_mask = self.sequencer(2)
         latches = self.latches

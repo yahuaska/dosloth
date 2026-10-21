@@ -28,14 +28,19 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/vga.py` - a VGA card for the 16-color planar modes: the ports 3C0h-3DFh, and the window A0000h-AFFFFh as
   four planes with the write modes 0-3, read modes 0-1 and the latches. The CPU hands that window to the card
   (`cpu.video`), so the crash dump's `.mem` file has nothing in it for the screen
-- `mydos/screen.py` - the planes -> a `Frame` of RGB pixels (mode 12h layout, 640x480, standard EGA colors)
-- `mydos/display.py` - the `Display` interface (`present(frame)`, `close()`) that every window or file that shows
-  the picture goes through; `PngFile` is the first. `-s PNGFILE` uses it
+- `mydos/screen.py` - the planes -> a `Frame` of RGB pixels (mode 12h layout, 640x480, standard EGA colors), and
+  the `Monitor` that looks after all the displays: polls their windows, shows the picture when the card was drawn on
+- `mydos/display.py` - the `Display` interface (`present(frame)`, `poll()`, `close()`) that every window or file that
+  shows the picture goes through; `PngFile` is the first. `-s PNGFILE` uses it
+- `mydos/window.py` - `TkWindow`, a Tk window behind that interface: shows the picture, passes the keys typed in it
+  on to the BIOS keyboard. Tk is loaded only when `-w` asks for a window
+- `mydos/keys.py` - a key of Tk (`Return`, `a`, `F1`) -> the BIOS scan code and ASCII code, for a US keyboard
 - `mydos/disasm.py` - bytes -> text like `mov ax, bx`, only used for the trace. Teach it every opcode the CPU learns
   (`tests/test_disasm.py` fails if it is out of step)
 - `mydos/__main__.py` - loads a .COM/.EXE and runs it: `python -m mydos tests/hello.com`;
   `-d LOGFILE` writes every executed instruction to LOGFILE, e.g. `1773:0880  8B C3  mov ax, bx`;
-  `-s PNGFILE` keeps the screen in a PNG file, written again about once a second and at the end
+  `-s PNGFILE` keeps the screen in a PNG file, written again when the picture changes and at the end;
+  `-w` shows the screen in a window and takes the keys typed in it (closing the window stops the program)
 - `tests/`        - tiny test programs (`make_hello.py` builds `hello.com`)
 
 ## Memory model

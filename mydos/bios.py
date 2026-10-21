@@ -34,14 +34,22 @@ class Keyboard:
     """The keys that were pressed and not yet read, oldest first.
 
     Each is the word the BIOS gives a program: the scan code of the key in the high byte, the ASCII code in the
-    low byte. Nothing fills it yet, so no key is ever pressed; a test, or later a real source of keys, calls press().
+    low byte. Whatever has keys to give calls press(). The buffer holds 15 keys, like the one of the real BIOS; a
+    key pressed when it is full is lost (the PC beeps).
+
+    `waiter` is what INT 16h AH=00 calls to wait for a key: a function that returns once the buffer is not empty.
+    Without one, nothing could ever press a key, and waiting would be for ever.
     """
+
+    SIZE = 15
 
     def __init__(self):
         self.buffer = deque()
+        self.waiter = None
 
     def press(self, scan_code, ascii_code):
-        self.buffer.append(scan_code << 8 | ascii_code)
+        if len(self.buffer) < self.SIZE:
+            self.buffer.append(scan_code << 8 | ascii_code)
 
 
 def int16(cpu, keyboard):
@@ -49,9 +57,9 @@ def int16(cpu, keyboard):
     ah = cpu.get8(4)
     if ah == 0x00:  # wait for a key and take it: AH = scan code, AL = ASCII code
         if not keyboard.buffer:
-            # A real BIOS waits here until somebody types. Nobody can yet, and waiting for ever without a word
-            # would be worse than stopping.
-            raise NotImplementedError("INT 16h AH=00: the program waits for a key, and no key can be pressed yet")
+            if keyboard.waiter is None:  # waiting for ever without a word would be worse than stopping
+                raise NotImplementedError("INT 16h AH=00: the program waits for a key, and no key can be pressed")
+            keyboard.waiter()
         cpu.r[CPU.AX] = keyboard.buffer.popleft()
     elif ah == 0x01:  # is there a key? ZF = 1 when not; else ZF = 0 and AX is the key, which stays in the buffer
         cpu.set_flag(flags.ZF, not keyboard.buffer)
