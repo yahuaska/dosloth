@@ -190,11 +190,51 @@ class TestTheDisks(ConfigTest):
     def test_a_drive_cannot_be_described_twice_in_two_cases(self):
         self.assertRejects('[disks.a]\nremovable = true\n[disks.A]\nremovable = true', "twice")
 
-    def test_removable_is_needed_and_is_true_or_false(self):
-        self.assertRejects("[disks.A]\n", "removable", "missing")
+    def test_the_type_of_the_drive_is_needed(self):
+        self.assertRejects("[disks.A]\n", "type", "missing")
+
+    def test_removable_is_the_old_way_and_is_true_or_false(self):
         for value in ('"yes"', "1", "0", "[true]"):
             with self.subTest(value=value):
                 self.assertRejects(f"[disks.A]\nremovable = {value}", "removable", "true or false")
+        c = self.parse("[disks.A]\nremovable = true\n[disks.B]\nremovable = false\n[mounts]\nB = {type = 'tmpfs'}")
+        self.assertEqual([c.disks[n].type for n in (0, 1)], ["floppy", "hdd"])
+
+    def test_the_type_is_floppy_hdd_or_cdrom(self):
+        c = self.parse("[disks.A]\ntype = 'floppy'\n[disks.C]\ntype = 'hdd'\n[disks.D]\ntype = 'cdrom'\n"
+                       "[mounts]\nC = {type = 'tmpfs'}")
+        self.assertEqual([c.disks[n].type for n in (0, 2, 3)], ["floppy", "hdd", "cdrom"])
+        for value in ('"tape"', '"HDD"', "1", "true", '""'):
+            with self.subTest(value=value):
+                self.assertRejects(f"[disks.A]\ntype = {value}", "type", "floppy, hdd, cdrom")
+
+    def test_type_and_removable_together_are_refused(self):
+        self.assertRejects("[disks.A]\ntype = 'floppy'\nremovable = true", "type", "removable", "only")
+
+    def test_only_a_hdd_is_not_removable(self):
+        c = self.parse("[disks.A]\ntype = 'floppy'\n[disks.C]\ntype = 'hdd'\n[disks.D]\ntype = 'cdrom'\n"
+                       "[mounts]\nC = {type = 'tmpfs'}")
+        self.assertEqual([c.disks[n].removable for n in (0, 2, 3)], [True, False, True])
+
+    def test_a_cdrom_may_be_left_empty_a_hdd_may_not(self):
+        c = self.parse("[disks.A]\ntype = 'floppy'\n[disks.D]\ntype = 'cdrom'\n[disks.C]\ntype = 'hdd'\n"
+                       "[mounts]\nC = {type = 'tmpfs'}")
+        self.assertIsNone(c.disks[3].mount)
+        self.assertRejects("[disks.C]\ntype = 'hdd'\n[disks.D]\ntype = 'cdrom'\n[mounts]\nD = {type = 'dir', "
+                           "path = 'games'}", "C", "needs something mounted")
+
+    def test_what_is_mounted_in_a_cdrom_is_read_only_without_saying_so(self):
+        c = self.parse("[disks.C]\ntype = 'hdd'\n[disks.D]\ntype = 'cdrom'\n[mounts]\nC = {type = 'tmpfs'}\n"
+                       "D = {type = 'dir', path = 'games'}")
+        self.assertTrue(c.disks[3].mount.readonly)
+        self.assertFalse(c.disks[2].mount.readonly)
+
+    def test_a_cdrom_cannot_be_made_writable_and_cannot_be_memory(self):
+        self.assertRejects("[disks.D]\ntype = 'cdrom'\n[mounts]\nD = {type = 'dir', path = 'games', readonly = false}",
+                           "mounts.D", "CD-ROM", "written")
+        self.assertRejects("[disks.D]\ntype = 'cdrom'\n[mounts]\nD = {type = 'tmpfs'}", "mounts.D", "CD-ROM")
+        c = self.parse("[disks.D]\ntype = 'cdrom'\n[mounts]\nD = {type = 'dir', path = 'games', readonly = true}")
+        self.assertTrue(c.disks[3].mount.readonly)
 
     def test_a_disk_is_a_table_with_known_keys(self):
         self.assertRejects("[disks]\nA = 5", "disks.A", "table")
@@ -319,6 +359,7 @@ class TestTheBuiltInMachine(ConfigTest):
     def test_four_drives_with_the_hard_disk_in_the_directory_given(self):
         c = config.default(self.base)
         self.assertEqual([c.disks[n].letter for n in sorted(c.disks)], ["A", "B", "C", "D"])
+        self.assertEqual([c.disks[n].type for n in sorted(c.disks)], ["floppy", "floppy", "hdd", "cdrom"])
         self.assertEqual([c.disks[n].removable for n in sorted(c.disks)], [True, True, False, True])
         self.assertEqual([c.disks[n].mount for n in (0, 1, 3)], [None, None, None])
         self.assertEqual(c.disks[2].mount, config.Mount("dir", self.base, False))

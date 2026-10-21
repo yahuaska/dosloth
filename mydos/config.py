@@ -4,15 +4,20 @@ It is a TOML file. A drive and the medium in it are described apart, as they are
 
     cwd = 'C:\\SETUP'                      # where the program starts: a drive and a directory inside DOS
 
-    [disks.C]                             # the drive: what kind of device it is
-    removable = false
+    [disks.C]                             # the drive: what kind of device it is: "floppy", "hdd" or "cdrom"
+    type = "hdd"
     [disks.A]
-    removable = true                      # a floppy drive; nothing is mounted in it: no disk inserted
+    type = "floppy"                       # a floppy drive; nothing is mounted in it: no disk inserted
+    [disks.D]
+    type = "cdrom"                        # a CD-ROM drive: what is mounted in it cannot be written to
 
     [mounts]                              # the medium: what is in the drive
     C = { type = "dir", path = "." }      # a directory of the host (relative paths: from the config's directory)
     B = { type = "tmpfs" }                # a file system in memory, gone when the emulator exits
-    D = { type = "dir", path = "/mnt/cd", readonly = true }
+    D = { type = "dir", path = "/mnt/cd" }
+
+`removable = true` (a floppy) and `removable = false` (a hard disk) are the old way to say the same as `type`; a drive
+has one of the two, not both.
 
 Every mistake in the file is a ConfigError with a message that says where it is, so a bad config stops the
 emulator before any program runs.
@@ -25,7 +30,8 @@ from pathlib import Path
 from .filesystem import FsError, for_mount
 
 TOP_LEVEL_KEYS = {"cwd", "disks", "mounts"}
-DISK_KEYS = {"removable"}
+DISK_KEYS = {"type", "removable"}
+DISK_TYPES = ("floppy", "hdd", "cdrom")
 MOUNT_KEYS = {"type", "path", "readonly"}
 MOUNT_TYPES = ("dir", "tmpfs")
 
@@ -44,10 +50,15 @@ class Mount:
 
 @dataclass(frozen=True)
 class Disk:
-    """A drive. `mount` is None when there is no medium in it."""
+    """A drive: "floppy", "hdd" or "cdrom". `mount` is None when there is no medium in it."""
     letter: str
-    removable: bool
+    type: str
     mount: Mount | None
+
+    @property
+    def removable(self):
+        """Can the medium be taken out? True for a floppy and a CD-ROM."""
+        return self.type != "hdd"
 
 
 @dataclass(frozen=True)
@@ -86,32 +97,44 @@ def _parse_disks(data):
     disks = _table(data.get("disks"), "disks") if "disks" in data else {}
     if not disks:
         raise ConfigError("disks: there must be at least one drive")
-    removable = {}
+    types = {}
     for key, table in disks.items():
         where = f"disks.{key}"
         letter = _letter(key, where)
-        if letter in removable:
+        if letter in types:
             raise ConfigError(f"{where}: the drive {letter}: is described twice")
         table = _table(table, where)
         _check_keys(table, DISK_KEYS, where)
-        if "removable" not in table:
-            raise ConfigError(f"{where}: 'removable' is missing (true for a floppy or a CD-ROM, false for a hard disk)")
-        if not isinstance(table["removable"], bool):
-            raise ConfigError(f"{where}.removable must be true or false")
-        removable[letter] = table["removable"]
-    return removable
+        if "type" in table and "removable" in table:
+            raise ConfigError(f"{where}: 'type' and 'removable' say the same thing, give only 'type'")
+        if "type" in table:
+            if table["type"] not in DISK_TYPES:
+                raise ConfigError(f"{where}.type must be one of {', '.join(DISK_TYPES)}")
+            types[letter] = table["type"]
+        elif "removable" in table:
+            if not isinstance(table["removable"], bool):
+                raise ConfigError(f"{where}.removable must be true or false")
+            types[letter] = "floppy" if table["removable"] else "hdd"
+        else:
+            raise ConfigError(f"{where}: 'type' is missing (floppy, hdd or cdrom)")
+    return types
 
 
-def _parse_mount(letter, table, base):
+def _parse_mount(letter, table, base, disk_type):
     where = f"mounts.{letter}"
     table = _table(table, where)
     _check_keys(table, MOUNT_KEYS, where)
     kind = table.get("type")
     if kind not in MOUNT_TYPES:
         raise ConfigError(f"{where}.type must be one of {', '.join(MOUNT_TYPES)}")
-    readonly = table.get("readonly", False)
+    cdrom = disk_type == "cdrom"
+    readonly = table.get("readonly", cdrom)  # nothing can be written to a CD-ROM
     if not isinstance(readonly, bool):
         raise ConfigError(f"{where}.readonly must be true or false")
+    if cdrom and not readonly:
+        raise ConfigError(f"{where}.readonly: a CD-ROM cannot be written to")
+    if cdrom and kind == "tmpfs":
+        raise ConfigError(f"{where}: a CD-ROM holds a directory of the host, not a file system in memory")
     if kind == "tmpfs":
         if "path" in table:
             raise ConfigError(f"{where}: a tmpfs is in memory and has no path")
@@ -126,18 +149,18 @@ def _parse_mount(letter, table, base):
     return Mount("dir", path, readonly)
 
 
-def _parse_mounts(data, removable, base):
+def _parse_mounts(data, types, base):
     mounts = _table(data["mounts"], "mounts") if "mounts" in data else {}
     result = {}
     for key, table in mounts.items():
         letter = _letter(key, f"mounts.{key}")
-        if letter not in removable:
+        if letter not in types:
             raise ConfigError(f"mounts.{key}: there is no drive {letter}: in [disks]")
         if letter in result:
             raise ConfigError(f"mounts.{key}: the drive {letter}: is mounted twice")
-        result[letter] = _parse_mount(letter, table, base)
-    for letter, is_removable in removable.items():
-        if letter not in result and not is_removable:
+        result[letter] = _parse_mount(letter, table, base, types[letter])
+    for letter, disk_type in types.items():
+        if letter not in result and disk_type == "hdd":
             raise ConfigError(f"mounts.{letter}: the drive {letter}: is not removable, so it needs something mounted")
     return result
 
@@ -169,10 +192,10 @@ def _parse_cwd(text, disks):
 def parse(data, base):
     """Make a Config from what tomllib read. Relative paths are taken from the directory `base`."""
     _check_keys(data, TOP_LEVEL_KEYS, "the file")
-    removable = _parse_disks(data)
-    mounts = _parse_mounts(data, removable, base)
-    disks = {ord(letter) - ord("A"): Disk(letter, is_removable, mounts.get(letter))
-             for letter, is_removable in removable.items()}
+    types = _parse_disks(data)
+    mounts = _parse_mounts(data, types, base)
+    disks = {ord(letter) - ord("A"): Disk(letter, disk_type, mounts.get(letter))
+             for letter, disk_type in types.items()}
     by_letter = {disk.letter: disk for disk in disks.values()}
     if "cwd" in data:
         if not isinstance(data["cwd"], str):
@@ -205,8 +228,7 @@ def default(base):
     """The machine used when no configuration is given: floppies A: and B:, the hard disk C: with the
     directory `base` in it, the CD-ROM D:, and a start in the root of C:. The drives with no mounts are empty."""
     return parse({
-        "disks": {"A": {"removable": True}, "B": {"removable": True},
-                  "C": {"removable": False}, "D": {"removable": True}},
+        "disks": {"A": {"type": "floppy"}, "B": {"type": "floppy"}, "C": {"type": "hdd"}, "D": {"type": "cdrom"}},
         "mounts": {"C": {"type": "dir", "path": "."}},
         "cwd": "C:\\",
     }, Path(base))

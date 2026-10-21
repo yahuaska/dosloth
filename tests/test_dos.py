@@ -1071,13 +1071,18 @@ class TestBreakFlagBootDriveAndVersion(unittest.TestCase):
 
 
 class TestMultiplex(unittest.TestCase):
-    """INT 2Fh AX=1500h: is MSCDEX, the CD-ROM driver, installed?"""
+    """INT 2Fh, the questions to MSCDEX, the CD-ROM driver."""
 
-    def setUp(self):
+    FLOPPIES_ONLY = "[disks.A]\ntype = 'floppy'\n[disks.C]\ntype = 'hdd'\n[mounts]\nC = {type = 'tmpfs'}\n"
+    TWO_CDROMS = FLOPPIES_ONLY + "[disks.E]\ntype = 'cdrom'\n[disks.D]\ntype = 'cdrom'\n"
+
+    def machine(self, text=None):
         self.cpu = CPU()
-        dos.install(self.cpu)
+        volumes = Volumes(config.parse(tomllib.loads(text), Path("."))) if text else None
+        dos.install(self.cpu, volumes)
         self.cpu.s[CPU.CS] = 0x1000
         self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x2F])
+        return self.cpu
 
     def call(self, ax, bx=0, cx=0x2222, dx=0x3333):
         cpu = self.cpu
@@ -1085,20 +1090,56 @@ class TestMultiplex(unittest.TestCase):
         cpu.ip = 0
         cpu.step()
 
-    def test_mscdex_is_not_installed_so_there_are_no_cd_rom_drives(self):
+    def test_the_built_in_machine_has_one_cd_rom_drive_d(self):
+        self.machine()
         self.call(0x1500, bx=0x5555)
-        self.assertEqual(self.cpu.r[CPU.BX], 0)
+        self.assertEqual((self.cpu.r[CPU.BX], self.cpu.r[CPU.CX]), (1, 3))  # one drive, and it is D:
 
-    def test_the_other_registers_and_the_flags_are_left_alone(self):
+    def test_without_a_cd_rom_drive_mscdex_is_not_there(self):
+        self.machine(self.FLOPPIES_ONLY)
+        self.call(0x1500, bx=0x5555)
+        self.assertEqual((self.cpu.r[CPU.BX], self.cpu.r[CPU.CX]), (0, 0x2222))  # CX is left as it was
+
+    def test_two_cd_rom_drives_are_counted_and_the_lowest_is_the_first(self):
+        self.machine(self.TWO_CDROMS)
+        self.call(0x1500)
+        self.assertEqual((self.cpu.r[CPU.BX], self.cpu.r[CPU.CX]), (2, 3))  # D: and E:, though E: is written first
+
+    def test_a_cd_rom_drive_with_no_disc_in_it_is_still_a_drive(self):
+        self.machine()  # D: has nothing mounted
+        self.call(0x1500)
+        self.assertEqual(self.cpu.r[CPU.BX], 1)
+
+    def test_the_other_registers_and_the_flags_are_left_alone_by_1500(self):
+        self.machine()
         self.cpu.set_flag(flags.CF, True)
         self.call(0x1500)
         cpu = self.cpu
-        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (0x1500, 0x2222, 0x3333))
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.DX]), (0x1500, 0x3333))
         self.assertTrue(cpu.get_flag(flags.CF))
         self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 2))  # the call returned after the int
 
+    def test_150b_tells_a_cd_rom_drive_from_the_others_and_says_mscdex_is_there(self):
+        self.machine(self.TWO_CDROMS)
+        for drive, answer in ((0, 0), (1, 0), (2, 0), (3, 1), (4, 1), (5, 0), (25, 0)):
+            self.call(0x150B, cx=drive)
+            self.assertEqual((self.cpu.r[CPU.AX], self.cpu.r[CPU.BX]), (answer, 0xADAD), f"drive {drive}")
+            self.assertEqual(self.cpu.r[CPU.CX], drive)
+
+    def test_150c_gives_the_version_2_10(self):
+        self.machine()
+        self.call(0x150C, bx=0)
+        self.assertEqual(self.cpu.r[CPU.BX], 0x020A)
+
+    def test_150b_and_150c_are_not_answered_where_there_is_no_mscdex(self):
+        self.machine(self.FLOPPIES_ONLY)
+        for ax in (0x150B, 0x150C):
+            with self.assertRaises(NotImplementedError):
+                self.call(ax)
+
     def test_the_other_services_are_not_done_yet(self):
-        for ax in (0x1501, 0x150B, 0x1600, 0x4300, 0x0000):
+        self.machine()
+        for ax in (0x1501, 0x1510, 0x1600, 0x4300, 0x0000):
             with self.assertRaises(NotImplementedError):
                 self.call(ax)
 

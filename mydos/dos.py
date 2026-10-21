@@ -15,6 +15,8 @@ CONSOLE_INFO = 0x80D3  # IOCTL answer for the console: a character device, stand
 DEVICE_INFO = 0x80C0  # the IOCTL answer for the auxiliary and printer devices: a character device, nothing special
 TOO_MANY_OPEN_FILES = 4
 INVALID_ACCESS_CODE = 0x0C
+MSCDEX_MAGIC = 0xADAD  # what MSCDEX puts in BX to say that it is there
+MSCDEX_VERSION = 0x020A  # MSCDEX 2.10, the one of Windows 95
 MAX_PATH = 260  # how long a path from a program may be, with its ending zero
 MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands out nothing above it
 
@@ -225,14 +227,29 @@ def int21(cpu, state):
         raise NotImplementedError(f"INT 21h AH={ah:02X}")
 
 
-def int2f(cpu):
+def cdrom_drives(config):
+    """The numbers of the CD-ROM drives of the machine (0 is A:), the lowest first."""
+    return [number for number, disk in sorted(config.disks.items()) if disk.type == "cdrom"]
+
+
+def int2f(cpu, state):
     """INT 2Fh: the multiplex interrupt. Programs ask here what is installed besides DOS; AH picks the service.
 
-    So far only AX=1500h, "is MSCDEX there?": no. BX is the number of CD-ROM drives and it is 0.
+    So far the questions to MSCDEX, the CD-ROM extension of DOS: 1500h, how many CD-ROM drives there are. It is
+    there when the machine has a CD-ROM drive, and then it also answers 150Bh and 150Ch. Without a drive there is
+    no MSCDEX, and the count is 0.
     """
     ax = cpu.r[CPU.AX]
-    if ax == 0x1500:  # the caller puts 0 in BX; MSCDEX would answer with the count of drives and the first one in CX
-        cpu.r[CPU.BX] = 0
+    cdroms = cdrom_drives(state.config)
+    if ax == 0x1500:  # BX = how many drives; CX = the first of them (the caller put 0 in BX, and gets 0 if none)
+        cpu.r[CPU.BX] = len(cdroms)
+        if cdroms:
+            cpu.r[CPU.CX] = cdroms[0]
+    elif cdroms and ax == 0x150B:  # is the drive in CX a CD-ROM drive? AX = 1 if so, else 0; BX = ADADh: MSCDEX
+        cpu.r[CPU.AX] = int(cpu.r[CPU.CX] in cdroms)
+        cpu.r[CPU.BX] = MSCDEX_MAGIC
+    elif cdroms and ax == 0x150C:  # the version of MSCDEX in BX: the major number in BH, the minor in BL
+        cpu.r[CPU.BX] = MSCDEX_VERSION
     else:
         raise NotImplementedError(f"INT 2Fh AX={ax:04X}")
 
@@ -244,5 +261,5 @@ def install(cpu, volumes=None):
     """
     state = DosState(volumes if volumes is not None else Volumes(default_config(Path.cwd())))
     cpu.int_handlers[0x21] = lambda cpu: int21(cpu, state)
-    cpu.int_handlers[0x2F] = int2f
+    cpu.int_handlers[0x2F] = lambda cpu: int2f(cpu, state)
     return state  # for whoever wants to look at what DOS holds, the tests in particular

@@ -2,7 +2,7 @@
 #
 # A drive and the medium in it are described apart. [disks] says what kind of device each drive is, and
 # [mounts] says what is in it. A drive with no entry in [mounts] has nothing in it, like an empty floppy
-# drive; only a removable drive may be left empty.
+# drive; only a floppy or a CD-ROM drive may be left empty, a hard disk must have something in it.
 #
 # Relative paths are taken from the directory this file is in.
 
@@ -10,18 +10,18 @@
 cwd = 'C:\'
 
 [disks.A]
-removable = true     # a floppy drive, with no disk in it
+type = "floppy"      # a floppy drive, with no disk in it
 
 [disks.B]
-removable = true
+type = "floppy"
 
 [disks.C]
-removable = false    # a hard disk: it must have something mounted
+type = "hdd"         # a hard disk: it must have something mounted
 
 [disks.D]
-removable = true     # a CD-ROM
+type = "cdrom"       # a CD-ROM drive: what is mounted in it can never be written to
 
 [mounts]
 B = { type = "tmpfs" }                                  # a floppy in memory: gone when the emulator exits
 C = { type = "dir", path = "." }                        # the directory of this file is the root of C:
-D = { type = "dir", path = "samples", readonly = true } # a disc that cannot be written to
+D = { type = "dir", path = "samples" }                  # a disc: the files of this directory
