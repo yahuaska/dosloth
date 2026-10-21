@@ -140,6 +140,10 @@ def _decode_opcode(r, op, seg_override):
         return f"inc {REG16[op - Op.INC_R16]}"
     if Op.DEC_R16 <= op < Op.DEC_R16 + 8:
         return f"dec {REG16[op - Op.DEC_R16]}"
+    if op == Op.PUSH_IMM16:
+        return f"push {r.u16():04X}"
+    if op == Op.PUSH_IMM8:
+        return f"push {_signed(r.s8())}"  # the CPU sign-extends it to a word
     if Op.PUSH_R16 <= op < Op.PUSH_R16 + 8:
         return f"push {REG16[op - Op.PUSH_R16]}"
     if Op.POP_R16 <= op < Op.POP_R16 + 8:

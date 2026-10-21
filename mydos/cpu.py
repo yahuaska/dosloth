@@ -59,6 +59,8 @@ class CPU:
             Op.POP_RM16: self.pop_rm16,
             Op.CALL_FAR: self.call_far_imm,
             Op.PUSHA: self.pusha,
+            Op.PUSH_IMM16: self.push_imm,
+            Op.PUSH_IMM8: self.push_imm,
             Op.POPA: self.popa,
             Op.CBW: self.cbw,
             Op.CWD: self.cwd,
@@ -589,6 +591,15 @@ class CPU:
         The register is chosen the same way as in PUSH.
         """
         self.r[op - Op.POP_R16] = self.pop16()
+
+    def push_imm(self, op):
+        """Push a constant from the program on the stack (opcodes 68 and 6A; 80186 and later).
+
+        68 is followed by a word. 6A is followed by one byte, which is read as a signed number and widened
+        to a word, so 6A FE pushes FFFEh, not 00FEh. It is shorter than 68 for the small numbers a compiler
+        passes to a function. Flags are not changed.
+        """
+        self.push16(self.fetch16() if op == Op.PUSH_IMM16 else signed(self.fetch8(), 8))
 
     def pusha(self, op):
         """Push all eight general registers on the stack with one instruction (opcode 60; 80186 and later).

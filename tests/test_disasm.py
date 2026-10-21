@@ -82,6 +82,9 @@ class TestText(unittest.TestCase):
             (b"\x87\x4F\x02", "xchg cx, [bx+2]"),
             (b"\x99", "cwd"),
             (b"\x60", "pusha"),   # from esetup.exe
+            (b"\x6A\x02", "push 2"),   # from esetup.exe
+            (b"\x6A\xFE", "push -2"),
+            (b"\x68\x34\x12", "push 1234"),
             (b"\x61", "popa"),
             (b"\x9C", "pushf"),
             (b"\x9D", "popf"),

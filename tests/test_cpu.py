@@ -797,7 +797,8 @@ class TestInstructionsThatLeaveTheFlagsAlone(unittest.TestCase):
         "mov r/m8,imm8": [0xC6, 0x07, 0x05], "mov r/m16,imm16": [0xC7, 0x07, 0x05, 0x00],
         "xchg ax,r16": [0x93], "xchg r/m8,r8": [0x86, 0x07], "xchg r/m16,r16": [0x87, 0x07],
         "nop": [0x90], "cbw": [0x98], "cwd": [0x99], "pushf": [0x9C], "lahf": [0x9F],
-        "push r16": [0x53], "pop r16": [0x5B], "pusha": [0x60], "popa": [0x61], "push es": [0x06], "pop es": [0x07],
+        "push r16": [0x53], "pop r16": [0x5B], "pusha": [0x60], "popa": [0x61],
+        "push imm16": [0x68, 0x34, 0x12], "push imm8": [0x6A, 0xFE], "push es": [0x06], "pop es": [0x07],
         "push r/m16": [0xFF, 0x37], "pop r/m16": [0x8F, 0x07], "lea": [0x8D, 0x07],
         "not r/m8": [0xF6, 0xD3], "not r/m16": [0xF7, 0xD3],
         "jmp short": [0xEB, 0x05], "jmp near": [0xE9, 0x05, 0x00],
@@ -1362,6 +1363,56 @@ class TestFarCallAndJump(unittest.TestCase):
         registers = lambda cpu: (cpu.s[CPU.CS], cpu.ip, cpu.r[CPU.SP])
         self.assertEqual(registers(direct), registers(indirect))
         self.assertEqual((self.word(direct, 1)), self.word(indirect, 1))  # the same segment under the return address
+
+
+class TestPushImmediate(unittest.TestCase):
+    """68 PUSH imm16 and 6A PUSH imm8 (80186 and later)."""
+
+    def pushed(self, code, sp=0x0200):
+        cpu = machine(bytes(code), False)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, sp
+        start_flags = cpu.flags
+        cpu.step()
+        self.assertEqual(cpu.flags, start_flags)
+        return cpu
+
+    def test_68_pushes_the_word(self):
+        for value in (0x0000, 0x0001, 0x1234, 0x7FFF, 0x8000, 0xFFFF):
+            cpu = self.pushed([0x68, value & 0xFF, value >> 8])
+            self.assertEqual((cpu.r[CPU.SP], cpu.rw(0x4000, 0x01FE), cpu.ip), (0x01FE, value, 3), hex(value))
+
+    def test_6a_pushes_a_byte_widened_to_a_word_by_its_sign(self):
+        for byte, word in ((0x00, 0x0000), (0x02, 0x0002), (0x7F, 0x007F), (0x80, 0xFF80), (0xFE, 0xFFFE),
+                           (0xFF, 0xFFFF)):
+            cpu = self.pushed([0x6A, byte])
+            self.assertEqual((cpu.r[CPU.SP], cpu.rw(0x4000, 0x01FE), cpu.ip), (0x01FE, word, 2), hex(byte))
+
+    def test_6a_is_the_short_form_of_68(self):
+        for byte in range(256):
+            short = self.pushed([0x6A, byte])
+            word = signed(byte, 8) & 0xFFFF
+            long = self.pushed([0x68, word & 0xFF, word >> 8])
+            self.assertEqual((short.r, short.mem[0x40000:0x50000]), (long.r, long.mem[0x40000:0x50000]), hex(byte))
+
+    def test_only_the_two_bytes_of_the_word_are_written_and_the_others_are_left_alone(self):
+        before = machine(b"", False)
+        cpu = self.pushed([0x68, 0x34, 0x12])
+        self.assertEqual(cpu.mem[0x401FE:0x40200], b"\x34\x12")
+        changed = [i for i in range(0x40000, 0x50000) if cpu.mem[i] != before.mem[i]]
+        self.assertEqual(changed, [0x401FE, 0x401FF])
+        for number in (CPU.AX, CPU.BX, CPU.CX, CPU.DX, CPU.BP, CPU.SI, CPU.DI):
+            self.assertEqual(cpu.r[number], before.r[number])
+
+    def test_sp_wraps_round_the_segment(self):
+        cpu = self.pushed([0x6A, 0x05], sp=0x0000)
+        self.assertEqual((cpu.r[CPU.SP], cpu.rw(0x4000, 0xFFFE)), (0xFFFE, 5))
+
+    def test_the_constant_is_read_after_the_opcode_not_from_the_stack_segment(self):
+        cpu = machine(bytes([0x6A, 0x07]), False)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0200
+        cpu.mem[0x40000:0x40002] = bytes([0x6A, 0x09])
+        cpu.step()
+        self.assertEqual(cpu.rw(0x4000, 0x01FE), 7)
 
 
 class TestPushaPopa(unittest.TestCase):
