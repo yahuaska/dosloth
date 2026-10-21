@@ -10,6 +10,15 @@ from . import flags
 from .cpu import CPU
 
 TICKS_PER_DAY = 0x1800B0  # the BIOS timer ticks 18.2065 times a second: 1,573,040 ticks make a day
+# where the BIOS keeps the state of the video, in its data area at 0040:0000
+BDA_VIDEO_MODE = 0x449  # a byte
+BDA_COLUMNS = 0x44A  # a word: the characters in a line
+BDA_PAGE = 0x462  # a byte: the page of the screen that is shown
+TEXT_MODE = 0x03  # 80 by 25 characters in 16 colors: what DOS is in before a program starts
+GRAPHICS_MODE = 0x12  # 640 by 480 pixels in 16 colors
+TEXT_BUFFER = 0xB8000  # where the characters of the text modes are, a pair of bytes each: the character, its color
+TEXT_CLEARED = 0x4000  # how much of it a mode set clears: the four pages of 80 by 25
+BLANK_CELL = bytes([0x20, 0x07])  # a space, light grey on black
 VGA_COLOR_DISPLAY = 0x08  # the code of a VGA with a color monitor in the answer of INT 10h AH=1Ah
 NO_DISPLAY = 0x00  # the code that says there is no second monitor
 
@@ -32,10 +41,30 @@ def int1a(cpu):
         raise NotImplementedError(f"INT 1Ah AH={ah:02X}")
 
 
+def set_video_mode(cpu, mode, keep_picture):
+    """Put the machine in a video mode, as the BIOS does: the state in the data area, and a clean screen unless the
+    picture is to be kept (the registers of the card are set up either way)."""
+    if mode not in (TEXT_MODE, GRAPHICS_MODE):
+        raise NotImplementedError(f"INT 10h AH=00 AL={mode:02X}: video mode {mode:02X}")
+    cpu.mem[BDA_VIDEO_MODE] = mode
+    cpu.mem[BDA_COLUMNS:BDA_COLUMNS + 2] = (80).to_bytes(2, "little")
+    cpu.mem[BDA_PAGE] = 0
+    if cpu.video is not None:
+        cpu.video.clear(keep_planes=keep_picture)
+    if not keep_picture:
+        cpu.mem[TEXT_BUFFER:TEXT_BUFFER + TEXT_CLEARED] = BLANK_CELL * (TEXT_CLEARED // 2)
+
+
 def int10(cpu):
-    """INT 10h: the BIOS video services, selected by AH. Only 1Ah AL=00h so far."""
+    """INT 10h: the BIOS video services, selected by AH. So far 00h (modes 03h and 12h only), 0Fh and 1Ah AL=00h."""
     ah, al = cpu.get8(4), cpu.get8(0)
-    if ah == 0x1A and al == 0x00:
+    if ah == 0x00:  # set the video mode AL; bit 7 of AL says to keep what is on the screen
+        set_video_mode(cpu, al & 0x7F, bool(al & 0x80))
+    elif ah == 0x0F:  # get the video mode: AL = the mode, AH = characters in a line, BH = the page shown
+        cpu.set8(0, cpu.mem[BDA_VIDEO_MODE])
+        cpu.set8(4, cpu.mem[BDA_COLUMNS])
+        cpu.set8(7, cpu.mem[BDA_PAGE])
+    elif ah == 0x1A and al == 0x00:
         # Which video cards and monitors are there? AL = 1Ah says that the BIOS knows this call, which only a VGA
         # BIOS does: it is the way a program finds out that it is on a VGA. BL = the code of the active display,
         # BH = the code of the other one. Ours is a VGA with a color monitor, and nothing else.
@@ -90,6 +119,9 @@ def int16(cpu, keyboard):
 def install(cpu):
     """Hook the BIOS interrupt handlers into the CPU. Returns the keyboard, for whoever wants to press keys on it."""
     keyboard = Keyboard()
+    cpu.mem[BDA_VIDEO_MODE] = TEXT_MODE  # the machine starts in text mode, as it is at the DOS prompt
+    cpu.mem[BDA_COLUMNS:BDA_COLUMNS + 2] = (80).to_bytes(2, "little")
+    cpu.mem[BDA_PAGE] = 0
     cpu.int_handlers[0x10] = int10
     cpu.int_handlers[0x1A] = int1a
     cpu.int_handlers[0x16] = lambda cpu: int16(cpu, keyboard)

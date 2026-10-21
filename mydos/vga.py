@@ -74,6 +74,16 @@ class Vga:
             return self.last_written.get(port, 0)
         return self.registers.get((index_port, self.last_written.get(index_port, 0)), 0)
 
+    def clear(self, keep_planes=False):
+        """What a change of video mode does to the card: the registers are as the BIOS leaves them, the latches are
+        empty, and the planes are empty too, unless the mode set is to keep the picture."""
+        self.registers = dict(POWER_ON)
+        self.latches = [0, 0, 0, 0]
+        self.changed = True
+        if not keep_planes:
+            for plane in self.planes:
+                plane[:] = bytes(PLANE_SIZE)
+
     def sequencer(self, index):
         return self.registers.get((SEQUENCER, index), 0)
 

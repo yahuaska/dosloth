@@ -345,6 +345,44 @@ class TestChanged(unittest.TestCase):
         self.assertTrue(chip.changed)
 
 
+class TestClear(unittest.TestCase):
+    """What a change of video mode does to the card."""
+
+    def dirty_card(self):
+        chip = Vga()
+        for plane in chip.planes:
+            plane[0] = plane[-1] = plane[1234] = 0xAA
+        configure(chip, map_mask=1, bit_mask=3, mode=2, set_reset=5)
+        chip.latches = [9, 8, 7, 6]
+        chip.changed = False
+        return chip
+
+    def test_the_planes_the_registers_and_the_latches_start_again(self):
+        chip = self.dirty_card()
+        chip.clear()
+        self.assertEqual([(plane[0], plane[-1], plane[1234]) for plane in chip.planes], [(0, 0, 0)] * 4)
+        self.assertEqual((chip.latches, chip.changed), ([0, 0, 0, 0], True))
+        for index_port, index, value in ((0x3C4, 2, 0x0F), (0x3CE, 8, 0xFF), (0x3CE, 7, 0x0F), (0x3CE, 5, 0),
+                                         (0x3CE, 0, 0)):
+            chip.write(index_port, index)
+            self.assertEqual(chip.read(index_port + 1), value, f"{index_port:X} register {index}")
+
+    def test_keeping_the_planes_clears_the_rest_only(self):
+        chip = self.dirty_card()
+        chip.clear(keep_planes=True)
+        self.assertEqual([plane[1234] for plane in chip.planes], [0xAA] * 4)
+        self.assertEqual((chip.latches, chip.changed, chip.sequencer(2)), ([0, 0, 0, 0], True, 0x0F))
+
+    def test_the_planes_stay_the_same_objects_so_whoever_holds_them_sees_the_change(self):
+        chip = Vga()
+        held = chip.planes[0]
+        chip.write_memory(0, 0xFF)
+        chip.clear()
+        self.assertIs(chip.planes[0], held)
+        self.assertEqual(held[0], 0)
+        self.assertEqual(len(held), 0x10000)
+
+
 class TestReadModes(unittest.TestCase):
     def setUp(self):
         self.chip = Vga()
