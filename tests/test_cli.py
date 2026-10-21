@@ -2,8 +2,11 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+
+from tests.test_display import decode
 
 REPOSITORY = Path(__file__).resolve().parent.parent
 
@@ -211,6 +214,60 @@ class TestTheDumpOfACrash(CommandLineTest):
         self.assertTrue((self.dir / "sub" / "Prog.Com.crash.json").exists())
         self.assertTrue((self.dir / "sub" / "Prog.Com.crash.mem").exists())
         self.assertEqual(sorted(os.listdir(self.dir)), ["sub"])  # and nowhere else
+
+
+# mov ax,0A000h ; mov es,ax ; mov byte es:[0],80h ; mov ah,4Ch ; int 21h
+# the byte 80h goes into all four planes, so the leftmost pixel of the first line gets color 15, white
+WHITE_PIXEL = bytes([0xB8, 0x00, 0xA0, 0x8E, 0xC0, 0x26, 0xC6, 0x06, 0x00, 0x00, 0x80, 0xB4, 0x4C, 0xCD, 0x21])
+
+
+class TestTheScreenFile(CommandLineTest):
+    def check_picture(self, path):
+        width, height, rgb = decode(path.read_bytes())
+        self.assertEqual((width, height), (640, 480))
+        self.assertEqual(rgb[:3], b"\xFF\xFF\xFF")  # the pixel the program drew
+        self.assertEqual(set(rgb[3:]), {0})  # and nothing else
+
+    def test_the_picture_is_in_the_file_when_the_program_ends(self):
+        self.program(WHITE_PIXEL)
+        result = self.run_emulator("-s", "screen.png", "t.com")
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        self.check_picture(self.dir / "screen.png")
+        self.assertEqual(sorted(os.listdir(self.dir)), ["screen.png", "t.com"])
+
+    def test_it_is_there_after_a_crash_too(self):
+        self.program(WHITE_PIXEL[:-4] + CRASH)  # draws, then stops on an opcode that does not exist
+        result = self.run_emulator("-s", "screen.png", "t.com")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("NotImplementedError", result.stderr)
+        self.check_picture(self.dir / "screen.png")
+
+    def test_a_program_that_draws_nothing_gives_a_black_screen(self):
+        self.program(CURRENT_DRIVE)
+        self.run_emulator("-s", "screen.png", "t.com")
+        self.assertEqual(set(decode((self.dir / "screen.png").read_bytes())[2]), {0})
+
+    def test_without_the_option_no_file_is_made(self):
+        self.program(WHITE_PIXEL)
+        self.run_emulator("t.com")
+        self.assertEqual(os.listdir(self.dir), ["t.com"])
+
+    def test_the_file_is_written_while_the_program_runs(self):
+        # draw a pixel, then loop for ever: only the periodic showing can put the picture in the file
+        loop = bytes([0xEB, 0xFE])  # jmp $
+        self.program(WHITE_PIXEL[:-4] + loop)
+        process = subprocess.Popen([sys.executable, "-m", "mydos", "-s", "screen.png", "t.com"], cwd=self.dir,
+                                   env={**os.environ, "PYTHONPATH": str(REPOSITORY)}, stderr=subprocess.PIPE)
+        try:
+            for _ in range(200):
+                if (self.dir / "screen.png").exists():
+                    break
+                time.sleep(0.1)
+            self.assertTrue((self.dir / "screen.png").exists(), "no picture after 20 seconds")
+            self.check_picture(self.dir / "screen.png")
+        finally:
+            process.kill()
+            process.communicate()
 
 
 if __name__ == "__main__":

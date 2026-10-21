@@ -30,11 +30,12 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   (`cpu.video`), so the crash dump's `.mem` file has nothing in it for the screen
 - `mydos/screen.py` - the planes -> a `Frame` of RGB pixels (mode 12h layout, 640x480, standard EGA colors)
 - `mydos/display.py` - the `Display` interface (`present(frame)`, `close()`) that every window or file that shows
-  the picture goes through; `PngFile` is the first
+  the picture goes through; `PngFile` is the first. `-s PNGFILE` uses it
 - `mydos/disasm.py` - bytes -> text like `mov ax, bx`, only used for the trace. Teach it every opcode the CPU learns
   (`tests/test_disasm.py` fails if it is out of step)
 - `mydos/__main__.py` - loads a .COM/.EXE and runs it: `python -m mydos tests/hello.com`;
-  `-d LOGFILE` writes every executed instruction to LOGFILE, e.g. `1773:0880  8B C3  mov ax, bx`
+  `-d LOGFILE` writes every executed instruction to LOGFILE, e.g. `1773:0880  8B C3  mov ax, bx`;
+  `-s PNGFILE` keeps the screen in a PNG file, written again about once a second and at the end
 - `tests/`        - tiny test programs (`make_hello.py` builds `hello.com`)
 
 ## Memory model

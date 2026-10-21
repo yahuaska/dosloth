@@ -1408,10 +1408,19 @@ class CPU:
         """Set the direction flag (opcode FD): string instructions will walk backward through memory."""
         self.set_flag(flags.DF, True)
 
-    def run(self):
-        """Keep executing instructions until the program exits, then return its exit code."""
+    def run(self, every=None, tick=None):
+        """Keep executing instructions until the program exits, then return its exit code.
+
+        With `tick` (a function without arguments) and `every` (a number of instructions) it calls `tick` after
+        every `every` instructions, for whoever wants to look at the machine while the program runs.
+        """
         try:
+            if tick is None:
+                while True:
+                    self.step()
             while True:
-                self.step()
+                for _ in range(every):
+                    self.step()
+                tick()
         except Exit as e:
             return e.code

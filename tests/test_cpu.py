@@ -1565,6 +1565,49 @@ class TestLea(unittest.TestCase):
             cpu.step()
 
 
+class TestRunTick(unittest.TestCase):
+    """CPU.run(every, tick): look at the machine every so many instructions."""
+
+    def machine_with_nops(self, count):
+        return machine(bytes([0x90] * count + [0xF4]), False)  # count NOPs, then HLT
+
+    def test_without_a_tick_it_runs_to_the_end(self):
+        cpu = self.machine_with_nops(5)
+        self.assertEqual(cpu.run(), 0)
+        self.assertEqual(cpu.instructions, 6)
+
+    def test_the_tick_comes_after_every_n_instructions(self):
+        cpu = self.machine_with_nops(10)
+        seen = []
+        self.assertEqual(cpu.run(4, lambda: seen.append(cpu.instructions)), 0)
+        self.assertEqual(seen, [4, 8])  # the program ends in the middle of the third round: no tick then
+        self.assertEqual(cpu.instructions, 11)
+
+    def test_a_program_that_ends_before_the_first_tick_gets_none(self):
+        cpu = self.machine_with_nops(2)
+        seen = []
+        cpu.run(100, lambda: seen.append(1))
+        self.assertEqual(seen, [])
+
+    def test_the_exit_code_still_comes_back(self):
+        cpu = machine(bytes([0x90, 0xB4, 0x4C, 0xB0, 0x07, 0xCD, 0x21]), False)
+        cpu.int_handlers[0x21] = lambda cpu: (_ for _ in ()).throw(Exit(cpu.get8(0)))
+        self.assertEqual(cpu.run(2, lambda: None), 7)
+
+    def test_an_error_in_the_program_comes_out_through_run(self):
+        cpu = machine(bytes([0x90, 0x0F]), False)  # an opcode that does not exist
+        with self.assertRaises(NotImplementedError):
+            cpu.run(1, lambda: None)
+
+    def test_an_error_in_the_tick_comes_out_through_run(self):
+        cpu = self.machine_with_nops(5)
+
+        def tick():
+            raise RuntimeError("tick")
+        with self.assertRaises(RuntimeError):
+            cpu.run(2, tick)
+
+
 class TestEnter(unittest.TestCase):
     """C8 ENTER size, level (80186 and later): push bp ; mov bp, sp ; sub sp, size, and for nested levels a display."""
 

@@ -4,13 +4,15 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import bios, config, disasm, dos, dump, psp, timer, vga
+from . import bios, config, disasm, dos, dump, psp, screen, timer, vga
 from .cpu import CPU
+from .display import PngFile
 from .filesystem import FsError
 from .volumes import Volumes
 
 PSP_SEG = 0x1000
 ENV_SEG = PSP_SEG - 0x10  # the environment block sits in the 256 bytes just below the PSP
+SCREEN_EVERY = 500_000  # the screen is shown again after this many instructions: about once a second
 
 
 def load_com(cpu, data):
@@ -110,6 +112,8 @@ def main():
     parser.add_argument("-c", metavar="FILE", help="the configuration (TOML): drives, mounts, starting directory; "
                         "without it the current directory is the hard disk C:")
     parser.add_argument("-d", metavar="LOGFILE", help="write every executed instruction to LOGFILE")
+    parser.add_argument("-s", metavar="PNGFILE", help="show the screen in this PNG file: written again about once a "
+                        "second while the program runs, and at the end, also after a crash")
     parser.add_argument("program", help="the .COM or .EXE file to run, named as DOS names it: `ESETUP.EXE`, "
                         "`C:\\SETUP\\ESETUP.EXE`, `setup/esetup.exe`; relative to the current directory of the "
                         "starting drive (the `cwd` of the configuration)")
@@ -137,17 +141,24 @@ def main():
     bios.install(cpu)
     dos.install(cpu, volumes)
     timer.install(cpu)
-    vga.install(cpu)
+    card = vga.install(cpu)
+    display = PngFile(args.s) if args.s else None
     load(cpu, data, where.dos_path())
     log = open(args.d, "w") if args.d else None
     if log:
         cpu.trace = make_trace(log)
+    def show():
+        display.present(screen.render(card.planes))
+
     try:
-        code = cpu.run()
+        code = cpu.run(SCREEN_EVERY, show) if display else cpu.run()
     except Exception as e:
         dump.write(cpu, host_path, e)  # leave something to debug with, then fail as usual
         raise
     finally:
+        if display:
+            show()  # the last picture, whether the program ended or crashed
+            display.close()
         if log:
             log.close()
     sys.exit(code)
