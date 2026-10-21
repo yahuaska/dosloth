@@ -35,6 +35,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   shows the picture goes through; `PngFile` is the first. `-s PNGFILE` uses it
 - `mydos/window.py` - `TkWindow`, a Tk window behind that interface: shows the picture, passes the keys typed in it
   on to the BIOS keyboard. Tk is loaded only when `-w` asks for a window
+- `mydos/mouse.py` - the mouse and its INT 33h driver (reset, show/hide, position and buttons, press and release
+  counts, ranges, the program's subroutine remembered but not called); the window gives it the events
 - `mydos/keys.py` - a key of Tk (`Return`, `a`, `F1`) -> the BIOS scan code and ASCII code, for a US keyboard
 - `mydos/disasm.py` - bytes -> text like `mov ax, bx`, only used for the trace. Teach it every opcode the CPU learns
   (`tests/test_disasm.py` fails if it is out of step)

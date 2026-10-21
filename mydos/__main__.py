@@ -4,7 +4,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import bios, config, disasm, dos, dump, psp, screen, timer, vga
+from . import bios, config, disasm, dos, dump, mouse, psp, screen, timer, vga
 from .cpu import CPU
 from .display import PngFile
 from .window import TkWindow, WindowError
@@ -145,12 +145,13 @@ def main():
     dos.install(cpu, volumes)
     timer.install(cpu)
     card = vga.install(cpu)
+    pointer = mouse.install(cpu)
     displays = []
     if args.s:
         displays.append(PngFile(args.s))
     if args.w:
         try:
-            displays.append(TkWindow(keyboard.press))
+            displays.append(TkWindow(keyboard.press, pointer.update))
         except WindowError as error:
             parser.error(f"cannot open a window: {error}")
     monitor = screen.Monitor(card, displays) if displays else None

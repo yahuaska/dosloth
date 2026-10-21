@@ -29,6 +29,9 @@ class TestTkWindow(unittest.TestCase):
             self.skipTest(f"no window: {error}")
         self.addCleanup(self.window.close)
 
+    def test_a_hidden_window_is_not_on_the_screen(self):
+        self.assertEqual(self.window.root.state(), "withdrawn")
+
     def test_it_is_a_display_and_starts_open(self):
         self.assertIsInstance(self.window, Display)
         self.assertFalse(self.window.closed)
@@ -91,6 +94,54 @@ class TestTkWindow(unittest.TestCase):
         self.assertEqual(self.window.zoom, 1)
         self.assertIsNone(self.window.shown)
 
+    def test_the_pixel_under_the_mouse_when_the_picture_is_as_it_is(self):
+        self.window.present(frame_of(640, 480, (0, 0, 0)))
+        for point, pixel in (((0, 0), (0, 0)), ((100, 50), (100, 50)), ((639, 479), (639, 479)),
+                             ((-5, 3), (0, 3)), ((700, 600), (639, 479))):
+            self.assertEqual(self.window.place_of(*point), pixel, point)
+
+    def test_the_pixel_under_the_mouse_in_a_bigger_window_with_margins_and_zoom(self):
+        self.window.present(frame_of(640, 480, (0, 0, 0)))
+        self.window.layout(800, 600)  # zoom 1, the picture 80 from the left and 60 from the top
+        self.assertEqual(self.window.place_of(180, 110), (100, 50))
+        self.assertEqual(self.window.place_of(79, 59), (0, 0))  # in the margin: the nearest pixel
+        self.window.layout(1280, 960)  # zoom 2, no margins
+        self.assertEqual(self.window.place_of(200, 100), (100, 50))
+        self.assertEqual(self.window.place_of(201, 101), (100, 50))  # the other half of the pixel
+        self.assertEqual(self.window.place_of(202, 102), (101, 51))
+        self.window.layout(1400, 1000)  # zoom 2, 60 and 20 of margin
+        self.assertEqual(self.window.place_of(60 + 200, 20 + 100), (100, 50))
+
+    def test_the_pixel_under_the_mouse_before_any_picture_is_in_a_window_of_the_size_of_the_screen(self):
+        self.assertEqual(self.window.place_of(100, 50), (100, 50))
+
+    def test_the_mouse_moving_goes_to_the_program_with_the_buttons_that_are_down(self):
+        calls = []
+        self.window.pointer = lambda x, y, buttons: calls.append((x, y, buttons))
+        self.window.on_motion(SimpleNamespace(x=100, y=50))
+        self.window.on_button(SimpleNamespace(x=100, y=50, num=1), True)
+        self.window.on_motion(SimpleNamespace(x=110, y=60))
+        self.window.on_button(SimpleNamespace(x=110, y=60, num=3), True)
+        self.window.on_button(SimpleNamespace(x=110, y=60, num=1), False)
+        self.window.on_button(SimpleNamespace(x=111, y=61, num=2), True)
+        self.window.on_button(SimpleNamespace(x=111, y=61, num=3), False)
+        self.window.on_button(SimpleNamespace(x=111, y=61, num=2), False)
+        self.assertEqual(calls, [(100, 50, 0), (100, 50, 1), (110, 60, 1), (110, 60, 3), (110, 60, 2),
+                                 (111, 61, 6), (111, 61, 4), (111, 61, 0)])
+
+    def test_the_wheel_and_other_buttons_are_not_passed_on(self):
+        calls = []
+        self.window.pointer = lambda x, y, buttons: calls.append((x, y, buttons))
+        for number in (4, 5, 6, 0):
+            self.window.on_button(SimpleNamespace(x=1, y=1, num=number), True)
+        self.assertEqual((calls, self.window.buttons), ([], 0))
+
+    def test_a_window_with_no_mouse_to_tell_ignores_it(self):
+        self.window.pointer = None
+        self.window.on_motion(SimpleNamespace(x=1, y=1))
+        self.window.on_button(SimpleNamespace(x=1, y=1, num=1), True)
+        self.assertEqual(self.window.buttons, 1)  # it still knows which are down
+
     def test_a_key_pressed_goes_to_the_program_as_scan_and_ascii_codes(self):
         for keysym, char in (("Return", "\r"), ("a", "a"), ("A", "A"), ("Up", ""), ("Escape", "\x1b")):
             self.window.on_key(SimpleNamespace(keysym=keysym, char=char))
@@ -142,6 +193,17 @@ class TestZoom(unittest.TestCase):
     def test_another_size_of_picture(self):
         self.assertEqual(zoom_for(1280, 800, 320, 200), 4)
         self.assertEqual(zoom_for(1280, 1000, 320, 200), 4)
+
+
+class TestWithoutTk(unittest.TestCase):
+    def test_a_python_without_tkinter_gives_a_window_error_that_says_so(self):
+        import sys
+        from unittest import mock
+        from mydos.window import TkWindow, WindowError
+        with mock.patch.dict(sys.modules, {"tkinter": None}):  # an import of it now fails, as on such a Python
+            with self.assertRaises(WindowError) as caught:
+                TkWindow(lambda scan, ascii_code: None, hidden=True)
+        self.assertIn("tkinter", str(caught.exception))
 
 
 class TestWithoutAScreen(unittest.TestCase):
