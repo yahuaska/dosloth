@@ -225,6 +225,18 @@ def int21(cpu, state):
         raise NotImplementedError(f"INT 21h AH={ah:02X}")
 
 
+def int2f(cpu):
+    """INT 2Fh: the multiplex interrupt. Programs ask here what is installed besides DOS; AH picks the service.
+
+    So far only AX=1500h, "is MSCDEX there?": no. BX is the number of CD-ROM drives and it is 0.
+    """
+    ax = cpu.r[CPU.AX]
+    if ax == 0x1500:  # the caller puts 0 in BX; MSCDEX would answer with the count of drives and the first one in CX
+        cpu.r[CPU.BX] = 0
+    else:
+        raise NotImplementedError(f"INT 2Fh AX={ax:04X}")
+
+
 def install(cpu, volumes=None):
     """Hook DOS interrupt handlers into the CPU, for the drives in `volumes` (see volumes.py).
 
@@ -232,4 +244,5 @@ def install(cpu, volumes=None):
     """
     state = DosState(volumes if volumes is not None else Volumes(default_config(Path.cwd())))
     cpu.int_handlers[0x21] = lambda cpu: int21(cpu, state)
+    cpu.int_handlers[0x2F] = int2f
     return state  # for whoever wants to look at what DOS holds, the tests in particular

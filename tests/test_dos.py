@@ -1070,5 +1070,38 @@ class TestBreakFlagBootDriveAndVersion(unittest.TestCase):
                 self.call(0x3300 | al)
 
 
+class TestMultiplex(unittest.TestCase):
+    """INT 2Fh AX=1500h: is MSCDEX, the CD-ROM driver, installed?"""
+
+    def setUp(self):
+        self.cpu = CPU()
+        dos.install(self.cpu)
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x2F])
+
+    def call(self, ax, bx=0, cx=0x2222, dx=0x3333):
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = ax, bx, cx, dx
+        cpu.ip = 0
+        cpu.step()
+
+    def test_mscdex_is_not_installed_so_there_are_no_cd_rom_drives(self):
+        self.call(0x1500, bx=0x5555)
+        self.assertEqual(self.cpu.r[CPU.BX], 0)
+
+    def test_the_other_registers_and_the_flags_are_left_alone(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.call(0x1500)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (0x1500, 0x2222, 0x3333))
+        self.assertTrue(cpu.get_flag(flags.CF))
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 2))  # the call returned after the int
+
+    def test_the_other_services_are_not_done_yet(self):
+        for ax in (0x1501, 0x150B, 0x1600, 0x4300, 0x0000):
+            with self.assertRaises(NotImplementedError):
+                self.call(ax)
+
+
 if __name__ == "__main__":
     unittest.main()
