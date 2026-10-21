@@ -102,11 +102,23 @@ def int21(cpu, state):
     elif ah == 0x40:  # write CX bytes from DS:DX to the file handle in BX; AX = how many were written
         handle, count = cpu.r[CPU.BX], cpu.r[CPU.CX]
         entry = state.handles.get(handle)
-        if isinstance(entry, OpenFile):
-            raise NotImplementedError(f"INT 21h AH=40 on the file {entry.dos_path}")
         if entry is None:  # error 06: invalid handle: not open
             cpu.set_flag(flags.CF, True)
             cpu.r[CPU.AX] = 6
+        elif isinstance(entry, OpenFile):
+            # A file takes the bytes at its current position. CX = 0 is not an empty write: it cuts the file
+            # off at that position.
+            data = bytes(cpu.rb(cpu.s[CPU.DS], (cpu.r[CPU.DX] + i) & 0xFFFF) for i in range(count))
+            try:
+                if count == 0:
+                    entry.file.truncate()
+                else:
+                    entry.file.write(data)
+                cpu.r[CPU.AX] = count
+                cpu.set_flag(flags.CF, False)
+            except (OSError, ValueError):  # error 05: access denied: the file was not opened for writing
+                cpu.set_flag(flags.CF, True)
+                cpu.r[CPU.AX] = ACCESS_DENIED
         else:
             if isinstance(entry, Console):  # the screen; error output goes to ours. The devices just swallow it.
                 data = bytes(cpu.rb(cpu.s[CPU.DS], (cpu.r[CPU.DX] + i) & 0xFFFF) for i in range(count))
@@ -134,11 +146,12 @@ def int21(cpu, state):
             # Subfunction 0: get device information into DX. C libraries use it to ask "is this handle a
             # terminal or a file?", which decides whether output is buffered. Bit 7 of DX set means a device.
             entry = state.handles.get(cpu.r[CPU.BX])
-            if isinstance(entry, OpenFile):
-                raise NotImplementedError(f"INT 21h AH=44 AL=00 on the file {entry.dos_path}")
             if entry is None:  # error 06: invalid handle: not open
                 cpu.set_flag(flags.CF, True)
                 cpu.r[CPU.AX] = 6
+            elif isinstance(entry, OpenFile):  # a file: bit 7 is clear, the low bits are its drive (0 is A:)
+                cpu.r[CPU.DX] = ord(entry.dos_path[0]) - ord("A")
+                cpu.set_flag(flags.CF, False)
             else:
                 cpu.r[CPU.DX] = CONSOLE_INFO if isinstance(entry, Console) else DEVICE_INFO
                 cpu.set_flag(flags.CF, False)

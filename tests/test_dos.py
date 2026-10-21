@@ -8,6 +8,7 @@ from pathlib import Path
 
 from mydos import config, dos, flags
 from mydos.cpu import CPU, Exit
+from mydos.handles import OpenFile
 from mydos.volumes import Volumes
 
 
@@ -744,13 +745,6 @@ class TestCreateFile(FileFunctionsTest):
         self.assertTrue(file.closed)
         self.assertEqual((self.base / "LEFT.TXT").read_bytes(), b"left open")
 
-    def test_writing_and_asking_about_a_file_handle_are_not_done_yet(self):
-        handle = self.create("F")[1]
-        with self.assertRaises(NotImplementedError):
-            self.call(0x4000, "text", bx=handle, cx=4)
-        with self.assertRaises(NotImplementedError):
-            self.call(0x4400, bx=handle)
-
     def test_the_auxiliary_and_printer_devices_are_open_and_swallow_what_is_written(self):
         for handle in (3, 4):
             out, err = io.StringIO(), io.StringIO()
@@ -764,6 +758,109 @@ class TestCreateFile(FileFunctionsTest):
     def test_the_state_install_returns_has_the_table(self):
         names = [type(self.entry(handle)).__name__ for handle in range(6)]
         self.assertEqual(names, ["Console"] * 3 + ["NullDevice"] * 2 + ["NoneType"])
+
+
+class TestWriteAndAskAboutFiles(FileFunctionsTest):
+    """INT 21h AH=40h and AH=44h AL=00 on the handle of a file."""
+
+    def make(self, name="OUT.TXT", cx=0):
+        self.call(0x3C00, name, cx=cx)
+        return self.cpu.r[CPU.AX]
+
+    def write(self, handle, text):
+        self.call(0x4000, text, bx=handle, cx=len(text))
+        return self.failed(), self.cpu.r[CPU.AX]
+
+    def test_writing_gives_the_count_and_the_bytes_reach_the_host_file(self):
+        handle = self.make()
+        self.cpu.set_flag(flags.CF, True)
+        self.assertEqual(self.write(handle, "hello"), (None, 5))
+        self.call(0x3E00, bx=handle)
+        self.assertEqual((self.base / "OUT.TXT").read_bytes(), b"hello")
+
+    def test_each_write_goes_on_after_the_one_before(self):
+        handle = self.make()
+        self.write(handle, "abc")
+        self.write(handle, "def")
+        self.call(0x3E00, bx=handle)
+        self.assertEqual((self.base / "OUT.TXT").read_bytes(), b"abcdef")
+
+    def test_on_the_memory_disk(self):
+        handle = self.make("D:\\F")
+        self.assertEqual(self.write(handle, "mem"), (None, 3))
+        self.call(0x3E00, bx=handle)
+        self.assertEqual(self.volumes.filesystems[3].stat(["F"]).size, 3)
+
+    def test_the_bytes_are_not_changed_whatever_they_are(self):
+        handle = self.make()
+        self.cpu.mem[0x20100:0x20104] = bytes([0, 0x0D, 0x1A, 0xFF])
+        self.call(0x4000, bx=handle, cx=4)
+        self.call(0x3E00, bx=handle)
+        self.assertEqual((self.base / "OUT.TXT").read_bytes(), bytes([0, 0x0D, 0x1A, 0xFF]))
+
+    def test_the_data_may_run_over_the_end_of_the_segment(self):
+        handle = self.make()
+        self.cpu.mem[0x2FFFE:0x30000] = b"ab"
+        self.cpu.mem[0x20000:0x20002] = b"cd"
+        self.call(0x4000, bx=handle, cx=4, dx=0xFFFE)
+        self.call(0x3E00, bx=handle)
+        self.assertEqual((self.base / "OUT.TXT").read_bytes(), b"abcd")
+
+    def test_zero_bytes_cut_the_file_off_at_the_position(self):
+        handle = self.make()
+        self.write(handle, "abcdef")
+        self.state.handles.get(handle).file.seek(2)
+        self.call(0x4000, bx=handle, cx=0)
+        self.assertEqual((self.failed(), self.cpu.r[CPU.AX]), (None, 0))
+        self.call(0x3E00, bx=handle)
+        self.assertEqual((self.base / "OUT.TXT").read_bytes(), b"ab")
+
+    def test_zero_bytes_at_the_end_change_nothing(self):
+        handle = self.make("D:\\F")
+        self.write(handle, "abc")
+        self.call(0x4000, bx=handle, cx=0)
+        self.assertEqual(self.volumes.filesystems[3].stat(["F"]).size, 3)
+
+    def test_a_file_that_was_not_opened_for_writing_refuses(self):
+        for name in ("NOTES.TXT", "D:\\F"):
+            where = self.volumes.resolve(name)
+            if where.drive == 3:
+                where.filesystem.create(where.parts).close()
+            file = where.filesystem.open(where.parts, write=False)
+            handle = self.state.handles.allocate(OpenFile(file, where.dos_path()))
+            self.assertEqual(self.write(handle, "x"), (5, 5))
+            self.call(0x4000, bx=handle, cx=0)
+            self.assertEqual(self.failed(), 5)
+        self.assertEqual((self.base / "NOTES.TXT").read_bytes(), b"some notes")
+
+    def test_a_closed_handle_is_an_error(self):
+        handle = self.make()
+        self.call(0x3E00, bx=handle)
+        self.assertEqual(self.write(handle, "x"), (6, 6))
+
+    def test_the_other_registers_are_left_alone(self):
+        handle = self.make()
+        self.call(0x4000, "abcd", bx=handle, cx=4, dx=0x0100)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (handle, 4, 0x0100))
+
+    def test_ioctl_says_a_file_is_not_a_device_and_names_its_drive(self):
+        host, memory = self.make("F"), self.make("D:\\G")
+        for handle, drive in ((host, 2), (memory, 3)):
+            self.cpu.set_flag(flags.CF, True)
+            self.call(0x4400, bx=handle)
+            self.assertEqual((self.failed(), self.cpu.r[CPU.DX]), (None, drive))
+
+    def test_ioctl_on_a_closed_handle_is_an_error(self):
+        handle = self.make()
+        self.call(0x3E00, bx=handle)
+        self.call(0x4400, bx=handle)
+        self.assertEqual(self.failed(), 6)
+
+    def test_ioctl_does_not_touch_the_other_registers(self):
+        handle = self.make()
+        self.call(0x4400, bx=handle, cx=0x1234)
+        self.assertEqual((self.cpu.r[CPU.BX], self.cpu.r[CPU.CX]), (handle, 0x1234))
 
 
 if __name__ == "__main__":
