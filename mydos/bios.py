@@ -10,6 +10,8 @@ from . import flags
 from .cpu import CPU
 
 TICKS_PER_DAY = 0x1800B0  # the BIOS timer ticks 18.2065 times a second: 1,573,040 ticks make a day
+VGA_COLOR_DISPLAY = 0x08  # the code of a VGA with a color monitor in the answer of INT 10h AH=1Ah
+NO_DISPLAY = 0x00  # the code that says there is no second monitor
 
 
 def _seconds_since_midnight():
@@ -28,6 +30,20 @@ def int1a(cpu):
         cpu.set8(0, 0)  # the real BIOS says 1 if midnight went by since the last read; nobody checks
     else:
         raise NotImplementedError(f"INT 1Ah AH={ah:02X}")
+
+
+def int10(cpu):
+    """INT 10h: the BIOS video services, selected by AH. Only 1Ah AL=00h so far."""
+    ah, al = cpu.get8(4), cpu.get8(0)
+    if ah == 0x1A and al == 0x00:
+        # Which video cards and monitors are there? AL = 1Ah says that the BIOS knows this call, which only a VGA
+        # BIOS does: it is the way a program finds out that it is on a VGA. BL = the code of the active display,
+        # BH = the code of the other one. Ours is a VGA with a color monitor, and nothing else.
+        cpu.set8(0, 0x1A)
+        cpu.set8(3, VGA_COLOR_DISPLAY)
+        cpu.set8(7, NO_DISPLAY)
+    else:
+        raise NotImplementedError(f"INT 10h AH={ah:02X} AL={al:02X}")
 
 
 class Keyboard:
@@ -74,6 +90,7 @@ def int16(cpu, keyboard):
 def install(cpu):
     """Hook the BIOS interrupt handlers into the CPU. Returns the keyboard, for whoever wants to press keys on it."""
     keyboard = Keyboard()
+    cpu.int_handlers[0x10] = int10
     cpu.int_handlers[0x1A] = int1a
     cpu.int_handlers[0x16] = lambda cpu: int16(cpu, keyboard)
     return keyboard

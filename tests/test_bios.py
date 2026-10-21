@@ -128,5 +128,47 @@ class TestKeyboard(unittest.TestCase):
         self.assertTrue(other.get_flag(flags.ZF))
 
 
+class TestVideoBios(unittest.TestCase):
+    """INT 10h AH=1Ah AL=00h: what video cards and monitors are there?"""
+
+    def setUp(self):
+        self.cpu = CPU()
+        bios.install(self.cpu)
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x10])
+
+    def call(self, ax, bx=0x3333, cx=0x2222, dx=0x1111):
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = ax, bx, cx, dx
+        cpu.ip = 0
+        cpu.step()
+
+    def test_it_says_the_call_is_known_and_the_display_is_a_vga_with_a_color_monitor(self):
+        self.call(0x1A00)
+        self.assertEqual(self.cpu.get8(0), 0x1A)  # AL: the function is there
+        self.assertEqual(self.cpu.get8(3), 0x08)  # BL: VGA, color
+        self.assertEqual(self.cpu.get8(7), 0x00)  # BH: no second display
+
+    def test_nothing_else_changes(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.cpu.set_flag(flags.ZF, False)
+        self.call(0x1A00)
+        cpu = self.cpu
+        self.assertEqual((cpu.get8(4), cpu.r[CPU.CX], cpu.r[CPU.DX]), (0x1A, 0x2222, 0x1111))  # AH stays too
+        self.assertTrue(cpu.get_flag(flags.CF))
+        self.assertFalse(cpu.get_flag(flags.ZF))
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 2))
+
+    def test_the_old_values_of_al_bl_and_bh_do_not_matter(self):
+        for ax, bx in ((0x1A00, 0x0000), (0x1A00, 0xFFFF), (0x1A00, 0x5A5A)):
+            self.call(ax, bx=bx)
+            self.assertEqual((self.cpu.get8(0), self.cpu.r[CPU.BX]), (0x1A, 0x0008))
+
+    def test_the_other_functions_are_not_done_yet(self):
+        for ax in (0x1A01, 0x1AFF, 0x0003, 0x0F00, 0x1200, 0x1100, 0xFF00):
+            with self.assertRaises(NotImplementedError, msg=hex(ax)):
+                self.call(ax)
+
+
 if __name__ == "__main__":
     unittest.main()
