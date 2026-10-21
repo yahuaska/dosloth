@@ -44,12 +44,19 @@ class DosState:
         self.volumes = volumes  # the drives, with the current drive and the current directory of each
         self.config = volumes.config  # the machine: its drives, and where a program starts (see config.py)
         self.handles = HandleTable()  # what the program's file handles stand for
+        self.break_checking = False  # the Ctrl-Break flag of AH=33h; DOS starts with it off
+
+
+def boot_drive(config):
+    """The number of the drive DOS started from (0 is A:): the first hard disk, or else the first drive."""
+    fixed = [number for number, disk in sorted(config.disks.items()) if not disk.removable]
+    return fixed[0] if fixed else min(config.disks)
 
 
 def int21(cpu, state):
     """INT 21h: DOS services, selected by AH.
 
-    So far 09h, 0Eh, 19h, 25h, 30h, 35h, 3Ch, 3Dh, 3Eh, 40h, 43h, 44h, 4Ah, 4Ch.
+    So far 09h, 0Eh, 19h, 25h, 30h, 35h, 33h, 3Ch, 3Dh, 3Eh, 40h, 43h, 44h, 4Ah, 4Ch.
     """
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
@@ -83,6 +90,21 @@ def int21(cpu, state):
         cpu.set8(7, OEM_MICROSOFT)
         cpu.set8(3, 0)
         cpu.r[CPU.CX] = 0
+    elif ah == 0x33:  # the Ctrl-Break flag, the drive DOS started from, the real DOS version; AL = what to do
+        al = cpu.get8(0)
+        if al == 0x00:  # DL = the flag: 1 when DOS looks for Ctrl-Break on every call, not only on console I/O
+            cpu.set8(2, int(state.break_checking))
+        elif al == 0x01:  # set the flag from DL; any value but 0 means on
+            state.break_checking = cpu.get8(2) != 0
+        elif al == 0x05:  # DL = the drive DOS started from, counted from 1 (A: is 1)
+            cpu.set8(2, boot_drive(state.config) + 1)
+        elif al == 0x06:  # the true version, even when SETVER lies to programs: BL = major, BH = minor
+            cpu.set8(3, DOS_VERSION[0])
+            cpu.set8(7, DOS_VERSION[1])
+            cpu.set8(2, 0)  # DL = the revision
+            cpu.set8(6, 0)  # DH = where DOS lives: bit 3 the ROM, bit 4 the high memory area; neither here
+        else:
+            raise NotImplementedError(f"INT 21h AH=33 AL={al:02X}")
     elif ah == 0x3C:  # create (or empty) the file named at DS:DX, with attributes CX; AX = its handle
         try:
             if cpu.r[CPU.CX] & (ATTR_DIRECTORY | ATTR_VOLUME):

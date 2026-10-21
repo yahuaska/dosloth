@@ -990,5 +990,85 @@ class TestOpenFile(FileFunctionsTest):
         self.assertEqual((self.base / "OUT.TXT").read_bytes(), b"abcxy")
 
 
+class TestBreakFlagBootDriveAndVersion(unittest.TestCase):
+    """INT 21h AH=33h: the Ctrl-Break flag (AL=0, 1), the boot drive (AL=5), the real DOS version (AL=6)."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        self.state = dos.install(self.cpu)
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+
+    def call(self, ax, dx=0x1111, bx=0x3333, cx=0x2222):
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.DX], cpu.r[CPU.BX], cpu.r[CPU.CX] = ax, dx, bx, cx
+        cpu.set_flag(flags.CF, True)
+        cpu.ip = 0
+        cpu.step()
+
+    def test_dos_starts_with_the_flag_off(self):
+        self.call(0x3300)
+        self.assertEqual(self.cpu.get8(2), 0)
+        self.assertEqual(self.cpu.r[CPU.DX], 0x1100)  # only DL is the answer: DH stays
+        self.assertTrue(self.cpu.get_flag(flags.CF))  # no error to report: the carry is left as it was
+
+    def test_the_flag_is_set_and_read_back(self):
+        self.call(0x3301, dx=0x1101)
+        self.call(0x3300, dx=0x1100)
+        self.assertEqual(self.cpu.r[CPU.DX], 0x1101)
+        self.call(0x3301, dx=0x1100)
+        self.call(0x3300, dx=0x1101)
+        self.assertEqual(self.cpu.r[CPU.DX], 0x1100)
+
+    def test_any_value_but_zero_in_dl_turns_it_on(self):
+        self.call(0x3301, dx=0x1180)
+        self.call(0x3300)
+        self.assertEqual(self.cpu.get8(2), 1)
+
+    def test_setting_the_flag_changes_no_register(self):
+        self.call(0x3301, dx=0x1101)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]),
+                         (0x3301, 0x3333, 0x2222, 0x1101))
+        self.assertTrue(cpu.get_flag(flags.CF))  # left as it was
+
+    def test_two_machines_have_two_flags(self):
+        self.call(0x3301, dx=1)
+        other = CPU()
+        dos.install(other)
+        other.s[CPU.CS] = 0x1000
+        other.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        other.r[CPU.AX] = 0x3300
+        other.step()
+        self.assertEqual(other.get8(2), 0)
+
+    def test_the_boot_drive_is_the_hard_disk_counted_from_1(self):
+        self.call(0x3305)
+        self.assertEqual(self.cpu.r[CPU.DX], 0x1103)  # C: of the built-in machine; DH stays
+        self.assertEqual((self.cpu.r[CPU.AX], self.cpu.r[CPU.BX], self.cpu.r[CPU.CX]), (0x3305, 0x3333, 0x2222))
+        self.assertTrue(self.cpu.get_flag(flags.CF))  # no error to report: the carry is left as it was
+
+    def test_the_boot_drive_follows_the_config(self):
+        def boot(text):
+            return dos.boot_drive(config.parse(tomllib.loads(text), Path(".")))
+        self.assertEqual(boot("[disks.A]\nremovable = true\n[disks.E]\nremovable = false\n[disks.D]\n"
+                              "removable = false\n[mounts]\nE = {type = 'tmpfs'}\nD = {type = 'tmpfs'}"), 3)
+        self.assertEqual(boot("[disks.B]\nremovable = true\n[disks.A]\nremovable = true\n[mounts]\n"
+                              "B = {type = 'tmpfs'}"), 0)
+
+    def test_the_true_version_is_the_one_ah_30h_gives(self):
+        self.call(0x3306)
+        cpu = self.cpu
+        self.assertEqual((cpu.get8(3), cpu.get8(7)), dos.DOS_VERSION)  # BL major, BH minor
+        self.assertEqual(cpu.r[CPU.DX], 0)  # revision 0, and DOS in neither ROM nor high memory
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.CX]), (0x3306, 0x2222))
+        self.assertTrue(cpu.get_flag(flags.CF))  # left as it was
+
+    def test_other_subfunctions_are_not_done_yet(self):
+        for al in (0x02, 0x03, 0x04, 0x07, 0xFF):
+            with self.assertRaises(NotImplementedError):
+                self.call(0x3300 | al)
+
+
 if __name__ == "__main__":
     unittest.main()
