@@ -863,5 +863,132 @@ class TestWriteAndAskAboutFiles(FileFunctionsTest):
         self.assertEqual((self.cpu.r[CPU.BX], self.cpu.r[CPU.CX]), (handle, 0x1234))
 
 
+class TestOpenFile(FileFunctionsTest):
+    """INT 21h AH=3Dh: open a file that is there; AL says for what; AX is the handle."""
+
+    def open(self, name, mode=0):
+        self.call(0x3D00 | mode, name)
+        return self.failed(), self.cpu.r[CPU.AX]
+
+    def entry(self, handle):
+        return self.state.handles.get(handle)
+
+    def test_an_existing_file_gets_handle_5_and_its_dos_name(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.assertEqual(self.open("notes.txt"), (None, 5))
+        self.assertEqual(self.entry(5).dos_path, "C:\\NOTES.TXT")
+
+    def test_the_file_is_not_changed_and_is_read_from_the_start(self):
+        for mode in (0, 1, 2):
+            handle = self.open("NOTES.TXT", mode)[1]
+            self.assertEqual(self.entry(handle).file.tell(), 0)
+        self.assertEqual((self.base / "NOTES.TXT").read_bytes(), b"some notes")
+
+    def test_mode_0_reads_but_cannot_write(self):
+        file = self.entry(self.open("NOTES.TXT", 0)[1]).file
+        self.assertEqual(file.read(), b"some notes")
+        with self.assertRaises(OSError):
+            file.write(b"x")
+
+    def test_modes_1_and_2_write_and_keep_the_rest_of_the_file(self):
+        for mode in (1, 2):
+            handle = self.open("NOTES.TXT", mode)[1]
+            self.assertEqual(self.entry(handle).file.write(b"SOME"), 4)
+            self.call(0x3E00, bx=handle)
+        self.assertEqual((self.base / "NOTES.TXT").read_bytes(), b"SOME notes")
+
+    def test_the_sharing_and_inheritance_bits_are_ignored(self):
+        for mode in (0x10, 0x42, 0x80, 0xF0, 0x91):
+            self.assertIsNone(self.open("NOTES.TXT", mode)[0])
+
+    def test_an_access_code_above_2_is_error_12(self):
+        for mode in (3, 4, 7, 0x13):
+            self.assertEqual(self.open("NOTES.TXT", mode), (0x0C, 0x0C))
+        self.assertIsNone(self.entry(5))
+
+    def test_a_file_that_is_not_there_is_not_made(self):
+        for mode in (0, 1, 2):
+            self.assertEqual(self.open("NEW.TXT", mode), (2, 2))
+        self.assertEqual(sorted(os.listdir(self.base)), ["GAMES", "NOTES.TXT"])
+
+    def test_the_errors_are_the_ones_dos_gives(self):
+        self.assertEqual(self.open("NODIR\\X")[0], 3)
+        self.assertEqual(self.open("TOOLONGNAME.TXT")[0], 2)  # no such file, as it cannot exist
+        self.assertEqual(self.open("")[0], 3)
+        self.assertEqual(self.open("GAMES")[0], 5)  # a directory is not a file
+        self.assertEqual(self.open("GAMES", 2)[0], 5)
+        self.assertEqual(self.open("Z:\\X")[0], 15)
+        self.assertEqual(self.open("A:\\X")[0], 21)
+        self.assertEqual(self.open("..\\X")[0], 3)
+
+    def test_an_error_takes_no_handle(self):
+        self.open("NOPE")
+        self.open("GAMES")
+        self.assertEqual(self.open("NOTES.TXT"), (None, 5))
+
+    def test_a_file_in_a_directory_by_a_relative_path_and_on_the_memory_disk(self):
+        (self.base / "GAMES" / "G.TXT").write_bytes(b"g")
+        self.assertEqual(self.open("games\\g.txt")[0], None)
+        self.volumes.filesystems[3].create(["F"]).close()
+        self.assertEqual(self.open("D:\\F", 2)[0], None)
+        self.volumes.chdir("C:\\GAMES")
+        self.assertEqual(self.open("G.TXT")[0], None)
+
+    def test_a_read_only_file_opens_for_reading_only(self):
+        self.volumes.filesystems[3].create(["F"]).close()
+        self.volumes.filesystems[3].set_attributes(["F"], 1)
+        self.assertIsNone(self.open("D:\\F", 0)[0])
+        self.assertEqual(self.open("D:\\F", 1)[0], 5)
+        self.assertEqual(self.open("D:\\F", 2)[0], 5)
+
+    def test_a_read_only_host_file_opens_for_reading_only(self):
+        self.skip_if_root()
+        os.chmod(self.base / "NOTES.TXT", 0o444)
+        self.assertIsNone(self.open("NOTES.TXT", 0)[0])
+        self.assertEqual(self.open("NOTES.TXT", 1)[0], 5)
+
+    def test_a_read_only_disk_opens_for_reading_only(self):
+        text = self.TEXT.replace('path = "."', 'path = ".", readonly = true')
+        self.state = dos.install(self.cpu, Volumes(config.parse(tomllib.loads(text), self.base)))
+        self.assertIsNone(self.open("NOTES.TXT", 0)[0])
+        self.assertEqual(self.open("NOTES.TXT", 2)[0], 5)
+
+    def test_the_same_file_can_be_opened_twice_with_a_position_each(self):
+        first, second = self.open("NOTES.TXT")[1], self.open("NOTES.TXT")[1]
+        self.assertEqual(self.entry(first).file.read(4), b"some")
+        self.assertEqual(self.entry(second).file.read(), b"some notes")
+
+    def test_twenty_handles_are_all_there_are(self):
+        handles = [self.open("NOTES.TXT")[1] for _ in range(15)]
+        self.assertEqual(handles, list(range(5, 20)))
+        self.assertEqual(self.open("NOTES.TXT")[0], 4)
+        self.call(0x3E00, bx=7)
+        self.assertEqual(self.open("NOTES.TXT"), (None, 7))
+
+    def test_a_closed_standard_handle_is_given_out_again(self):
+        self.call(0x3E00, bx=0)
+        self.assertEqual(self.open("NOTES.TXT")[1], 0)
+
+    def test_the_other_registers_are_left_alone(self):
+        self.call(0x3D00, "NOTES.TXT", cx=0x1234, bx=0x5678, dx=0x0100)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (0x5678, 0x1234, 0x0100))
+
+    def test_the_name_may_run_over_the_end_of_the_segment(self):
+        self.call(0x3D00, "NOTES.TXT", dx=0xFFFC)
+        self.assertEqual((self.failed(), self.cpu.r[CPU.AX]), (None, 5))
+
+    def test_a_file_made_by_3ch_can_be_opened_again_after_closing(self):
+        self.call(0x3C00, "OUT.TXT")
+        handle = self.cpu.r[CPU.AX]
+        self.entry(handle).file.write(b"abc")
+        self.call(0x3E00, bx=handle)
+        handle = self.open("out.txt", 2)[1]
+        self.assertEqual(self.entry(handle).file.read(), b"abc")
+        self.call(0x4000, "xy", bx=handle, cx=2)
+        self.call(0x3E00, bx=handle)
+        self.assertEqual((self.base / "OUT.TXT").read_bytes(), b"abcxy")
+
+
 if __name__ == "__main__":
     unittest.main()

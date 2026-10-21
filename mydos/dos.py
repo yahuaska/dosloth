@@ -14,6 +14,7 @@ OEM_MICROSOFT = 0xFF
 CONSOLE_INFO = 0x80D3  # IOCTL answer for the console: a character device, standard input and output
 DEVICE_INFO = 0x80C0  # the IOCTL answer for the auxiliary and printer devices: a character device, nothing special
 TOO_MANY_OPEN_FILES = 4
+INVALID_ACCESS_CODE = 0x0C
 MAX_PATH = 260  # how long a path from a program may be, with its ending zero
 MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands out nothing above it
 
@@ -46,7 +47,10 @@ class DosState:
 
 
 def int21(cpu, state):
-    """INT 21h: DOS services, selected by AH. So far 09h, 0Eh, 19h, 25h, 30h, 35h, 3Ch, 3Eh, 40h, 43h, 44h, 4Ah, 4Ch."""
+    """INT 21h: DOS services, selected by AH.
+
+    So far 09h, 0Eh, 19h, 25h, 30h, 35h, 3Ch, 3Dh, 3Eh, 40h, 43h, 44h, 4Ah, 4Ch.
+    """
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
         off = cpu.r[CPU.DX]
@@ -89,6 +93,20 @@ def int21(cpu, state):
             file = where.filesystem.create(where.parts)
             if cpu.r[CPU.CX] & ATTR_READONLY:  # the file is read-only from now on, but this handle may still write
                 where.filesystem.set_attributes(where.parts, cpu.r[CPU.CX])
+            cpu.r[CPU.AX] = state.handles.allocate(OpenFile(file, where.dos_path()))
+            cpu.set_flag(flags.CF, False)
+        except FsError as error:
+            fail(cpu, error)
+    elif ah == 0x3D:  # open the file named at DS:DX; AL = the access: 0 read, 1 write, 2 both; AX = its handle
+        # Bits 4-6 of AL (how to share the file) and bit 7 (does a child program get the handle) mean nothing
+        # to a single program, so they are ignored.
+        try:
+            if cpu.get8(0) & 0x07 > 2:
+                raise FsError(INVALID_ACCESS_CODE, "the access is 0 (read), 1 (write) or 2 (read and write)")
+            where = state.volumes.resolve(read_path(cpu))
+            if not state.handles.has_free():
+                raise FsError(TOO_MANY_OPEN_FILES, "all the handles are in use")
+            file = where.filesystem.open(where.parts, write=bool(cpu.get8(0) & 0x07))
             cpu.r[CPU.AX] = state.handles.allocate(OpenFile(file, where.dos_path()))
             cpu.set_flag(flags.CF, False)
         except FsError as error:
