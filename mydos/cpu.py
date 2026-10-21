@@ -100,6 +100,7 @@ class CPU:
             Op.RET_NEAR: self.ret_near,
             Op.LES: self.load_far_pointer,
             Op.LDS: self.load_far_pointer,
+            Op.ENTER: self.enter,
             Op.LEAVE: self.leave,
             Op.RETF_POP: self.retf_pop,
             Op.RETF: self.retf,
@@ -1090,6 +1091,28 @@ class CPU:
         offset, segment = m.rw_pair(self)
         self.r[m.reg] = offset
         self.s[self.ES if op == Op.LES else self.DS] = segment
+
+    def enter(self, op):
+        """Build a procedure's stack frame (opcode C8, then a word and a byte; 80186 and later).
+
+        The word is how many bytes of room to make for local variables, the byte is the nesting level of the
+        procedure (only the low 5 bits count). It is `push bp`, `mov bp, sp` and `sub sp, size`, in one
+        instruction, so that LEAVE can undo it. A level above 0 is for languages whose procedures see the
+        variables of the ones that contain them: the frame pointers of the outer procedures, found by
+        following the chain of saved BPs, are copied into the new frame, and then the new frame's own
+        pointer is pushed, which makes a table of them. Flags are not changed.
+        """
+        size = self.fetch16()
+        level = self.fetch8() & 0x1F
+        self.push16(self.r[self.BP])
+        frame = self.r[self.SP]
+        for _ in range(level - 1):  # none at level 0 or 1
+            self.r[self.BP] = (self.r[self.BP] - 2) & 0xFFFF
+            self.push16(self.rw(self.s[self.SS], self.r[self.BP]))
+        if level:
+            self.push16(frame)
+        self.r[self.BP] = frame
+        self.r[self.SP] = (self.r[self.SP] - size) & 0xFFFF
 
     def leave(self, op):
         """Tear down a procedure's stack frame (opcode C9; 80186 and later).

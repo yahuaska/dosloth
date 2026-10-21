@@ -804,6 +804,7 @@ class TestInstructionsThatLeaveTheFlagsAlone(unittest.TestCase):
         "call near": [0xE8, 0x05, 0x00], "call r/m16": [0xFF, 0xD3],
         "call far": [0x9A, 0x10, 0x00, 0x00, 0x30], "jmp far": [0xEA, 0x10, 0x00, 0x00, 0x30],
         "jmp r/m16": [0xFF, 0xE3], "ret": [0xC3], "retf": [0xCB], "leave": [0xC9],
+        "enter": [0xC8, 0x08, 0x00, 0x00], "enter nested": [0xC8, 0x08, 0x00, 0x02],
         "ret n": [0xC2, 0x02, 0x00], "retf n": [0xCA, 0x02, 0x00],
         "les": [0xC4, 0x1F], "lds": [0xC5, 0x1F],
         "movsb": [0xA4], "movsw": [0xA5], "stosb": [0xAA], "stosw": [0xAB], "lodsb": [0xAC], "lodsw": [0xAD],
@@ -1511,6 +1512,114 @@ class TestLea(unittest.TestCase):
         cpu = machine(bytes([0x8D, 0xC3]), False)
         with self.assertRaises(NotImplementedError):
             cpu.step()
+
+
+class TestEnter(unittest.TestCase):
+    """C8 ENTER size, level (80186 and later): push bp ; mov bp, sp ; sub sp, size, and for nested levels a display."""
+
+    def machine_with_code(self, code, bp=0x01F0, sp=0x0100):
+        cpu = machine(bytes(code), False)
+        cpu.s[CPU.SS] = 0x4000
+        cpu.r[CPU.BP], cpu.r[CPU.SP] = bp, sp
+        return cpu
+
+    def enter(self, size, level, bp=0x01F0, sp=0x0100):
+        cpu = self.machine_with_code([0xC8, size & 0xFF, size >> 8, level], bp, sp)
+        start_flags = cpu.flags
+        cpu.step()
+        self.assertEqual((cpu.ip, cpu.flags), (4, start_flags))  # four bytes long; no flag moves
+        return cpu
+
+    def test_level_0_makes_the_frame_and_the_room_for_the_locals(self):
+        cpu = self.enter(0x12, 0)
+        self.assertEqual(cpu.rw(0x4000, 0x00FE), 0x01F0)  # the old BP was pushed
+        self.assertEqual(cpu.r[CPU.BP], 0x00FE)  # the frame is where SP was after the push
+        self.assertEqual(cpu.r[CPU.SP], 0x00FE - 0x12)
+
+    def test_level_0_does_what_the_three_instructions_it_replaces_do(self):
+        for size, bp, sp in ((0, 0x01F0, 0x0100), (0x12, 0x0200, 0x0200), (0xFFFF, 0x0010, 0x0004),
+                             (0x0100, 0xFFFE, 0x0000), (0x0002, 0x1234, 0x0001)):
+            enter = self.machine_with_code([0xC8, size & 0xFF, size >> 8, 0x00], bp, sp)
+            three = self.machine_with_code([0x55, 0x8B, 0xEC, 0x81, 0xEC, size & 0xFF, size >> 8], bp, sp)
+            enter.step()
+            for _ in range(3):
+                three.step()
+            self.assertEqual(enter.r, three.r, f"size={size:04X} BP={bp:04X} SP={sp:04X}")
+            self.assertEqual(enter.mem[0x40000:0x50000], three.mem[0x40000:0x50000], f"size={size:04X} SP={sp:04X}")
+
+    def test_level_1_adds_one_word_the_frame_pointer_itself(self):
+        cpu = self.enter(0x08, 1)
+        self.assertEqual(cpu.r[CPU.BP], 0x00FE)
+        self.assertEqual(cpu.rw(0x4000, 0x00FE), 0x01F0)  # the old BP
+        self.assertEqual(cpu.rw(0x4000, 0x00FC), 0x00FE)  # the frame pointer of this procedure
+        self.assertEqual(cpu.r[CPU.SP], 0x00FC - 0x08)
+
+    def test_a_deeper_level_copies_the_frame_pointers_of_the_outer_procedures(self):
+        # the caller's frame is at BP=0x01F0; the words below it stand for the frame pointers of two outer ones
+        cpu = self.machine_with_code([0xC8, 0x04, 0x00, 0x03])
+        cpu.ww(0x4000, 0x01EE, 0x1111)  # the first pointer to copy, at BP-2
+        cpu.ww(0x4000, 0x01EC, 0x2222)  # the second, at BP-4: level 3 copies only two before its own
+        cpu.step()
+        self.assertEqual(cpu.rw(0x4000, 0x00FE), 0x01F0)  # the old BP
+        self.assertEqual(cpu.rw(0x4000, 0x00FC), 0x1111)
+        self.assertEqual(cpu.rw(0x4000, 0x00FA), 0x2222)
+        self.assertEqual(cpu.rw(0x4000, 0x00F8), 0x00FE)  # the pointer to this frame is the last
+        self.assertEqual((cpu.r[CPU.BP], cpu.r[CPU.SP]), (0x00FE, 0x00F8 - 4))
+
+    def test_every_level_agrees_with_the_definition_written_out_in_python(self):
+        for level in range(0, 33):
+            for size in (0, 6):
+                cpu = self.machine_with_code([0xC8, size, 0, level], bp=0x0300, sp=0x0200)
+                for i in range(40):
+                    cpu.ww(0x4000, 0x0300 - 2 * i, 0x9000 + i)  # distinct words below BP
+                before = cpu.mem[:]
+                cpu.step()
+                bp, sp, memory = 0x0300, 0x0200, {}
+                sp -= 2
+                memory[sp] = bp
+                frame, bp_at_start = sp, bp
+                count = level % 32
+                if count > 0:
+                    for _ in range(count - 1):
+                        bp -= 2
+                        sp -= 2
+                        memory[sp] = 0x9000 + (0x0300 - bp) // 2  # the word that was at the new BP
+                    sp -= 2
+                    memory[sp] = frame
+                bp = frame
+                sp -= size
+                self.assertEqual((cpu.r[CPU.BP], cpu.r[CPU.SP]), (bp, sp), f"level {level} size {size}")
+                for address, word in memory.items():
+                    self.assertEqual(cpu.rw(0x4000, address), word, f"level {level} at {address:04X}")
+                changed = {i for i in range(len(before)) if before[i] != cpu.mem[i]}
+                allowed = {0x40000 + a + k for a in memory for k in (0, 1)}
+                self.assertLessEqual(changed, allowed, f"level {level}: something else was written")
+
+    def test_only_the_low_five_bits_of_the_level_count(self):
+        plain, wrapped = self.enter(0x08, 1), self.enter(0x08, 0x21)
+        self.assertEqual((plain.r, plain.mem[0x40000:0x50000]), (wrapped.r, wrapped.mem[0x40000:0x50000]))
+        zero, thirty_two = self.enter(0x08, 0), self.enter(0x08, 32)
+        self.assertEqual((zero.r, zero.mem[0x40000:0x50000]), (thirty_two.r, thirty_two.mem[0x40000:0x50000]))
+
+    def test_the_other_registers_are_left_alone(self):
+        before = machine(b"", False).r
+        cpu = self.enter(0x08, 2)
+        for number in (CPU.AX, CPU.BX, CPU.CX, CPU.DX, CPU.SI, CPU.DI):
+            self.assertEqual(cpu.r[number], before[number], number)
+
+    def test_leave_undoes_enter(self):
+        for level in (0, 1, 3):
+            cpu = self.machine_with_code([0xC8, 0x20, 0x00, level, 0xC9], bp=0x01F0, sp=0x0100)
+            cpu.ww(0x4000, 0x01EE, 0x1111)
+            cpu.ww(0x4000, 0x01EC, 0x2222)
+            cpu.step()
+            cpu.step()
+            self.assertEqual((cpu.r[CPU.BP], cpu.r[CPU.SP]), (0x01F0, 0x0100), f"level {level}")
+
+    def test_sp_and_the_frame_wrap_round_the_segment(self):
+        cpu = self.enter(0x0010, 0, bp=0x1234, sp=0x0000)
+        self.assertEqual(cpu.rw(0x4000, 0xFFFE), 0x1234)
+        self.assertEqual((cpu.r[CPU.BP], cpu.r[CPU.SP]), (0xFFFE, (0xFFFE - 0x10) & 0xFFFF))
 
 
 class TestLeave(unittest.TestCase):

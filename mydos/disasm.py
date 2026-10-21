@@ -240,6 +240,8 @@ def _decode_opcode(r, op, seg_override):
         return f"out {port}, {reg}" if op & 2 else f"in {reg}, {port}"
     if op in (Op.RET_NEAR_POP, Op.RETF_POP):
         return f"{'ret' if op == Op.RET_NEAR_POP else 'retf'} {r.u16():04X}"
+    if op == Op.ENTER:
+        return f"enter {r.u16():04X}, {r.u8():02X}"
     if op == Op.INT:
         return f"int {r.u8():02X}"
     if op in LOOPS:

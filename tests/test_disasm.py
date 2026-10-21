@@ -109,6 +109,8 @@ class TestText(unittest.TestCase):
             (b"\xC5\x37", "lds si, [bx]"),
             (b"\xC2\x06\x00", "ret 0006"),
             (b"\xCA\x04\x00", "retf 0004"),
+            (b"\xC8\x12\x00\x00", "enter 0012, 00"),   # from esetup.exe
+            (b"\xC8\x00\x01\x03", "enter 0100, 03"),
             (b"\xF7\xD9", "neg cx"),
             (b"\xF7\xEA", "imul dx"),   # from esetup.exe
             (b"\xF7\xE3", "mul bx"),
