@@ -39,6 +39,11 @@ class CPU:
     def __init__(self):
         """Make a fresh machine: 1 MB of zeroed memory, zeroed registers, no interrupts installed."""
         self.mem = bytearray(1024 * 1024)
+        # A device may own a window of the address space, like the video card with its A0000h-AFFFFh: its
+        # read_memory(offset) and write_memory(offset, value) then replace the plain memory there. With no
+        # device the window is empty.
+        self.video = None
+        self.video_start = self.video_end = 0
         self.r = [0] * 8
         self.s = [0] * 4
         self.ip = 0
@@ -177,7 +182,10 @@ class CPU:
 
     def rb(self, seg, off):
         """Read one byte of memory at seg:off."""
-        return self.mem[self.addr(seg, off)]
+        address = self.addr(seg, off)
+        if self.video_start <= address < self.video_end:
+            return self.video.read_memory(address - self.video_start)
+        return self.mem[address]
 
     def rw(self, seg, off):
         """Read a 16-bit word at seg:off. The x86 keeps the low byte first (little-endian)."""
@@ -185,7 +193,11 @@ class CPU:
 
     def wb(self, seg, off, val):
         """Write one byte to memory at seg:off. Bits above the low 8 of val are dropped."""
-        self.mem[self.addr(seg, off)] = val & 0xFF
+        address = self.addr(seg, off)
+        if self.video_start <= address < self.video_end:
+            self.video.write_memory(address - self.video_start, val & 0xFF)
+        else:
+            self.mem[address] = val & 0xFF
 
     def ww(self, seg, off, val):
         """Write a 16-bit word at seg:off, low byte first."""
