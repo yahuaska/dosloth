@@ -245,6 +245,22 @@ class TestMonitor(unittest.TestCase):
         with self.assertRaises(Exit):
             self.monitor.wait_for_key(keyboard)
 
+    def test_the_picture_is_shown_in_the_colors_of_the_card(self):
+        self.card.set_dac(0x38 + 7, 63, 0, 0)  # the color 15 of a pixel: red
+        self.card.write_memory(0, 0x80)  # the first pixel has the color 15
+        self.monitor.show()
+        self.assertEqual(self.first.frames[0].rgb[:3], b"\xFF\x00\x00")
+
+    def test_a_change_of_colors_alone_shows_the_picture_again(self):
+        self.card.write_memory(0, 0x80)
+        self.monitor.tick()
+        self.monitor.tick()
+        self.assertEqual(self.first.calls.count("present"), 1)
+        self.card.set_dac(0x38 + 7, 0, 63, 0)
+        self.monitor.tick()
+        self.assertEqual(self.first.calls.count("present"), 2)
+        self.assertEqual(self.first.frames[1].rgb[:3], b"\x00\xFF\x00")
+
     def test_close_closes_every_display(self):
         self.monitor.close()
         self.assertEqual((self.first.calls, self.second.calls), (["close"], ["close"]))

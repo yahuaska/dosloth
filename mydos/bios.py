@@ -19,6 +19,7 @@ GRAPHICS_MODE = 0x12  # 640 by 480 pixels in 16 colors
 TEXT_BUFFER = 0xB8000  # where the characters of the text modes are, a pair of bytes each: the character, its color
 TEXT_CLEARED = 0x4000  # how much of it a mode set clears: the four pages of 80 by 25
 BLANK_CELL = bytes([0x20, 0x07])  # a space, light grey on black
+OVERSCAN = 0x11  # the number of the attribute controller register of the border color
 VGA_COLOR_DISPLAY = 0x08  # the code of a VGA with a color monitor in the answer of INT 10h AH=1Ah
 NO_DISPLAY = 0x00  # the code that says there is no second monitor
 
@@ -55,10 +56,60 @@ def set_video_mode(cpu, mode, keep_picture):
         cpu.mem[TEXT_BUFFER:TEXT_BUFFER + TEXT_CLEARED] = BLANK_CELL * (TEXT_CLEARED // 2)
 
 
+def palette_function(cpu, al):
+    """INT 10h AH=10h: the colors of the screen, selected by AL.
+
+    The 16 colors a pixel can have each name one of the 256 colors of the DAC, through the palette registers: 00h
+    sets register BL to BH, 01h sets the overscan color to BH, 02h sets all 16 and the overscan from the 17 bytes at
+    ES:DX; 07h, 08h and 09h read them back. The 256 colors of the DAC are 6 bits each of red, green and blue: 10h
+    sets color BX to DH, CH, CL (red, green, blue), 12h sets CX colors from BX on out of the table at ES:DX, 3 bytes
+    each; 15h and 17h read them back the same way.
+    """
+    card = cpu.video
+    if card is None:
+        raise NotImplementedError(f"INT 10h AH=10 AL={al:02X}: there is no video card to set the colors of")
+    number = cpu.get8(3)
+    segment, offset = cpu.s[CPU.ES], cpu.r[CPU.DX]
+    color = cpu.r[CPU.BX] & 0xFF
+    if al == 0x00 and number <= 0x0F:
+        card.set_palette_register(number, cpu.get8(7))
+    elif al == 0x01:
+        card.set_palette_register(OVERSCAN, cpu.get8(7))
+    elif al == 0x02:
+        for n in range(17):
+            card.set_palette_register(n if n < 16 else OVERSCAN, cpu.rb(segment, offset + n))
+    elif al == 0x07 and number <= 0x0F:
+        cpu.set8(7, card.palette_register(number))
+    elif al == 0x08:
+        cpu.set8(7, card.palette_register(OVERSCAN))
+    elif al == 0x09:
+        for n in range(17):
+            cpu.wb(segment, offset + n, card.palette_register(n if n < 16 else OVERSCAN))
+    elif al == 0x10:
+        card.set_dac(color, cpu.get8(6), cpu.get8(5), cpu.get8(1))
+    elif al == 0x12:
+        for n in range(cpu.r[CPU.CX]):
+            card.set_dac((color + n) & 0xFF, *(cpu.rb(segment, (offset + 3 * n + part) & 0xFFFF) for part in range(3)))
+    elif al == 0x15:
+        red, green, blue = card.get_dac(color)
+        cpu.set8(6, red)
+        cpu.set8(5, green)
+        cpu.set8(1, blue)
+    elif al == 0x17:
+        for n in range(cpu.r[CPU.CX]):
+            for part, value in enumerate(card.get_dac((color + n) & 0xFF)):
+                cpu.wb(segment, (offset + 3 * n + part) & 0xFFFF, value)
+    else:
+        raise NotImplementedError(f"INT 10h AH=10 AL={al:02X}")
+
+
 def int10(cpu):
-    """INT 10h: the BIOS video services, selected by AH. So far 00h (modes 03h and 12h only), 0Fh and 1Ah AL=00h."""
+    """INT 10h: the BIOS video services, selected by AH. So far 00h (modes 03h and 12h only), 0Fh, 10h (the colors,
+    but not their page or gray sums) and 1Ah AL=00h."""
     ah, al = cpu.get8(4), cpu.get8(0)
-    if ah == 0x00:  # set the video mode AL; bit 7 of AL says to keep what is on the screen
+    if ah == 0x10:
+        palette_function(cpu, al)
+    elif ah == 0x00:  # set the video mode AL; bit 7 of AL says to keep what is on the screen
         set_video_mode(cpu, al & 0x7F, bool(al & 0x80))
     elif ah == 0x0F:  # get the video mode: AL = the mode, AH = characters in a line, BH = the page shown
         cpu.set8(0, cpu.mem[BDA_VIDEO_MODE])

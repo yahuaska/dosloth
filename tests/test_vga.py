@@ -3,7 +3,8 @@ import unittest
 
 from mydos import vga
 from mydos.cpu import CPU
-from mydos.vga import Vga
+from mydos.screen import EGA_COLORS
+from mydos.vga import DEFAULT_ATTRIBUTES, Vga
 
 
 def machine():
@@ -70,20 +71,20 @@ class TestIndexedRegisters(unittest.TestCase):
 class TestOtherPorts(unittest.TestCase):
     def test_a_port_gives_back_the_last_byte_written(self):
         chip = Vga()
-        for port in (0x3C0, 0x3C2, 0x3C6, 0x3C8, 0x3C9):
+        for port in (0x3C2, 0x3CA, 0x3CC, 0x3CD, 0x3D0, 0x3DB):
             chip.write(port, 0x11)
             chip.write(port, 0x22)
             self.assertEqual(chip.read(port), 0x22, hex(port))
 
     def test_a_port_never_written_reads_0(self):
         chip = Vga()
-        self.assertEqual([chip.read(port) for port in (0x3C0, 0x3C9, 0x3CC)], [0, 0, 0])
+        self.assertEqual([chip.read(port) for port in (0x3C2, 0x3CA, 0x3CC)], [0, 0, 0])
 
     def test_the_ports_are_kept_apart(self):
         chip = Vga()
-        chip.write(0x3C8, 1)
-        chip.write(0x3C9, 2)
-        self.assertEqual((chip.read(0x3C8), chip.read(0x3C9)), (1, 2))
+        chip.write(0x3C2, 1)
+        chip.write(0x3CA, 2)
+        self.assertEqual((chip.read(0x3C2), chip.read(0x3CA)), (1, 2))
 
     def test_an_index_write_is_not_taken_for_a_port_write_of_the_same_value(self):
         chip = Vga()
@@ -381,6 +382,253 @@ class TestClear(unittest.TestCase):
         self.assertIs(chip.planes[0], held)
         self.assertEqual(held[0], 0)
         self.assertEqual(len(held), 0x10000)
+
+
+def set_color(chip, index, red, green, blue):
+    """What a program does to the ports to set a color of the DAC."""
+    chip.write(0x3C8, index)
+    for part in (red, green, blue):
+        chip.write(0x3C9, part)
+
+
+class TestTheDac(unittest.TestCase):
+    def test_the_colors_start_as_the_16_of_the_ega(self):
+        self.assertEqual(Vga().colors(), EGA_COLORS)
+
+    def test_three_bytes_make_a_color_and_the_address_goes_up_by_itself(self):
+        chip = Vga()
+        chip.write(0x3C8, 100)
+        for part in (10, 20, 30, 11, 21, 31):
+            chip.write(0x3C9, part)
+        self.assertEqual((chip.get_dac(100), chip.get_dac(101)), ((10, 20, 30), (11, 21, 31)))
+        self.assertEqual(chip.read(0x3C8), 102)
+
+    def test_a_color_is_not_there_until_its_third_byte(self):
+        chip = Vga()
+        chip.write(0x3C8, 100)
+        chip.write(0x3C9, 1)
+        chip.write(0x3C9, 2)
+        self.assertEqual(chip.get_dac(100), (0, 0, 0))
+
+    def test_a_new_address_forgets_the_bytes_of_a_color_that_was_not_finished(self):
+        chip = Vga()
+        chip.write(0x3C8, 100)
+        chip.write(0x3C9, 1)
+        chip.write(0x3C9, 2)
+        chip.write(0x3C8, 100)
+        for part in (7, 8, 9):
+            chip.write(0x3C9, part)
+        self.assertEqual((chip.get_dac(100), chip.get_dac(101)), ((7, 8, 9), (0, 0, 0)))
+
+    def test_only_6_bits_of_a_byte_are_kept(self):
+        chip = Vga()
+        set_color(chip, 5, 0xFF, 0x40, 0x7F)
+        self.assertEqual(chip.get_dac(5), (0x3F, 0x00, 0x3F))
+
+    def test_the_address_comes_round_after_255(self):
+        chip = Vga()
+        set_color(chip, 255, 1, 2, 3)
+        for part in (4, 5, 6):
+            chip.write(0x3C9, part)
+        self.assertEqual((chip.get_dac(255), chip.get_dac(0)), ((1, 2, 3), (4, 5, 6)))
+        self.assertEqual(chip.read(0x3C8), 1)
+
+    def test_a_color_is_read_back_red_green_blue_and_then_the_next(self):
+        chip = Vga()
+        set_color(chip, 40, 1, 2, 3)
+        set_color(chip, 41, 4, 5, 6)
+        chip.write(0x3C7, 40)
+        self.assertEqual([chip.read(0x3C9) for _ in range(6)], [1, 2, 3, 4, 5, 6])
+
+    def test_reading_goes_round_after_255_and_a_new_read_address_starts_at_red_again(self):
+        chip = Vga()
+        set_color(chip, 255, 9, 8, 7)
+        chip.write(0x3C7, 255)
+        self.assertEqual([chip.read(0x3C9) for _ in range(3)], [9, 8, 7])
+        self.assertEqual(chip.read(0x3C9), chip.get_dac(0)[0])
+        chip.write(0x3C7, 255)
+        chip.read(0x3C9)
+        chip.write(0x3C7, 255)  # in the middle of a color: start it again
+        self.assertEqual(chip.read(0x3C9), 9)
+
+    def test_reading_does_not_move_the_write_address_and_writing_does_not_move_the_read_address(self):
+        chip = Vga()
+        chip.write(0x3C7, 10)
+        set_color(chip, 20, 1, 2, 3)
+        self.assertEqual(chip.read(0x3C9), chip.get_dac(10)[0])
+        self.assertEqual(chip.read(0x3C8), 21)
+
+    def test_port_3c7_says_whether_the_dac_was_last_told_to_read_or_to_write(self):
+        chip = Vga()
+        self.assertEqual(chip.read(0x3C7), 0)
+        chip.write(0x3C7, 5)
+        self.assertEqual(chip.read(0x3C7), 3)
+        chip.write(0x3C8, 5)
+        self.assertEqual(chip.read(0x3C7), 0)
+
+    def test_the_pel_mask_starts_at_ff_and_is_read_back(self):
+        chip = Vga()
+        self.assertEqual(chip.read(0x3C6), 0xFF)
+        chip.write(0x3C6, 0x0F)
+        self.assertEqual(chip.read(0x3C6), 0x0F)
+
+    def test_the_pel_mask_cuts_the_index_of_a_color_before_it_is_looked_up(self):
+        chip = Vga()
+        set_color(chip, 0x08, 10, 20, 30)
+        chip.write(0x3C6, 0x0F)  # the color 0x38 is now the color 0x08
+        self.assertEqual(chip.colors()[8], (10 << 2 | 10 >> 4, 20 << 2 | 20 >> 4, 30 << 2 | 30 >> 4))
+
+    def test_a_color_is_widened_from_6_bits_to_8(self):
+        chip = Vga()
+        for six, eight in ((0, 0), (1, 4), (2, 8), (32, 130), (62, 251), (63, 255)):
+            set_color(chip, 0x38 + 7, six, six, six)  # the color 15 of a pixel
+            self.assertEqual(chip.colors()[15], (eight,) * 3, six)
+
+    def test_the_parts_of_a_color_keep_their_places_in_the_color(self):
+        chip = Vga()
+        set_color(chip, 0x38 + 7, 63, 0, 32)
+        self.assertEqual(chip.colors()[15], (255, 0, 130))
+
+    def test_a_dac_change_marks_the_picture_as_changed_and_an_address_change_does_not(self):
+        chip = Vga()
+        chip.write(0x3C8, 5)
+        chip.write(0x3C7, 5)
+        chip.write(0x3C9, 1)
+        chip.write(0x3C9, 2)
+        self.assertFalse(chip.changed)
+        chip.write(0x3C9, 3)
+        self.assertTrue(chip.changed)
+
+    def test_the_mask_marks_the_picture_as_changed(self):
+        chip = Vga()
+        chip.write(0x3C6, 0x7F)
+        self.assertTrue(chip.changed)
+
+
+class TestThePaletteRegisters(unittest.TestCase):
+    def test_the_16_registers_start_as_the_bios_leaves_them(self):
+        chip = Vga()
+        self.assertEqual([chip.palette_register(n) for n in range(16)],
+                         [0, 1, 2, 3, 4, 5, 0x14, 7, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F])
+
+    def test_the_port_takes_an_index_and_then_a_value_and_then_an_index_again(self):
+        chip = Vga()
+        chip.write(0x3C0, 3)
+        chip.write(0x3C0, 0x2A)
+        chip.write(0x3C0, 4)
+        chip.write(0x3C0, 0x15)
+        self.assertEqual((chip.palette_register(3), chip.palette_register(4)), (0x2A, 0x15))
+
+    def test_reading_the_status_port_sets_it_back_to_an_index(self):
+        chip = Vga()
+        chip.write(0x3C0, 3)  # an index: the next byte would be its value
+        chip.read(0x3DA)
+        chip.write(0x3C0, 5)  # so this is an index again
+        chip.write(0x3C0, 0x2A)
+        self.assertEqual((chip.palette_register(3), chip.palette_register(5)), (3, 0x2A))
+
+    def test_the_index_has_5_bits_and_bit_5_is_not_part_of_it(self):
+        chip = Vga()
+        chip.write(0x3C0, 0x20 | 3)  # the palette is the screen's: bit 5 set, as a program does when it is done
+        chip.write(0x3C0, 0x2A)
+        self.assertEqual(chip.palette_register(3), 0x2A)
+        self.assertEqual(chip.read(0x3C0), 0x03)
+
+    def test_the_value_is_read_back_through_3c1(self):
+        chip = Vga()
+        chip.write(0x3C0, 6)
+        self.assertEqual(chip.read(0x3C1), 0x14)
+        chip.read(0x3DA)
+        chip.write(0x3C0, 6)
+        chip.write(0x3C0, 0x2A)
+        chip.read(0x3DA)
+        chip.write(0x3C0, 6)
+        self.assertEqual(chip.read(0x3C1), 0x2A)
+
+    def test_registers_past_the_last_are_ignored_and_read_0(self):
+        chip = Vga()
+        for index in (0x15, 0x1F):
+            chip.write(0x3C0, index)
+            chip.write(0x3C0, 0x55)
+            self.assertEqual(chip.read(0x3C1), 0)
+        self.assertEqual([chip.palette_register(n) for n in range(21)], DEFAULT_ATTRIBUTES)
+
+    def test_a_palette_register_says_which_color_of_the_dac_a_pixel_color_is(self):
+        chip = Vga()
+        set_color(chip, 0x20, 63, 0, 0)
+        chip.set_palette_register(1, 0x20)
+        self.assertEqual(chip.colors()[1], (255, 0, 0))
+        self.assertEqual(chip.colors()[2], EGA_COLORS[2])  # the others are as they were
+
+    def test_the_color_select_register_gives_bits_6_and_7_of_the_color_of_the_dac(self):
+        chip = Vga()
+        set_color(chip, 0x45, 63, 63, 0)
+        chip.set_palette_register(1, 0x05)
+        chip.set_palette_register(0x14, 0x04)  # bit 2 of it is bit 6 of the number
+        self.assertEqual(chip.colors()[1], (255, 255, 0))
+        chip.set_palette_register(0x14, 0x03)  # bits 0 and 1 of it are not used here
+        self.assertEqual(chip.colors()[1], EGA_COLORS[5])
+
+    def test_with_bit_7_of_the_mode_control_register_the_color_select_gives_bits_4_to_7(self):
+        chip = Vga()
+        set_color(chip, 0x25, 0, 63, 63)
+        chip.set_palette_register(1, 0x35)  # bits 4 and 5 of this one are not used now
+        chip.set_palette_register(0x10, 0x81)
+        chip.set_palette_register(0x14, 0x02)  # bit 1 of it is bit 5 of the number
+        self.assertEqual(chip.colors()[1], (0, 255, 255))
+
+    def test_with_bit_7_of_the_mode_control_register_all_four_bits_of_the_color_select_count(self):
+        chip = Vga()
+        set_color(chip, 0xC5, 63, 0, 63)
+        chip.set_palette_register(1, 0x05)
+        chip.set_palette_register(0x10, 0x81)
+        chip.set_palette_register(0x14, 0x0C)  # bits 2 and 3 of it are bits 6 and 7 of the number
+        self.assertEqual(chip.colors()[1], (255, 0, 255))
+
+    def test_the_other_attribute_registers_start_as_the_bios_leaves_them(self):
+        chip = Vga()
+        self.assertEqual([chip.palette_register(n) for n in range(0x10, 0x15)], [0x01, 0x00, 0x0F, 0x00, 0x00])
+
+    def test_setting_a_palette_register_marks_the_picture_as_changed(self):
+        chip = Vga()
+        chip.set_palette_register(2, 0x30)
+        self.assertTrue(chip.changed)
+
+    def test_the_overscan_register_is_kept_and_does_nothing_to_the_colors(self):
+        chip = Vga()
+        chip.set_palette_register(0x11, 0x2A)
+        self.assertEqual((chip.palette_register(0x11), chip.colors()), (0x2A, EGA_COLORS))
+
+    def test_a_write_of_a_value_marks_the_picture_as_changed_and_an_index_does_not(self):
+        chip = Vga()
+        chip.write(0x3C0, 3)
+        self.assertFalse(chip.changed)
+        chip.write(0x3C0, 7)
+        self.assertTrue(chip.changed)
+
+    def test_a_mode_set_brings_all_the_colors_back(self):
+        chip = Vga()
+        set_color(chip, 0x38, 1, 2, 3)
+        chip.write(0x3C6, 0x0F)
+        chip.set_palette_register(2, 0x30)
+        chip.write(0x3C0, 3)  # in the middle of an index and a value
+        chip.write(0x3C7, 9)
+        chip.read(0x3C9)
+        chip.clear()
+        self.assertEqual(chip.colors(), EGA_COLORS)
+        self.assertEqual((chip.read(0x3C6), chip.read(0x3C7), chip.read(0x3C8)), (0xFF, 0, 0))
+        self.assertEqual(chip.read(0x3C9), chip.get_dac(0)[0])  # the read address is 0 again, at red
+        chip.write(0x3C0, 5)  # an index, not the value of the 3
+        self.assertEqual(chip.read(0x3C0), 5)  # and port 3C0h gives the index back
+        chip.write(0x3C0, 5)
+        self.assertEqual(chip.palette_register(5), 5)
+        self.assertEqual([chip.palette_register(n) for n in (0, 3)], [0, 3])
+
+    def test_a_mode_set_that_keeps_the_picture_brings_the_colors_back_too(self):
+        chip = Vga()
+        chip.set_palette_register(2, 0x30)
+        chip.clear(keep_planes=True)
+        self.assertEqual(chip.colors(), EGA_COLORS)
 
 
 class TestReadModes(unittest.TestCase):

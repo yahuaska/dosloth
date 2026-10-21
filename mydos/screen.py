@@ -72,7 +72,7 @@ class Monitor:
 
     def show(self):
         """Give every display the picture as it is now."""
-        frame = render(self.card.planes)
+        frame = render(self.card.planes, self.card.colors())
         self.card.changed = False
         for display in self.displays:
             display.present(frame)

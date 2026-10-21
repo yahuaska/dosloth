@@ -13,7 +13,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 ## Layout
 - `mydos/cpu.py`  - memory, registers, flags, instruction loop
 - `mydos/dos.py`  - INT 21h and friends (Python-side handlers)
-- `mydos/bios.py` - BIOS interrupts (INT 1Ah time of day, INT 16h keyboard, INT 10h video: mode 03h/12h set and get, the VGA check so far), also Python-side handlers
+- `mydos/bios.py` - BIOS interrupts (INT 1Ah time of day, INT 16h keyboard, INT 10h video: modes 03h/12h, the
+  colors AH=10h, the VGA check so far), also Python-side handlers
 - `mydos/config.py` - the configuration (TOML): drives, what is mounted in them, where a program starts;
   `config.example.toml` shows the format. `python -m mydos -c FILE program` uses it; without `-c` the machine is
   built in: floppies A: B:, a CD-ROM D: with no disc, the current directory as the hard disk C:. A drive is a
@@ -27,9 +28,10 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   take the lowest free slot
 - `mydos/timer.py` - the 8253/8254 timer on ports 40h-43h; its time is the count of executed instructions
 - `mydos/vga.py` - a VGA card for the 16-color planar modes: the ports 3C0h-3DFh, and the window A0000h-AFFFFh as
-  four planes with the write modes 0-3, read modes 0-1 and the latches. The CPU hands that window to the card
-  (`cpu.video`), so the crash dump's `.mem` file has nothing in it for the screen
-- `mydos/screen.py` - the planes -> a `Frame` of RGB pixels (mode 12h layout, 640x480, standard EGA colors), and
+  four planes with the write modes 0-3, read modes 0-1 and the latches; the colors: the DAC (3C6h-3C9h) and the
+  palette registers of the attribute controller (3C0h). The CPU hands that window to the card (`cpu.video`), so
+  the crash dump's `.mem` file has nothing in it for the screen
+- `mydos/screen.py` - the planes -> a `Frame` of RGB pixels (mode 12h layout, 640x480, the colors of the card), and
   the `Monitor` that looks after all the displays: polls their windows, shows the picture when the card was drawn on
 - `mydos/display.py` - the `Display` interface (`present(frame)`, `poll()`, `close()`) that every window or file that
   shows the picture goes through; `PngFile` is the first. `-s PNGFILE` uses it
