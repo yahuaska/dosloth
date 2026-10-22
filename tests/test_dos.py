@@ -1565,5 +1565,241 @@ class TestDiskTransferArea(unittest.TestCase):
         self.assertEqual(self.state.dta, (0x2000, 0x0100))
 
 
+class TestFindFiles(FileFunctionsTest):
+    """INT 21h AH=4Eh (find the first file that fits a mask) and AH=4Fh (the next one)."""
+
+    DTA = (0x5000, 0x0100)
+
+    def setUp(self):
+        super().setUp()
+        self.state.dta = self.DTA
+        self.when = time.mktime((1997, 6, 20, 13, 45, 58, 0, 0, -1))
+        for name, data in (("AAA.DAT", b"12345"), ("BBB.DAT", b""), ("CCC.TXT", b"abc"), ("readme", b"r")):
+            (self.base / name).write_bytes(data)
+            os.utime(self.base / name, (self.when, self.when))
+
+    def first(self, mask, attributes=0):
+        self.call(0x4E00, mask, cx=attributes)
+        return self.failed()
+
+    def next(self):
+        self.call(0x4F00)
+        return self.failed()
+
+    def memory(self):
+        return bytes(self.cpu.mem[0x50100:0x50100 + 43])
+
+    def found(self):
+        """(name, size, attributes) of what the DTA holds."""
+        data = self.memory()
+        return data[0x1E:].split(b"\0")[0].decode(), int.from_bytes(data[0x1A:0x1E], "little"), data[0x15]
+
+    def all(self, mask, attributes=0):
+        """The names of every file that fits, going on with AH=4Fh until there are no more."""
+        names = []
+        error = self.first(mask, attributes)
+        while error is None:
+            names.append(self.found()[0])
+            error = self.next()
+        self.assertEqual(error, 18)
+        return names
+
+    def test_the_first_file_is_in_the_dta_with_its_name_size_attributes_time_and_date(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.assertIsNone(self.first("aaa.dat"))
+        self.assertEqual(self.found(), ("AAA.DAT", 5, 0x20))
+        data = self.memory()
+        self.assertEqual(int.from_bytes(data[0x16:0x18], "little"), 13 << 11 | 45 << 5 | 29)
+        self.assertEqual(int.from_bytes(data[0x18:0x1A], "little"), (1997 - 1980) << 9 | 6 << 5 | 20)
+
+    def test_every_file_that_fits_comes_once_in_the_order_of_the_directory(self):
+        self.assertEqual(self.all("*.*"), ["AAA.DAT", "BBB.DAT", "CCC.TXT", "NOTES.TXT", "README"])
+        self.assertEqual(self.all("*.DAT"), ["AAA.DAT", "BBB.DAT"])
+        self.assertEqual(self.all("*"), ["AAA.DAT", "BBB.DAT", "CCC.TXT", "NOTES.TXT", "README"])
+        self.assertEqual(self.all("?B?.D*"), ["BBB.DAT"])
+        self.assertEqual(self.all("README"), ["README"])
+
+    def test_a_directory_comes_only_when_the_attributes_say_so(self):
+        self.assertNotIn("GAMES", self.all("*.*"))
+        self.assertIn("GAMES", self.all("*.*", 0x10))
+        self.first("GAMES", 0x10)
+        self.assertEqual(self.found(), ("GAMES", 0, 0x10))
+        self.assertEqual(self.first("GAMES", 0), 2)
+
+    def test_no_file_that_fits_is_error_2_and_the_dta_is_not_touched(self):
+        self.cpu.mem[0x50100:0x50104] = b"KEEP"
+        self.assertEqual(self.first("XCOM3.CFG"), 2)  # as xcomapoc.exe asks for it
+        self.assertEqual(self.cpu.r[CPU.AX], 2)
+        self.assertEqual(self.cpu.mem[0x50100:0x50104], b"KEEP")
+
+    def test_after_the_last_file_every_call_gives_error_18(self):
+        self.first("AAA.DAT")
+        self.assertEqual(self.next(), 18)
+        self.assertEqual(self.cpu.r[CPU.AX], 18)
+        self.assertEqual(self.next(), 18)
+
+    def test_the_dta_keeps_the_last_file_after_the_error_18(self):
+        self.first("AAA.DAT")
+        self.next()
+        self.assertEqual(self.found()[0], "AAA.DAT")
+
+    def test_a_search_in_a_directory_by_a_relative_path_an_absolute_path_and_a_drive(self):
+        (self.base / "GAMES" / "G1.DAT").write_bytes(b"g")
+        self.assertEqual(self.all("games\\*.dat"), ["G1.DAT"])
+        self.assertEqual(self.all("C:\\GAMES\\*.*"), ["G1.DAT"])
+        self.assertEqual(self.all("\\games\\*"), ["G1.DAT"])
+        self.assertEqual(self.all("C:\\*.TXT"), ["CCC.TXT", "NOTES.TXT"])
+        self.volumes.chdir("C:\\GAMES")
+        self.assertEqual(self.all("*.DAT"), ["G1.DAT"])
+        self.assertEqual(self.all("..\\*.TXT"), ["CCC.TXT", "NOTES.TXT"])
+        self.assertEqual(self.all("C:*.DAT"), ["G1.DAT"])
+
+    def test_the_memory_disk_too(self):
+        for name in ("B2.TXT", "A1.TXT"):
+            self.volumes.filesystems[3].create([name]).close()
+        self.assertEqual(self.all("D:*.TXT"), ["A1.TXT", "B2.TXT"])
+        self.assertEqual(self.all("D:\\*.*"), ["A1.TXT", "B2.TXT"])
+
+    def test_an_empty_directory_has_nothing_and_that_is_error_2(self):
+        self.assertEqual(self.first("GAMES\\*.*"), 2)
+
+    def test_a_directory_that_is_not_there_is_error_3_and_so_is_a_file_used_as_a_directory(self):
+        self.assertEqual(self.first("NOPE\\*.*"), 3)
+        self.assertEqual(self.first("NOTES.TXT\\*.*"), 3)
+        self.assertEqual(self.first("GAMES\\NOPE\\*.*"), 3)
+
+    def test_no_mask_is_error_3(self):
+        for path in ("C:\\", "C:", "GAMES\\", "\\", "C:\\GAMES\\"):
+            self.assertEqual(self.first(path), 3, path)
+        self.assertEqual(self.first(""), 3)
+
+    def test_a_path_with_a_forward_slash_or_a_drive_or_dots_at_its_end_has_no_mask_either(self):
+        for path in ("GAMES/", "C:/", "/", ".", "..", "GAMES\\..", "GAMES\\.", "C:."):
+            self.assertEqual(self.first(path), 3, path)
+
+    def test_a_drive_letter_alone_means_no_mask_even_when_the_current_directory_is_not_the_root(self):
+        self.volumes.chdir("C:\\GAMES")
+        self.assertEqual(self.first("C:"), 3)
+        self.assertEqual(self.first("D:"), 3)
+
+    def test_the_drive_errors(self):
+        self.assertEqual(self.first("Z:*.*"), 15)
+        self.assertEqual(self.first("A:*.*"), 21)
+        self.assertEqual(self.first("..\\*.*"), 3)
+
+    def test_the_mask_is_found_whatever_its_case_and_the_names_come_in_capitals(self):
+        self.assertEqual(self.all("ReadMe"), ["README"])
+        self.assertEqual(self.all("notes.*"), ["NOTES.TXT"])
+
+    def test_a_file_whose_name_dos_cannot_have_is_not_found(self):
+        (self.base / "a_very_long_file_name.dat").write_bytes(b"x")
+        self.assertNotIn("A_VERY_LONG_FILE_NAME.DAT", self.all("*.*"))
+        self.assertEqual(self.first("A_VERY*"), 2)
+
+    def test_the_search_is_a_snapshot_so_files_made_after_it_began_are_not_in_it(self):
+        self.first("*.DAT")  # AAA.DAT comes; BBB.DAT is still to come
+        (self.base / "ZZZ.DAT").write_bytes(b"z")
+        names = [self.found()[0]]
+        while self.next() is None:
+            names.append(self.found()[0])
+        self.assertEqual(names, ["AAA.DAT", "BBB.DAT"])
+
+    def test_the_number_of_the_search_in_the_dta_is_what_lets_4fh_go_on_wherever_the_dta_is_now(self):
+        self.first("*.DAT")
+        self.cpu.mem[0x60200:0x60200 + 43] = self.memory()  # the program copies the DTA to another place
+        self.state.dta = (0x6000, 0x0200)
+        self.assertIsNone(self.next())
+        self.assertEqual(bytes(self.cpu.mem[0x60200 + 0x1E:0x60200 + 0x25]), b"BBB.DAT")
+
+    def test_4fh_with_a_dta_that_holds_no_search_is_error_18(self):
+        for garbage in (bytes(43), bytes([0xFF] * 43), bytes(range(43))):
+            self.cpu.mem[0x50100:0x50100 + 43] = garbage
+            self.assertEqual(self.next(), 18)
+
+    def test_two_searches_at_once_each_with_a_dta_of_its_own(self):
+        self.first("*.DAT")
+        one = self.memory()
+        self.state.dta = (0x6000, 0x0000)
+        self.first("*.TXT")
+        two = bytes(self.cpu.mem[0x60000:0x60000 + 43])
+        self.assertEqual(two[0x1E:0x25], b"CCC.TXT")
+        self.state.dta = self.DTA
+        self.cpu.mem[0x50100:0x50100 + 43] = one
+        self.next()
+        self.assertEqual(self.found()[0], "BBB.DAT")
+        self.state.dta = (0x6000, 0x0000)
+        self.cpu.mem[0x60000:0x60000 + 43] = two
+        self.next()
+        self.assertEqual(bytes(self.cpu.mem[0x60000 + 0x1E:0x60000 + 0x27]), b"NOTES.TXT")
+
+    def test_a_search_of_one_machine_is_not_known_to_another(self):
+        self.first("*.DAT")
+        other = CPU()
+        other_state = dos.install(other)
+        other_state.dta = self.DTA
+        other.s[CPU.CS], other.s[CPU.DS] = 0x1000, 0x2000
+        other.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        other.mem[0x50100:0x50100 + 43] = self.memory()  # the DTA of the search that was begun here
+        other.r[CPU.AX] = 0x4F00
+        other.step()
+        self.assertTrue(other.get_flag(flags.CF))
+        self.assertEqual(other.r[CPU.AX], 18)
+
+    def test_the_dta_that_is_set_is_the_one_written_to_and_the_old_one_is_left_alone(self):
+        self.state.dta = (0x6000, 0x0000)
+        self.cpu.mem[0x50100:0x50104] = b"KEEP"
+        self.first("AAA.DAT")
+        self.assertEqual(self.cpu.mem[0x50100:0x50104], b"KEEP")
+        self.assertEqual(bytes(self.cpu.mem[0x6001E:0x60025]), b"AAA.DAT")
+
+    def test_the_dta_may_run_over_the_end_of_its_segment(self):
+        self.state.dta = (0x5000, 0xFFF0)
+        self.first("*.DAT")
+        data = bytes(self.cpu.rb(0x5000, (0xFFF0 + i) & 0xFFFF) for i in range(43))
+        self.assertEqual(data[0x1E:0x25], b"AAA.DAT")
+        self.assertIsNone(self.next())
+        data = bytes(self.cpu.rb(0x5000, (0xFFF0 + i) & 0xFFFF) for i in range(43))
+        self.assertEqual(data[0x1E:0x25], b"BBB.DAT")
+
+    def test_the_default_dta_is_in_the_psp(self):
+        self.state.dta = (0x1000, 0x0080)
+        self.first("AAA.DAT")
+        self.assertEqual(bytes(self.cpu.mem[0x10080 + 0x1E:0x10080 + 0x25]), b"AAA.DAT")
+
+    def test_the_registers_are_left_alone_and_the_flags_but_the_carry_too(self):
+        self.cpu.set_flag(flags.ZF, True)
+        self.call(0x4E00, "AAA.DAT", cx=0x0007, bx=0x1234, dx=0x0100)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (0x4E00, 0x1234, 7, 0x0100))
+        self.assertTrue(cpu.get_flag(flags.ZF))
+        self.assertFalse(cpu.get_flag(flags.CF))
+
+    def test_the_mask_may_run_over_the_end_of_the_segment_it_is_in(self):
+        self.call(0x4E00, "AAA.DAT", dx=0xFFFA)
+        self.assertIsNone(self.failed())
+        self.assertEqual(self.found()[0], "AAA.DAT")
+
+    def test_a_mask_with_no_end_is_error_3(self):
+        for i in range(300):
+            self.cpu.wb(0x2000, 0x0100 + i, ord("A"))
+        self.call(0x4E00, None)
+        self.assertEqual(self.failed(), 3)
+
+    def test_the_label_search_finds_nothing(self):
+        self.assertEqual(self.first("*.*", 0x08), 2)
+
+    def test_a_search_for_everything_that_has_all_the_kinds_asked_for_finds_directories_too(self):
+        self.assertEqual(self.all("*.*", 0x37)[0:2], ["AAA.DAT", "BBB.DAT"])
+        self.assertIn("GAMES", self.all("*.*", 0x37))
+
+    def test_a_long_directory_is_gone_through_to_the_end(self):
+        for number in range(300):
+            self.volumes.filesystems[3].create([f"F{number:03d}.DAT"]).close()
+        names = self.all("D:*.DAT")
+        self.assertEqual(len(names), 300)
+        self.assertEqual((names[0], names[-1]), ("F000.DAT", "F299.DAT"))
+        self.assertEqual(names, sorted(names))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,3 +1,4 @@
+import re
 import sys
 import time
 from pathlib import Path
@@ -5,9 +6,11 @@ from pathlib import Path
 from . import flags
 from .config import default as default_config
 from .cpu import CPU, Exit
-from .filesystem import ACCESS_DENIED, ATTR_DIRECTORY, ATTR_READONLY, ATTR_VOLUME, PATH_NOT_FOUND, FsError
+from .filesystem import (ACCESS_DENIED, ATTR_DIRECTORY, ATTR_READONLY, ATTR_VOLUME, FILE_NOT_FOUND, PATH_NOT_FOUND,
+                         FsError)
 from .handles import Console, HandleTable, NullDevice, OpenFile
 from .psp import DTA_OFFSET, PSP_SEG
+from .search import Searches, find, record
 from .volumes import Volumes
 
 DOS_VERSION = (7, 1)  # (major, minor) reported by INT 21h AH=30h
@@ -17,6 +20,7 @@ DEVICE_INFO = 0x80C0  # the IOCTL answer for the auxiliary and printer devices: 
 TOO_MANY_OPEN_FILES = 4
 INVALID_ACCESS_CODE = 0x0C
 INVALID_FUNCTION = 1
+NO_MORE_FILES = 18
 INVALID_HANDLE = 6
 MSCDEX_MAGIC = 0xADAD  # what MSCDEX puts in BX to say that it is there
 MSCDEX_VERSION = 0x020A  # MSCDEX 2.10, the one of Windows 95
@@ -41,6 +45,38 @@ def now():
     return time.time()
 
 
+def put_record(cpu, state, number, entry):
+    """Write what a search found into the DTA, for a program to read."""
+    segment, offset = state.dta
+    for i, byte in enumerate(record(number, entry)):
+        cpu.wb(segment, (offset + i) & 0xFFFF, byte)
+
+
+def find_first(cpu, state):
+    """AH=4Eh: look for the files that fit the mask at DS:DX, among the kinds that CX asks for. The first one is put
+    in the DTA, and a number there lets AH=4Fh go on with the others. Error 2 if none fits, 3 if the directory is not
+    there."""
+    text = read_path(cpu)
+    where = state.volumes.resolve(text)
+    if re.split(r"[\\/:]", text)[-1] in ("", ".", ".."):  # the path ends in a directory, a drive or a dot: no mask
+        raise FsError(PATH_NOT_FOUND, "no mask to look for")
+    mask = where.parts[-1]
+    found = find(where.filesystem.listdir(where.parts[:-1]), mask, cpu.r[CPU.CX])
+    if not found:
+        raise FsError(FILE_NOT_FOUND, f"nothing fits {mask!r}")
+    put_record(cpu, state, state.searches.start(found[1:]), found[0])
+
+
+def find_next(cpu, state):
+    """AH=4Fh: the next file of the search whose number is in the DTA. Error 18 when there are no more."""
+    segment, offset = state.dta
+    number = cpu.rw(segment, offset)
+    entry = state.searches.take(number)
+    if entry is None:
+        raise FsError(NO_MORE_FILES, "there are no more files")
+    put_record(cpu, state, number, entry)
+
+
 def fail(cpu, error):
     """Report a failed call the DOS way: the carry flag is set and AX is the error number."""
     cpu.set_flag(flags.CF, True)
@@ -56,6 +92,7 @@ class DosState:
         self.handles = HandleTable()  # what the program's file handles stand for
         self.break_checking = False  # the Ctrl-Break flag of AH=33h; DOS starts with it off
         self.dta = (PSP_SEG, DTA_OFFSET)  # where the disk transfer area is, as segment and offset: see AH=1Ah
+        self.searches = Searches()  # the file searches that AH=4Eh began and AH=4Fh goes on with
 
 
 def boot_drive(config):
@@ -67,7 +104,7 @@ def boot_drive(config):
 def int21(cpu, state):
     """INT 21h: DOS services, selected by AH.
 
-    So far 09h, 0Eh, 19h, 1Ah, 25h, 2Ch, 2Fh, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 43h, 44h, 4Ah, 4Ch, 63h.
+    So far 09h, 0Eh, 19h, 1Ah, 25h, 2Ch, 2Fh, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 43h, 44h, 4Ah, 4Ch, 4Eh, 4Fh, 63h.
     """
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
@@ -267,6 +304,12 @@ def int21(cpu, state):
         # byte, so there is no table: error 01 (no such function) is the answer a program takes as "none".
         cpu.set_flag(flags.CF, True)
         cpu.r[CPU.AX] = INVALID_FUNCTION
+    elif ah == 0x4E or ah == 0x4F:  # find the first file that fits a mask, and the next ones
+        try:
+            (find_first if ah == 0x4E else find_next)(cpu, state)
+            cpu.set_flag(flags.CF, False)
+        except FsError as error:
+            fail(cpu, error)
     elif ah == 0x4A:  # resize the memory block that starts at segment ES to BX paragraphs
         # Naive: we keep no list of blocks, only the top of memory. A block can grow or shrink as
         # long as it ends below that top. (DOS error 09, "not a block", cannot be told apart yet.)

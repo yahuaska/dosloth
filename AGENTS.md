@@ -24,6 +24,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   regard to case, only 8.3 names visible) and MemFs (in memory), with one interface and DOS error numbers
 - `mydos/volumes.py` - the drives as a program uses them: a file system per drive, the current directory of each, and
   resolve(): a DOS path (`D:\X`, `..\Y`, `a/b`) -> file system + names. The program on the command line is named this way too
+- `mydos/search.py` - the file search of INT 21h AH=4Eh/4Fh: DOS wildcard masks, the attributes a program asks for,
+  the 43-byte record in the DTA, and the list of searches that are going on
 - `mydos/handles.py` - the table of 20 open handles (the JFT): 0-4 are the console, stderr, AUX and PRN, files
   take the lowest free slot
 - `mydos/dump.py` - the crash dump (`<program>.crash.json` and `.crash.mem`): beside the program, or in the current
