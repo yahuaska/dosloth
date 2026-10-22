@@ -92,6 +92,7 @@ class Op(IntEnum):
     REP_PREFIX = 0xF3    # ... repeat CX times (REP); with CMPS/SCAS: also while ZF == 1 (REPE)
     HLT = 0xF4
     GROUP3_RM = 0xF6     # F6 (byte) and F7 (word) + ModRM: TEST, NOT, NEG, MUL, IMUL, DIV or IDIV, by 'reg'
+    CMC = 0xF5           # flip the carry flag
     CLC = 0xF8
     STC = 0xF9
     CLI = 0xFA

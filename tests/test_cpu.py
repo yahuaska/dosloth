@@ -1005,6 +1005,70 @@ class TestNearJumpsAndCalls(unittest.TestCase):
             self.assertEqual(cpu.ip, 0x1007 if jumps else 7, f"AX={ax:X} DX={dx:X}")
 
 
+class TestCarryFlagInstructions(unittest.TestCase):
+    """F5 CMC, F8 CLC, F9 STC: each changes the carry flag and no other."""
+
+    OTHERS = [0x0002, 0x0FD7 & ~flags.CF, 0x0002 | flags.ZF, 0x0002 | flags.SF | flags.OF, 0x0002 | flags.DF | flags.IF,
+              0x0002 | flags.AF | flags.PF | flags.TF]
+
+    def run_one(self, opcode, others, carry):
+        cpu = machine(bytes([opcode]), False)
+        cpu.flags = others | (flags.CF if carry else 0)
+        cpu.step()
+        return cpu
+
+    def test_cmc_turns_the_carry_flag_the_other_way_round(self):
+        for others in self.OTHERS:
+            for carry in (False, True):
+                cpu = self.run_one(0xF5, others, carry)
+                self.assertEqual(cpu.get_flag(flags.CF), not carry, (hex(others), carry))
+                self.assertEqual(cpu.flags & ~flags.CF, others & ~flags.CF, (hex(others), carry))
+                self.assertEqual(cpu.ip, 1)
+
+    def test_two_cmc_in_a_row_make_no_difference(self):
+        for carry in (False, True):
+            cpu = machine(bytes([0xF5, 0xF5]), False)
+            cpu.flags = 0x0FD7 & ~flags.CF | (flags.CF if carry else 0)
+            before = cpu.flags
+            cpu.step()
+            cpu.step()
+            self.assertEqual((cpu.flags, cpu.ip), (before, 2))
+
+    def test_clc_clears_and_stc_sets_the_carry_and_nothing_else(self):
+        for others in self.OTHERS:
+            for carry in (False, True):
+                for opcode, expected in ((0xF8, False), (0xF9, True)):
+                    cpu = self.run_one(opcode, others, carry)
+                    self.assertEqual(cpu.get_flag(flags.CF), expected, (hex(opcode), hex(others), carry))
+                    self.assertEqual(cpu.flags & ~flags.CF, others & ~flags.CF)
+                    self.assertEqual(cpu.ip, 1)
+
+    def test_cmc_changes_no_register(self):
+        cpu = machine(bytes([0xF5]), True)
+        before = (list(cpu.r), list(cpu.s))
+        cpu.step()
+        self.assertEqual((cpu.r, cpu.s), before)
+
+    def test_sub_cmc_sbb_makes_a_mask_that_is_ffff_when_there_was_no_borrow(self):
+        # sub ax, dx ; cmc ; sbb cx, cx : CX is 0000h if AX was below DX, FFFFh if not (as in xcomapoc.exe)
+        for ax in (0, 1, 5, 6, 7, 100, 0x7FFF, 0x8000, 0xFFFF):
+            cpu = machine(bytes([0x29, 0xD0, 0xF5, 0x19, 0xC9]), False)
+            cpu.r[CPU.AX], cpu.r[CPU.DX], cpu.r[CPU.CX] = ax, 6, 0x1234
+            for _ in range(3):
+                cpu.step()
+            self.assertEqual(cpu.r[CPU.CX], 0x0000 if ax < 6 else 0xFFFF, ax)
+
+    def test_the_whole_idiom_of_xcomapoc_gives_the_larger_of_the_number_and_6(self):
+        # sub ax,dx ; cmc ; sbb cx,cx ; and ax,cx ; add ax,dx  with DX = 6
+        for ax in range(0, 40):
+            cpu = machine(bytes([0x29, 0xD0, 0xF5, 0x19, 0xC9, 0x21, 0xC8, 0x01, 0xD0]), False)
+            cpu.r[CPU.AX], cpu.r[CPU.DX] = ax, 6
+            for _ in range(5):
+                cpu.step()
+            self.assertEqual(cpu.r[CPU.AX], max(ax, 6), ax)
+            self.assertEqual(cpu.ip, 9)
+
+
 class TestFlagsRegisterInstructions(unittest.TestCase):
     """9C PUSHF, 9D POPF, 9E SAHF, 9F LAHF."""
 

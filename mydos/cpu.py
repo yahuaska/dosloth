@@ -146,6 +146,7 @@ class CPU:
             Op.JMP_SHORT: self.jmp_short,
             Op.INT: self.int_,
             Op.HLT: self.hlt,
+            Op.CMC: self.cmc,
             Op.CLC: self.clc,
             Op.STC: self.stc,
             Op.CLI: self.cli,
@@ -1435,6 +1436,14 @@ class CPU:
             if bits == 16:
                 value |= self.port_in((port + 1) & 0xFFFF) << 8
             self.set_reg(0, bits, value)
+
+    def cmc(self, op):
+        """Turn the carry flag the other way round (opcode F5): 0 becomes 1 and 1 becomes 0. No other flag changes.
+
+        A compiler uses it to make a yes-or-no answer into a mask: `cmp`, `cmc`, `sbb cx, cx` leaves 0000h in CX
+        when the first number was below the second and FFFFh when it was not.
+        """
+        self.set_flag(flags.CF, not self.get_flag(flags.CF))
 
     def clc(self, op):
         """Clear the carry flag (opcode F8)."""
