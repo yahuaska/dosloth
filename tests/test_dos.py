@@ -7,7 +7,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from mydos import config, dos, flags, vga
+from mydos import bios, config, dos, flags, vga
 from mydos.cpu import CPU, Exit
 from mydos.handles import OpenFile
 from mydos.volumes import Volumes
@@ -1799,6 +1799,175 @@ class TestFindFiles(FileFunctionsTest):
         self.assertEqual(len(names), 300)
         self.assertEqual((names[0], names[-1]), ("F000.DAT", "F299.DAT"))
         self.assertEqual(names, sorted(names))
+
+
+class TestDirectConsole(unittest.TestCase):
+    """INT 21h AH=06h: print the character in DL, or if DL is FFh, take a key if there is one, without waiting."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        self.keyboard = bios.install(self.cpu)
+        self.state = dos.install(self.cpu)
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+
+    def call(self, dl, dh=0x00, al=0x77, cpu=None):
+        cpu = cpu or self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.DX] = 0x0600 | al, dh << 8 | dl
+        cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x1111, 0x2222, 0x3333, 0x4444
+        cpu.ip = 0
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            cpu.step()
+        return out.getvalue(), err.getvalue()
+
+    def press(self, scan, ascii_code):
+        self.keyboard.press(scan, ascii_code)
+
+    def test_a_character_goes_to_the_output_as_it_is_and_al_is_the_character(self):
+        out, err = self.call(ord("A"))
+        self.assertEqual((out, err), ("A", ""))
+        self.assertEqual(self.cpu.get8(0), ord("A"))
+
+    def test_the_controls_are_not_acted_on_or_changed(self):
+        for code in (0x0D, 0x0A, 0x08, 0x07, 0x09, 0x1B, 0x00, 0x03, 0x1A):
+            out, _ = self.call(code)
+            self.assertEqual(out, chr(code), hex(code))
+
+    def test_the_codes_over_127_are_the_characters_of_the_pc(self):
+        for code, character in ((0x80, "Ç"), (0xB0, "░"), (0xC4, "─"), (0xDB, "█"), (0xE1, "ß"), (0xFE, "■"),
+                                (0xFD, "²"), (0x9B, "¢")):
+            self.assertEqual(self.call(code)[0], character, hex(code))
+
+    def test_every_code_but_ff_is_printed_and_ff_is_not(self):
+        for code in range(255):
+            out, _ = self.call(code)
+            self.assertEqual(out, bytes([code]).decode("cp437"), code)
+        self.assertEqual(self.call(0xFF)[0], "")
+
+    def test_the_high_byte_of_dx_does_not_matter(self):
+        self.assertEqual(self.call(ord("Q"), dh=0xFF)[0], "Q")
+        self.assertEqual(self.call(0xFF, dh=0x41)[0], "")
+
+    def test_printing_changes_no_register_but_al_and_no_flag(self):
+        self.cpu.flags = 0x0FD7
+        self.call(ord("x"))
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.SI], cpu.r[CPU.DI]), (0x1111, 0x2222, 0x3333, 0x4444))
+        self.assertEqual((cpu.get8(4), cpu.r[CPU.DX]), (0x06, ord("x")))
+        self.assertEqual(cpu.flags, 0x0FD7)
+
+    def test_the_output_is_flushed_at_once_so_that_a_prompt_is_seen(self):
+        class Spy(io.StringIO):
+            flushed = 0
+
+            def flush(self):
+                self.flushed += 1
+
+        spy = Spy()
+        with contextlib.redirect_stdout(spy):
+            self.cpu.r[CPU.AX], self.cpu.r[CPU.DX] = 0x0600, ord("z")
+            self.cpu.ip = 0
+            self.cpu.step()
+        self.assertEqual((spy.getvalue(), spy.flushed), ("z", 1))
+
+    def test_with_no_key_pressed_zf_is_set_and_al_is_0_and_nothing_is_printed(self):
+        self.cpu.set_flag(flags.ZF, False)
+        out, err = self.call(0xFF, al=0x77)
+        self.assertEqual((out, err), ("", ""))
+        self.assertTrue(self.cpu.get_flag(flags.ZF))
+        self.assertEqual(self.cpu.get8(0), 0)
+
+    def test_with_a_key_pressed_zf_is_clear_and_al_is_its_character_and_the_key_is_taken(self):
+        self.press(0x1E, 0x61)
+        self.cpu.set_flag(flags.ZF, True)
+        out, _ = self.call(0xFF)
+        self.assertEqual(out, "")
+        self.assertFalse(self.cpu.get_flag(flags.ZF))
+        self.assertEqual(self.cpu.get8(0), 0x61)
+        self.assertEqual(len(self.keyboard.buffer), 0)
+        self.call(0xFF)
+        self.assertTrue(self.cpu.get_flag(flags.ZF))
+
+    def test_the_keys_come_in_the_order_they_were_pressed(self):
+        for scan, ascii_code in ((0x1E, 0x61), (0x30, 0x62), (0x1C, 0x0D)):
+            self.press(scan, ascii_code)
+        got = []
+        for _ in range(4):
+            self.call(0xFF)
+            got.append(None if self.cpu.get_flag(flags.ZF) else self.cpu.get8(0))
+        self.assertEqual(got, [0x61, 0x62, 0x0D, None])
+
+    def test_a_key_with_no_character_comes_as_0_and_then_its_scan_code(self):
+        self.press(0x48, 0x00)  # the up arrow
+        self.press(0x1E, 0x61)
+        got = []
+        for _ in range(4):
+            self.call(0xFF)
+            got.append(None if self.cpu.get_flag(flags.ZF) else self.cpu.get8(0))
+        self.assertEqual(got, [0x00, 0x48, 0x61, None])
+
+    def test_the_scan_code_waits_for_the_next_read_even_when_nothing_else_is_pressed_in_between(self):
+        self.press(0x3B, 0x00)  # F1
+        self.call(0xFF)
+        self.assertFalse(self.cpu.get_flag(flags.ZF))
+        for _ in range(3):  # printing and other asks in between do not lose it
+            self.call(ord("."))
+        self.call(0xFF)
+        self.assertEqual((self.cpu.get_flag(flags.ZF), self.cpu.get8(0)), (False, 0x3B))
+        self.call(0xFF)
+        self.assertTrue(self.cpu.get_flag(flags.ZF))
+
+    def test_the_key_of_the_bios_is_the_same_key_dos_takes(self):
+        self.press(0x1E, 0x61)
+        self.press(0x30, 0x62)
+        self.call(0xFF)  # DOS takes the first
+        cpu = self.cpu
+        cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x16])
+        cpu.r[CPU.AX] = 0x0000  # and the BIOS gets the second
+        cpu.ip = 0
+        cpu.step()
+        self.assertEqual(cpu.r[CPU.AX], 0x3062)
+
+    def test_asking_changes_no_register_but_al_and_the_zero_flag_and_not_the_other_flags(self):
+        self.press(0x1E, 0x61)
+        self.cpu.flags = 0x0FD7 & ~flags.ZF
+        self.call(0xFF)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.SI], cpu.r[CPU.DI]), (0x1111, 0x2222, 0x3333, 0x4444))
+        self.assertEqual((cpu.get8(4), cpu.get8(2)), (0x06, 0xFF))
+        self.assertEqual(cpu.flags, 0x0FD7 & ~flags.ZF)  # a key was there: ZF clear as it was
+        self.call(0xFF)  # none now
+        self.assertEqual(cpu.flags, 0x0FD7 | flags.ZF)
+
+    def test_a_machine_with_no_bios_has_no_keys(self):
+        cpu = CPU()
+        dos.install(cpu)
+        cpu.s[CPU.CS] = 0x1000
+        cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        self.call(0xFF, cpu=cpu)
+        self.assertTrue(cpu.get_flag(flags.ZF))
+        self.assertEqual(cpu.get8(0), 0)
+
+    def test_each_machine_has_its_own_half_read_key(self):
+        self.press(0x48, 0x00)
+        self.call(0xFF)  # this one has the scan code waiting
+        other = CPU()
+        bios.install(other)
+        dos.install(other)
+        other.s[CPU.CS] = 0x1000
+        other.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        self.call(0xFF, cpu=other)
+        self.assertTrue(other.get_flag(flags.ZF))
+
+    def test_the_scan_code_zero_after_a_key_with_no_character_is_not_taken_for_no_key(self):
+        self.press(0x00, 0x00)  # a key with scan code 0 and no character: odd, but it must come as 0, 0
+        self.call(0xFF)
+        self.assertEqual((self.cpu.get_flag(flags.ZF), self.cpu.get8(0)), (False, 0))
+        self.call(0xFF)
+        self.assertEqual((self.cpu.get_flag(flags.ZF), self.cpu.get8(0)), (False, 0))
+        self.call(0xFF)
+        self.assertTrue(self.cpu.get_flag(flags.ZF))
 
 
 if __name__ == "__main__":

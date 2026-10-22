@@ -73,6 +73,7 @@ class CPU:
         # read_memory(offset) and write_memory(offset, value) then replace the plain memory there. With no
         # device the window is empty.
         self.video = None
+        self.keyboard = None  # the keys that were pressed, once the BIOS is installed (see bios.Keyboard)
         self.video_start = self.video_end = 0
         self.r = [0] * 8
         self.s = [0] * 4

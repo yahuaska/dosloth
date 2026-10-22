@@ -170,6 +170,7 @@ def int16(cpu, keyboard):
 def install(cpu):
     """Hook the BIOS interrupt handlers into the CPU. Returns the keyboard, for whoever wants to press keys on it."""
     keyboard = Keyboard()
+    cpu.keyboard = keyboard  # for DOS, which reads keys from the same buffer as the BIOS
     cpu.mem[BDA_VIDEO_MODE] = TEXT_MODE  # the machine starts in text mode, as it is at the DOS prompt
     cpu.mem[BDA_COLUMNS:BDA_COLUMNS + 2] = (80).to_bytes(2, "little")
     cpu.mem[BDA_PAGE] = 0

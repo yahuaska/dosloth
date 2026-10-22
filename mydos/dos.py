@@ -45,6 +45,24 @@ def now():
     return time.time()
 
 
+def take_key(cpu, state):
+    """The next character for a program that asks for one without waiting, or None when there is none.
+
+    A key that makes no character (an arrow, F1) comes as two: first 0, then its scan code, as DOS does it.
+    """
+    if state.pending_scan is not None:
+        code, state.pending_scan = state.pending_scan, None
+        return code
+    keyboard = cpu.keyboard
+    if keyboard is None or not keyboard.buffer:
+        return None
+    word = keyboard.buffer.popleft()
+    if word & 0xFF == 0:
+        state.pending_scan = word >> 8
+        return 0
+    return word & 0xFF
+
+
 def put_record(cpu, state, number, entry):
     """Write what a search found into the DTA, for a program to read."""
     segment, offset = state.dta
@@ -93,6 +111,7 @@ class DosState:
         self.break_checking = False  # the Ctrl-Break flag of AH=33h; DOS starts with it off
         self.dta = (PSP_SEG, DTA_OFFSET)  # where the disk transfer area is, as segment and offset: see AH=1Ah
         self.searches = Searches()  # the file searches that AH=4Eh began and AH=4Fh goes on with
+        self.pending_scan = None  # the scan code of a key with no character, to be given by the next AH=06h read
 
 
 def boot_drive(config):
@@ -104,7 +123,8 @@ def boot_drive(config):
 def int21(cpu, state):
     """INT 21h: DOS services, selected by AH.
 
-    So far 09h, 0Eh, 19h, 1Ah, 25h, 2Ch, 2Fh, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 43h, 44h, 4Ah, 4Ch, 4Eh, 4Fh, 63h.
+    So far 06h, 09h, 0Eh, 19h, 1Ah, 25h, 2Ch, 2Fh, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 43h, 44h, 4Ah, 4Ch, 4Eh,
+    4Fh, 63h.
     """
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
@@ -115,6 +135,16 @@ def int21(cpu, state):
             off = (off + 1) & 0xFFFF
         sys.stdout.write(out.decode("cp437"))
         sys.stdout.flush()
+    elif ah == 0x06:  # direct console input and output, with no checks for Ctrl-C and no waiting
+        character = cpu.get8(2)  # DL
+        if character != 0xFF:  # print the character as it is; AL is the character too
+            sys.stdout.write(bytes([character]).decode("cp437"))
+            sys.stdout.flush()
+            cpu.set8(0, character)
+        else:  # DL = FFh: is there a key? ZF = 1 and AL = 0 if not, else ZF = 0 and AL = the character
+            key = take_key(cpu, state)
+            cpu.set_flag(flags.ZF, key is None)
+            cpu.set8(0, 0 if key is None else key)
     elif ah == 0x0E:  # make drive DL the current one (0 is A:, 1 is B:, ...); AL = how many drives there are
         drive = cpu.get8(2)  # 8-bit register 2 is DL
         if drive in state.config.disks:  # a drive that does not exist is not an error: the call just does nothing

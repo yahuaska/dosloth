@@ -117,6 +117,10 @@ class TestKeyboard(unittest.TestCase):
             with self.assertRaises(NotImplementedError):
                 self.call(ah << 8)
 
+    def test_dos_reaches_the_keyboard_through_the_cpu(self):
+        self.assertIs(self.cpu.keyboard, self.keyboard)
+        self.assertIsNone(CPU().keyboard)
+
     def test_each_cpu_has_its_own_keys(self):
         other = CPU()
         bios.install(other)
