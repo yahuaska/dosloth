@@ -287,5 +287,32 @@ class TestTheScreenFile(CommandLineTest):
             process.communicate()
 
 
+class TestTheDumpOfACrashOnACdRom(CommandLineTest):
+    """A program on a disc cannot have its dump beside it: the dump goes to the current directory, and the error the
+    program died of is still the one that is shown."""
+
+    def setUp(self):
+        super().setUp()
+        if os.geteuid() == 0:
+            self.skipTest("root can write to a directory that is read-only")
+        self.disc = self.dir / "disc"
+        self.here = self.dir / "here"
+        self.here.mkdir()
+        self.program(CRASH, "T.COM", directory=self.disc)
+        self.disc.chmod(0o555)
+        self.addCleanup(self.disc.chmod, 0o755)
+        self.config("cwd = 'D:\\'\n[disks.C]\ntype = 'hdd'\n[disks.D]\ntype = 'cdrom'\n[mounts]\n"
+                    f"C = {{ type = 'tmpfs' }}\nD = {{ type = 'dir', path = '{self.disc}' }}\n")
+
+    def test_the_dump_goes_to_the_current_directory_and_the_real_error_is_shown(self):
+        result = self.run_emulator("-c", self.dir / "machine.toml", "T.COM", cwd=self.here)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("NotImplementedError", result.stderr)
+        self.assertNotIn("OSError", result.stderr)
+        self.assertIn("the directory of the program cannot be written to", result.stderr)
+        self.assertEqual(sorted(os.listdir(self.here)), ["T.COM.crash.json", "T.COM.crash.mem"])
+        self.assertEqual(sorted(os.listdir(self.disc)), ["T.COM"])
+
+
 if __name__ == "__main__":
     unittest.main()

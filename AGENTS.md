@@ -26,6 +26,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   resolve(): a DOS path (`D:\X`, `..\Y`, `a/b`) -> file system + names. The program on the command line is named this way too
 - `mydos/handles.py` - the table of 20 open handles (the JFT): 0-4 are the console, stderr, AUX and PRN, files
   take the lowest free slot
+- `mydos/dump.py` - the crash dump (`<program>.crash.json` and `.crash.mem`): beside the program, or in the current
+  directory when that cannot be written to (a program on a CD-ROM); a failing dump never hides the real error
 - `mydos/timer.py` - the 8253/8254 timer on ports 40h-43h; its time is the count of executed instructions
 - `mydos/vga.py` - a VGA card for the 16-color planar modes: the ports 3C0h-3DFh, and the window A0000h-AFFFFh as
   four planes with the write modes 0-3, read modes 0-1 and the latches; the colors: the DAC (3C6h-3C9h) and the
