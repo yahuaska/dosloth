@@ -1,5 +1,5 @@
 import sys
-
+import time
 from pathlib import Path
 
 from . import flags
@@ -33,6 +33,11 @@ def read_path(cpu):
     raise FsError(PATH_NOT_FOUND, "the path is too long, or has no end")
 
 
+def now():
+    """The time of the host, in seconds since 1970 with the fractions (a function of its own so tests can fake it)."""
+    return time.time()
+
+
 def fail(cpu, error):
     """Report a failed call the DOS way: the carry flag is set and AX is the error number."""
     cpu.set_flag(flags.CF, True)
@@ -58,7 +63,7 @@ def boot_drive(config):
 def int21(cpu, state):
     """INT 21h: DOS services, selected by AH.
 
-    So far 09h, 0Eh, 19h, 25h, 30h, 35h, 33h, 3Ch, 3Dh, 3Eh, 40h, 43h, 44h, 4Ah, 4Ch.
+    So far 09h, 0Eh, 19h, 25h, 2Ch, 30h, 35h, 33h, 3Ch, 3Dh, 3Eh, 40h, 43h, 44h, 4Ah, 4Ch.
     """
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
@@ -86,6 +91,13 @@ def int21(cpu, state):
         n = cpu.get8(0)
         cpu.r[CPU.BX] = cpu.rw(0, n * 4)
         cpu.s[CPU.ES] = cpu.rw(0, n * 4 + 2)
+    elif ah == 0x2C:  # get the time: CH = hour, CL = minute, DH = second, DL = hundredths of a second
+        moment = now()
+        local = time.localtime(moment)
+        cpu.set8(5, local.tm_hour)
+        cpu.set8(1, local.tm_min)
+        cpu.set8(6, min(local.tm_sec, 59))  # a leap second is shown as the last second of the minute
+        cpu.set8(2, int(moment % 1 * 100))
     elif ah == 0x30:  # get DOS version: AL=major, AH=minor, BH=OEM, BL:CX=serial number
         cpu.set8(0, DOS_VERSION[0])
         cpu.set8(4, DOS_VERSION[1])

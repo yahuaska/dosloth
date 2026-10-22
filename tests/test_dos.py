@@ -2,6 +2,7 @@ import contextlib
 import io
 import os
 import tempfile
+import time
 import tomllib
 import unittest
 from pathlib import Path
@@ -1142,6 +1143,91 @@ class TestMultiplex(unittest.TestCase):
         for ax in (0x1501, 0x1510, 0x1600, 0x4300, 0x0000):
             with self.assertRaises(NotImplementedError):
                 self.call(ax)
+
+
+class TestGetTime(unittest.TestCase):
+    """INT 21h AH=2Ch: the time of day, from the clock of the host."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        dos.install(self.cpu)
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        self.real_now = dos.now
+        self.addCleanup(setattr, dos, "now", self.real_now)
+
+    def at(self, hour, minute, second, fraction=0.0):
+        """Make the clock of the host show this local time on some day."""
+        dos.now = lambda: time.mktime((2026, 10, 22, hour, minute, second, 0, 0, -1)) + fraction
+
+    def call(self, ax=0x2C00, bx=0x3333, cx=0x2222, dx=0x1111):
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = ax, bx, cx, dx
+        cpu.ip = 0
+        cpu.step()
+        return cpu.get8(5), cpu.get8(1), cpu.get8(6), cpu.get8(2)  # CH, CL, DH, DL
+
+    def test_the_hour_minute_second_and_hundredths_come_in_ch_cl_dh_dl(self):
+        self.at(13, 45, 27, 0.565)
+        self.assertEqual(self.call(), (13, 45, 27, 56))
+
+    def test_midnight_and_the_last_moment_of_the_day(self):
+        self.at(0, 0, 0)
+        self.assertEqual(self.call(), (0, 0, 0, 0))
+        self.at(23, 59, 59, 0.999)
+        self.assertEqual(self.call(), (23, 59, 59, 99))  # never 100
+
+    def test_the_hundredths_are_cut_not_rounded(self):
+        for fraction, hundredths in ((0.0, 0), (0.007, 0), (0.013, 1), (0.019, 1), (0.5, 50), (0.994, 99)):
+            self.at(8, 30, 15, fraction)
+            self.assertEqual(self.call()[3], hundredths, fraction)
+
+    def test_it_is_the_local_time_not_the_utc_time(self):
+        if not hasattr(time, "tzset"):
+            self.skipTest("this system cannot change its time zone")
+        old = os.environ.get("TZ")
+
+        def restore():
+            if old is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old
+            time.tzset()
+
+        self.addCleanup(restore)
+        os.environ["TZ"] = "XXX-3"  # three hours ahead of UTC, wherever the test runs
+        time.tzset()
+        self.at(7, 5, 3)
+        self.assertEqual(self.call()[:3], (7, 5, 3))
+
+    def test_time_goes_on_between_two_calls(self):
+        self.at(10, 0, 0)
+        first = self.call()
+        self.at(10, 0, 1, 0.25)
+        self.assertEqual((first, self.call()), ((10, 0, 0, 0), (10, 0, 1, 25)))
+
+    def test_the_other_registers_and_the_flags_stay(self):
+        self.at(1, 2, 3, 0.04)
+        self.cpu.set_flag(flags.CF, True)
+        self.cpu.set_flag(flags.ZF, True)
+        self.call(ax=0x2C77)
+        cpu = self.cpu
+        self.assertEqual((cpu.get8(0), cpu.r[CPU.BX]), (0x77, 0x3333))
+        self.assertTrue(cpu.get_flag(flags.CF) and cpu.get_flag(flags.ZF))
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 2))
+
+    def test_the_real_clock_gives_a_time_that_is_there(self):
+        dos.now = self.real_now
+        hour, minute, second, hundredths = self.call()
+        self.assertTrue(0 <= hour < 24 and 0 <= minute < 60 and 0 <= second < 60 and 0 <= hundredths < 100)
+        local = time.localtime()
+        self.assertLessEqual(abs(hour * 60 + minute - (local.tm_hour * 60 + local.tm_min)) % 1440, 1)
+
+    def test_a_leap_second_is_shown_as_the_last_second_of_the_minute(self):
+        from unittest import mock
+        leap = time.struct_time((2016, 12, 31, 23, 59, 60, 5, 366, 0))  # some systems have a second 60
+        with mock.patch("mydos.dos.time.localtime", return_value=leap):
+            self.assertEqual(self.call()[:3], (23, 59, 59))
 
 
 if __name__ == "__main__":
