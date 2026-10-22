@@ -15,8 +15,6 @@ operands are:
 For a memory operand, mod says how many displacement bytes follow the ModRM byte,
 and r/m picks the registers that are added up into the offset.
 """
-from dataclasses import dataclass
-
 from . import regs
 
 # Base/index registers summed into the offset, by r/m value (for mod = 00, 01, 10).
@@ -33,14 +31,20 @@ _BASES = [
 ]
 
 
-@dataclass
 class ModRM:
-    """A decoded ModRM byte (plus any displacement bytes that followed it)."""
-    reg: int        # the `reg` field: a register number, or an opcode extension
-    is_reg: bool    # True: the r/m operand is a register; False: it is memory
-    n: int = 0      # register number of the r/m operand (when is_reg)
-    seg: int = 0    # segment *value* of the memory operand (when not is_reg)
-    off: int = 0    # offset of the memory operand (when not is_reg)
+    """A decoded ModRM byte (plus any displacement bytes that followed it).
+
+    One of these is made for nearly every instruction that has an operand, so it is a plain class with slots, which
+    is cheaper to make than a dataclass.
+    """
+    __slots__ = ("reg", "is_reg", "n", "seg", "off")
+
+    def __init__(self, reg, is_reg, n=0, seg=0, off=0):
+        self.reg = reg        # the `reg` field: a register number, or an opcode extension
+        self.is_reg = is_reg  # True: the r/m operand is a register; False: it is memory
+        self.n = n            # register number of the r/m operand (when is_reg)
+        self.seg = seg        # segment *value* of the memory operand (when not is_reg)
+        self.off = off        # offset of the memory operand (when not is_reg)
 
     # Read/write the r/m operand, whichever kind it is. 8-bit register numbers
     # follow CPU.get8/set8 (0-3 = AL..BL, 4-7 = AH..BH); 16-bit ones index CPU.r.
@@ -93,7 +97,8 @@ def decode(cpu, seg_override=None):
         off = cpu.fetch16()
         default_seg = regs.DS
     else:
-        off = sum(cpu.r[i] for i in _BASES[rm])
+        bases = _BASES[rm]
+        off = cpu.r[bases[0]] + cpu.r[bases[1]] if len(bases) == 2 else cpu.r[bases[0]]
         if mod == 1:  # 8-bit displacement, sign-extended
             d = cpu.fetch8()
             off += d - 256 if d & 0x80 else d

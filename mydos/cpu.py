@@ -18,6 +18,12 @@ class DivideError(Exception):
     """
 
 
+# for each byte: does it have an even number of bits set? That is what the parity flag says
+EVEN_PARITY = [bin(n).count("1") % 2 == 0 for n in range(256)]
+# the bytes that come before an opcode and change what it does, not instructions themselves
+PREFIXES = frozenset((Op.ES_PREFIX, Op.CS_PREFIX, Op.SS_PREFIX, Op.DS_PREFIX, Op.REP_PREFIX, Op.REPNE_PREFIX))
+
+
 def signed(value, bits):
     """Read `value` (an unsigned number of `bits` bits) as a two's complement signed number."""
     return value - (1 << bits) if value >> (bits - 1) else value
@@ -182,7 +188,7 @@ class CPU:
 
     def rb(self, seg, off):
         """Read one byte of memory at seg:off."""
-        address = self.addr(seg, off)
+        address = (seg * 16 + off) & 0xFFFFF  # what addr() works out, written out: this is the hottest place there is
         if self.video_start <= address < self.video_end:
             return self.video.read_memory(address - self.video_start)
         return self.mem[address]
@@ -193,7 +199,7 @@ class CPU:
 
     def wb(self, seg, off, val):
         """Write one byte to memory at seg:off. Bits above the low 8 of val are dropped."""
-        address = self.addr(seg, off)
+        address = (seg * 16 + off) & 0xFFFFF
         if self.video_start <= address < self.video_end:
             self.video.write_memory(address - self.video_start, val & 0xFF)
         else:
@@ -254,10 +260,14 @@ class CPU:
         x86 quirk: it only looks at the low byte, even for a 16-bit result.
         """
         result &= (1 << bits) - 1
-        self.set_flag(flags.ZF, result == 0)
-        self.set_flag(flags.SF, result >> (bits - 1))
-        # parity looks at the low byte only, even for 16-bit results
-        self.set_flag(flags.PF, bin(result & 0xFF).count("1") % 2 == 0)
+        new = self.flags & ~(flags.ZF | flags.SF | flags.PF)
+        if result == 0:
+            new |= flags.ZF
+        if result >> (bits - 1):
+            new |= flags.SF
+        if EVEN_PARITY[result & 0xFF]:  # parity looks at the low byte only, even for 16-bit results
+            new |= flags.PF
+        self.flags = new
 
     def set_logic_flags(self, result, bits):
         """Set the flags the way AND, OR, XOR and TEST do.
@@ -442,9 +452,12 @@ class CPU:
     # --- instruction fetch ---
     def fetch8(self):
         """Read the next byte of the program (at CS:IP) and move IP past it."""
-        v = self.rb(self.s[self.CS], self.ip)
-        self.ip = (self.ip + 1) & 0xFFFF
-        return v
+        ip = self.ip
+        address = (self.s[self.CS] * 16 + ip) & 0xFFFFF  # the same as rb(CS, IP), without its calls
+        self.ip = (ip + 1) & 0xFFFF
+        if self.video_start <= address < self.video_end:
+            return self.video.read_memory(address - self.video_start)
+        return self.mem[address]
 
     def fetch16(self):
         """Read the next little-endian word of the program and move IP past it."""
@@ -466,13 +479,11 @@ class CPU:
         self.seg_override = None  # set by a prefix, applies to this instruction only
         self.rep = None  # same for the repeat prefix
         op = self.fetch8()
-        while True:  # prefixes come before the opcode, in any order
+        while op in PREFIXES:  # prefixes come before the opcode, in any order; the last of a kind counts
             if op in self.SEG_PREFIXES:
                 self.seg_override = self.SEG_PREFIXES[op]
-            elif op in (Op.REP_PREFIX, Op.REPNE_PREFIX):
-                self.rep = op
             else:
-                break
+                self.rep = op
             op = self.fetch8()
         handler = self.ops.get(op)
         if handler is None:
