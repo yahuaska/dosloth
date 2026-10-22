@@ -8,6 +8,8 @@ that there is no memory at all.
 Only the fields programs are known to read are filled in; the rest stay 0.
 """
 
+PSP_SEG = 0x1000  # where the program is loaded: the PSP is at PSP_SEG:0000, the program right after it
+DTA_OFFSET = 0x80  # the last 128 bytes of the PSP, which hold the command line, are also the first DTA
 JFT_OFFSET = 0x18  # the table of file handles that starts at PSP:0018
 JFT_SIZE = 20  # how many handles a program may have open
 

@@ -7,6 +7,7 @@ from .config import default as default_config
 from .cpu import CPU, Exit
 from .filesystem import ACCESS_DENIED, ATTR_DIRECTORY, ATTR_READONLY, ATTR_VOLUME, PATH_NOT_FOUND, FsError
 from .handles import Console, HandleTable, NullDevice, OpenFile
+from .psp import DTA_OFFSET, PSP_SEG
 from .volumes import Volumes
 
 DOS_VERSION = (7, 1)  # (major, minor) reported by INT 21h AH=30h
@@ -54,6 +55,7 @@ class DosState:
         self.config = volumes.config  # the machine: its drives, and where a program starts (see config.py)
         self.handles = HandleTable()  # what the program's file handles stand for
         self.break_checking = False  # the Ctrl-Break flag of AH=33h; DOS starts with it off
+        self.dta = (PSP_SEG, DTA_OFFSET)  # where the disk transfer area is, as segment and offset: see AH=1Ah
 
 
 def boot_drive(config):
@@ -65,7 +67,7 @@ def boot_drive(config):
 def int21(cpu, state):
     """INT 21h: DOS services, selected by AH.
 
-    So far 09h, 0Eh, 19h, 25h, 2Ch, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 43h, 44h, 4Ah, 4Ch, 63h.
+    So far 09h, 0Eh, 19h, 1Ah, 25h, 2Ch, 2Fh, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 43h, 44h, 4Ah, 4Ch, 63h.
     """
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
@@ -93,6 +95,10 @@ def int21(cpu, state):
         n = cpu.get8(0)
         cpu.r[CPU.BX] = cpu.rw(0, n * 4)
         cpu.s[CPU.ES] = cpu.rw(0, n * 4 + 2)
+    elif ah == 0x1A:  # set the disk transfer area to DS:DX: where the results of a file search are put
+        state.dta = (cpu.s[CPU.DS], cpu.r[CPU.DX])
+    elif ah == 0x2F:  # get the disk transfer area into ES:BX
+        cpu.s[CPU.ES], cpu.r[CPU.BX] = state.dta
     elif ah == 0x2C:  # get the time: CH = hour, CL = minute, DH = second, DL = hundredths of a second
         moment = now()
         local = time.localtime(moment)

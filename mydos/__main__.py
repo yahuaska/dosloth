@@ -9,9 +9,9 @@ from .cpu import CPU
 from .display import PngFile
 from .window import TkWindow, WindowError
 from .filesystem import FsError
+from .psp import PSP_SEG
 from .volumes import Volumes
 
-PSP_SEG = 0x1000
 ENV_SEG = PSP_SEG - 0x10  # the environment block sits in the 256 bytes just below the PSP
 TICK_EVERY = 20_000  # the displays are looked after this often, in instructions: some 20 times a second
 

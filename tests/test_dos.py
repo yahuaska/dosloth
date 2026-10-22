@@ -1491,5 +1491,79 @@ class TestLeadByteTable(unittest.TestCase):
         self.assertEqual((self.cpu.r[CPU.SI], self.cpu.r[CPU.DI], self.cpu.s[CPU.DS]), (0, 0, 0))
 
 
+class TestDiskTransferArea(unittest.TestCase):
+    """INT 21h AH=1Ah (set the DTA to DS:DX) and AH=2Fh (get it into ES:BX)."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        self.state = dos.install(self.cpu)
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+
+    def call(self, ax, ds=0x2000, dx=0x1111, es=0x3000, bx=0x2222, cpu=None):
+        cpu = cpu or self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.DX], cpu.r[CPU.BX], cpu.r[CPU.CX] = ax, dx, bx, 0x4444
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x5555, 0x6666
+        cpu.s[CPU.DS], cpu.s[CPU.ES] = ds, es
+        cpu.ip = 0
+        cpu.step()
+
+    def get(self):
+        self.call(0x2F00)
+        return self.cpu.s[CPU.ES], self.cpu.r[CPU.BX]
+
+    def test_it_starts_at_the_end_of_the_psp_where_the_command_line_is(self):
+        self.assertEqual(self.get(), (0x1000, 0x0080))
+
+    def test_what_was_set_is_what_comes_back(self):
+        for segment, offset in ((0x2000, 0x1111), (0x0000, 0x0000), (0xFFFF, 0xFFFF), (0x1234, 0x0080),
+                                (0x8000, 0x0100)):
+            self.call(0x1A00, ds=segment, dx=offset)
+            self.assertEqual(self.get(), (segment, offset))
+
+    def test_a_second_set_takes_the_place_of_the_first(self):
+        self.call(0x1A00, ds=0x2000, dx=0x0100)
+        self.call(0x1A00, ds=0x3000, dx=0x0200)
+        self.assertEqual(self.get(), (0x3000, 0x0200))
+
+    def test_getting_it_does_not_change_it_or_the_registers_that_are_not_its_answer(self):
+        self.call(0x1A00, ds=0x2000, dx=0x0100)
+        self.get()
+        self.assertEqual(self.get(), (0x2000, 0x0100))
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.DX], cpu.r[CPU.CX], cpu.r[CPU.SI], cpu.r[CPU.DI]), (0x1111, 0x4444, 0x5555, 0x6666))
+        self.assertEqual(cpu.s[CPU.DS], 0x2000)  # DS is what the call put in it, not the DTA
+
+    def test_setting_it_changes_no_register_and_no_flag(self):
+        self.cpu.flags = 0x0FD7
+        self.call(0x1A00, ds=0x2000, dx=0x0100)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.r[CPU.SI], cpu.r[CPU.DI]),
+                         (0x1A00, 0x2222, 0x4444, 0x0100, 0x5555, 0x6666))
+        self.assertEqual((cpu.s[CPU.DS], cpu.s[CPU.ES], cpu.flags), (0x2000, 0x3000, 0x0FD7))
+
+    def test_getting_it_changes_no_flag(self):
+        self.cpu.flags = 0x0FD7
+        self.get()
+        self.assertEqual(self.cpu.flags, 0x0FD7)
+
+    def test_it_is_the_ds_of_the_call_that_counts_not_the_es(self):
+        self.call(0x1A00, ds=0x2000, dx=0x0100, es=0x7000)
+        self.assertEqual(self.get(), (0x2000, 0x0100))
+
+    def test_each_machine_has_its_own(self):
+        other = CPU()
+        dos.install(other)
+        other.s[CPU.CS] = 0x1000
+        other.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        self.call(0x1A00, ds=0x2000, dx=0x0100)
+        self.call(0x2F00, cpu=other)
+        self.assertEqual((other.s[CPU.ES], other.r[CPU.BX]), (0x1000, 0x0080))
+
+    def test_the_state_holds_it_as_a_pair(self):
+        self.call(0x1A00, ds=0x2000, dx=0x0100)
+        self.assertEqual(self.state.dta, (0x2000, 0x0100))
+
+
 if __name__ == "__main__":
     unittest.main()

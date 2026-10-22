@@ -12,6 +12,15 @@ def word(cpu, seg, off):
     return cpu.rw(seg, off)
 
 
+class TestPlaces(unittest.TestCase):
+    def test_the_default_disk_transfer_area_is_the_last_128_bytes_of_the_256_of_the_psp(self):
+        self.assertEqual(psp.DTA_OFFSET, 0x80)
+        self.assertEqual(psp.DTA_OFFSET + 128, 0x100)
+
+    def test_the_program_is_loaded_at_a_segment_with_room_for_the_environment_below_it(self):
+        self.assertEqual(psp.PSP_SEG, 0x1000)
+
+
 class TestBuild(unittest.TestCase):
     def build(self, dos_path="C:\\ESETUP.EXE"):
         cpu = CPU()
