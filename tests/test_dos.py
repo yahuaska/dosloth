@@ -7,7 +7,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from mydos import config, dos, flags
+from mydos import config, dos, flags, vga
 from mydos.cpu import CPU, Exit
 from mydos.handles import OpenFile
 from mydos.volumes import Volumes
@@ -1228,6 +1228,217 @@ class TestGetTime(unittest.TestCase):
         leap = time.struct_time((2016, 12, 31, 23, 59, 60, 5, 366, 0))  # some systems have a second 60
         with mock.patch("mydos.dos.time.localtime", return_value=leap):
             self.assertEqual(self.call()[:3], (23, 59, 59))
+
+
+class TestReadFile(FileFunctionsTest):
+    """INT 21h AH=3Fh: read from a file handle into memory at DS:DX; AX is how many bytes came."""
+
+    BUFFER = 0x0100  # where the bytes go; the segment is the one of DS, 2000h
+
+    def open(self, name, mode=0):
+        self.call(0x3D00 | mode, name)
+        self.assertIsNone(self.failed())
+        return self.cpu.r[CPU.AX]
+
+    def read(self, handle, count, offset=None):
+        """Read and give back (the error or None, how many bytes came)."""
+        self.call(0x3F00, bx=handle, cx=count, dx=self.BUFFER if offset is None else offset)
+        return self.failed(), self.cpu.r[CPU.AX]
+
+    def memory(self, offset, count):
+        return bytes(self.cpu.rb(0x2000, (offset + i) & 0xFFFF) for i in range(count))
+
+    def test_the_bytes_come_to_ds_dx_and_ax_says_how_many(self):
+        handle = self.open("NOTES.TXT")
+        self.cpu.set_flag(flags.CF, True)
+        self.assertEqual(self.read(handle, 10), (None, 10))
+        self.assertEqual(self.memory(self.BUFFER, 10), b"some notes")
+
+    def test_only_as_many_bytes_as_there_are_come_and_then_none_which_is_no_error(self):
+        handle = self.open("NOTES.TXT")
+        self.assertEqual(self.read(handle, 100), (None, 10))
+        self.assertEqual(self.read(handle, 100), (None, 0))
+        self.assertEqual(self.read(handle, 100), (None, 0))
+
+    def test_the_end_of_the_file_leaves_the_buffer_as_it_was(self):
+        handle = self.open("NOTES.TXT")
+        self.read(handle, 10)
+        self.cpu.mem[0x20100:0x20104] = b"keep"
+        self.read(handle, 4)
+        self.assertEqual(self.memory(self.BUFFER, 4), b"keep")
+
+    def test_each_read_goes_on_where_the_one_before_stopped(self):
+        handle = self.open("NOTES.TXT")
+        pieces = []
+        for count in (4, 4, 4, 4):
+            error, got = self.read(handle, count)
+            pieces.append(self.memory(self.BUFFER, got))
+        self.assertEqual(pieces, [b"some", b" not", b"es", b""])
+
+    def test_nothing_is_read_for_a_count_of_0_and_the_buffer_is_left_alone(self):
+        handle = self.open("NOTES.TXT")
+        self.cpu.mem[0x20100:0x20102] = b"ab"
+        self.assertEqual(self.read(handle, 0), (None, 0))
+        self.assertEqual(self.memory(self.BUFFER, 2), b"ab")
+        self.assertEqual(self.read(handle, 4), (None, 4))  # and the position did not move
+        self.assertEqual(self.memory(self.BUFFER, 4), b"some")
+
+    def test_the_bytes_before_and_after_the_buffer_are_not_touched(self):
+        handle = self.open("NOTES.TXT")
+        self.cpu.mem[0x200FF] = ord("[")
+        self.cpu.mem[0x20103] = ord(")")
+        self.read(handle, 3)
+        self.assertEqual(self.memory(0x00FF, 5), b"[som)")  # the three bytes are between the two that were there
+
+    def test_the_buffer_may_run_over_the_end_of_the_segment(self):
+        handle = self.open("NOTES.TXT")
+        self.assertEqual(self.read(handle, 4, offset=0xFFFE), (None, 4))
+        self.assertEqual(self.memory(0xFFFE, 2), b"so")
+        self.assertEqual(self.memory(0x0000, 2), b"me")
+
+    def test_a_file_made_by_3ch_and_written_is_read_back_after_going_to_its_start(self):
+        self.call(0x3C00, "D:\\F")
+        handle = self.cpu.r[CPU.AX]
+        self.call(0x4000, "hello", bx=handle, cx=5)
+        self.assertEqual(self.read(handle, 5), (None, 0))  # the position is at the end
+        self.state.handles.get(handle).file.seek(0)
+        self.assertEqual(self.read(handle, 5), (None, 5))
+        self.assertEqual(self.memory(self.BUFFER, 5), b"hello")
+
+    def test_a_file_on_the_memory_disk(self):
+        self.call(0x3C00, "D:\\F")
+        handle = self.cpu.r[CPU.AX]
+        self.call(0x4000, "abcdef", bx=handle, cx=6)
+        self.call(0x3E00, bx=handle)
+        handle = self.open("D:\\F")
+        self.assertEqual(self.read(handle, 4), (None, 4))
+        self.assertEqual(self.memory(self.BUFFER, 4), b"abcd")
+
+    def test_a_long_file_comes_in_pieces_and_a_count_of_65535_is_possible(self):
+        data = bytes(i * 7 & 0xFF for i in range(70000))
+        self.call(0x3C00, "D:\\BIG")
+        handle = self.cpu.r[CPU.AX]
+        self.state.handles.get(handle).file.write(data)
+        self.state.handles.get(handle).file.seek(0)
+        self.assertEqual(self.read(handle, 0xFFFF, offset=0), (None, 0xFFFF))
+        self.assertEqual(self.memory(0, 0xFFFF), data[:0xFFFF])
+        self.assertEqual(self.read(handle, 0xFFFF, offset=0), (None, 70000 - 0xFFFF))
+        self.assertEqual(self.memory(0, 70000 - 0xFFFF), data[0xFFFF:])
+
+    def test_two_handles_of_one_file_have_a_position_each(self):
+        first, second = self.open("NOTES.TXT"), self.open("NOTES.TXT")
+        self.read(first, 4)
+        self.assertEqual(self.read(second, 10), (None, 10))
+        self.assertEqual(self.memory(self.BUFFER, 10), b"some notes")
+
+    def test_reading_does_not_change_the_file(self):
+        handle = self.open("NOTES.TXT", 2)
+        self.read(handle, 10)
+        self.call(0x3E00, bx=handle)
+        self.assertEqual((self.base / "NOTES.TXT").read_bytes(), b"some notes")
+
+    def test_a_file_opened_for_reading_and_writing_can_be_read(self):
+        self.assertEqual(self.read(self.open("NOTES.TXT", 2), 4), (None, 4))
+
+    def test_a_file_opened_to_be_written_only_cannot_be_read(self):
+        handle = self.open("NOTES.TXT", 1)
+        self.cpu.mem[0x20100:0x20104] = b"keep"
+        self.assertEqual(self.read(handle, 4), (5, 5))
+        self.assertEqual(self.memory(self.BUFFER, 4), b"keep")
+
+    def test_the_handles_that_are_not_open_are_error_6(self):
+        handle = self.open("NOTES.TXT")
+        self.call(0x3E00, bx=handle)
+        for number in (handle, 6, 19, 20, 100, 0xFFFF):
+            self.assertEqual(self.read(number, 4), (6, 6), number)
+
+    def test_the_keyboard_and_the_devices_are_not_done_yet(self):
+        for number in (0, 1, 2, 3, 4):
+            with self.assertRaises(NotImplementedError, msg=number):
+                self.read(number, 4)
+
+    def test_the_other_registers_are_left_alone_and_the_flags_too(self):
+        handle = self.open("NOTES.TXT")
+        self.cpu.set_flag(flags.ZF, True)
+        self.call(0x3F00, bx=handle, cx=4, dx=self.BUFFER)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (handle, 4, self.BUFFER))
+        self.assertTrue(cpu.get_flag(flags.ZF))
+
+    def test_the_bytes_go_through_the_video_window_when_the_buffer_is_in_it(self):
+        vga.install(self.cpu)
+        handle = self.open("NOTES.TXT")
+        self.cpu.s[CPU.DS] = 0xA000
+        self.call(0x3F00, bx=handle, cx=4, dx=0x0010)
+        self.assertEqual(self.cpu.r[CPU.AX], 4)
+        for plane in self.cpu.video.planes:  # the registers as they start: every plane takes the byte
+            self.assertEqual(bytes(plane[0x10:0x14]), b"some")
+        self.assertEqual(self.cpu.mem[0xA0010:0xA0014], bytes(4))  # and the plain memory behind is not used
+
+    def test_a_file_that_cannot_be_read_is_an_access_error_and_leaves_the_buffer_alone(self):
+        class Broken:
+            def read(self, count):
+                raise OSError(5, "input/output error")
+
+            def close(self):
+                pass
+
+        handle = self.state.handles.allocate(OpenFile(Broken(), "C:\\BROKEN"))
+        self.cpu.mem[0x20100:0x20104] = b"keep"
+        self.cpu.set_flag(flags.CF, False)
+        self.assertEqual(self.read(handle, 4), (5, 5))
+        self.assertEqual(self.memory(self.BUFFER, 4), b"keep")
+
+    def test_an_error_leaves_the_position_alone(self):
+        handle = self.open("NOTES.TXT", 1)
+        self.read(handle, 4)
+        self.state.handles.get(handle).file.seek(2)
+        self.read(handle, 4)
+        self.assertEqual(self.state.handles.get(handle).file.tell(), 2)
+
+
+class TestOpenModesAndWriting(FileFunctionsTest):
+    """What the way a file was opened lets a program do with it."""
+
+    def open(self, name, mode):
+        self.call(0x3D00 | mode, name)
+        return self.cpu.r[CPU.AX]
+
+    def test_the_handle_remembers_what_it_may_do(self):
+        for mode, readable, writable in ((0, True, False), (1, False, True), (2, True, True)):
+            entry = self.state.handles.get(self.open("NOTES.TXT", mode))
+            self.assertEqual((entry.readable, entry.writable), (readable, writable), mode)
+
+    def test_a_file_that_was_made_may_be_read_and_written(self):
+        self.call(0x3C00, "NEW.TXT")
+        entry = self.state.handles.get(self.cpu.r[CPU.AX])
+        self.assertEqual((entry.readable, entry.writable), (True, True))
+
+    def test_a_file_opened_to_be_read_only_refuses_a_write_and_stays_as_it_was(self):
+        handle = self.open("NOTES.TXT", 0)
+        self.call(0x4000, "XXXX", bx=handle, cx=4)
+        self.assertEqual(self.failed(), 5)
+        self.call(0x4000, "XXXX", bx=handle, cx=0)  # even a count of 0, which would cut the file off
+        self.assertEqual(self.failed(), 5)
+        self.call(0x3E00, bx=handle)
+        self.assertEqual((self.base / "NOTES.TXT").read_bytes(), b"some notes")
+
+    def test_the_handle_decides_not_the_file_object(self):
+        # a file object that would take the write, on a handle that was not opened to write
+        file = self.volumes.filesystems[3].create(["F"])
+        handle = self.state.handles.allocate(OpenFile(file, "D:\\F", readable=True, writable=False))
+        self.call(0x4000, "data", bx=handle, cx=4)
+        self.assertEqual(self.failed(), 5)
+        self.assertEqual(self.volumes.filesystems[3].stat(["F"]).size, 0)  # nothing went in
+        self.call(0x4000, "data", bx=handle, cx=0)
+        self.assertEqual(self.failed(), 5)
+
+    def test_a_file_opened_to_be_written_may_be_written(self):
+        handle = self.open("NOTES.TXT", 1)
+        self.call(0x4000, "XXXX", bx=handle, cx=4)
+        self.assertIsNone(self.failed())
+        self.call(0x3E00, bx=handle)
+        self.assertEqual((self.base / "NOTES.TXT").read_bytes(), b"XXXX notes")
 
 
 if __name__ == "__main__":

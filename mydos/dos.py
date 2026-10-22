@@ -15,6 +15,7 @@ CONSOLE_INFO = 0x80D3  # IOCTL answer for the console: a character device, stand
 DEVICE_INFO = 0x80C0  # the IOCTL answer for the auxiliary and printer devices: a character device, nothing special
 TOO_MANY_OPEN_FILES = 4
 INVALID_ACCESS_CODE = 0x0C
+INVALID_HANDLE = 6
 MSCDEX_MAGIC = 0xADAD  # what MSCDEX puts in BX to say that it is there
 MSCDEX_VERSION = 0x020A  # MSCDEX 2.10, the one of Windows 95
 MAX_PATH = 260  # how long a path from a program may be, with its ending zero
@@ -63,7 +64,7 @@ def boot_drive(config):
 def int21(cpu, state):
     """INT 21h: DOS services, selected by AH.
 
-    So far 09h, 0Eh, 19h, 25h, 2Ch, 30h, 35h, 33h, 3Ch, 3Dh, 3Eh, 40h, 43h, 44h, 4Ah, 4Ch.
+    So far 09h, 0Eh, 19h, 25h, 2Ch, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 43h, 44h, 4Ah, 4Ch.
     """
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
@@ -142,8 +143,10 @@ def int21(cpu, state):
             where = state.volumes.resolve(read_path(cpu))
             if not state.handles.has_free():
                 raise FsError(TOO_MANY_OPEN_FILES, "all the handles are in use")
-            file = where.filesystem.open(where.parts, write=bool(cpu.get8(0) & 0x07))
-            cpu.r[CPU.AX] = state.handles.allocate(OpenFile(file, where.dos_path()))
+            access = cpu.get8(0) & 0x07
+            file = where.filesystem.open(where.parts, write=bool(access))
+            cpu.r[CPU.AX] = state.handles.allocate(
+                OpenFile(file, where.dos_path(), readable=access != 1, writable=access != 0))
             cpu.set_flag(flags.CF, False)
         except FsError as error:
             fail(cpu, error)
@@ -153,12 +156,39 @@ def int21(cpu, state):
         else:  # error 06: invalid handle: never opened, or already closed
             cpu.set_flag(flags.CF, True)
             cpu.r[CPU.AX] = 6
+    elif ah == 0x3F:  # read CX bytes from the file handle in BX to DS:DX; AX = how many were read
+        handle, count = cpu.r[CPU.BX], cpu.r[CPU.CX]
+        entry = state.handles.get(handle)
+        if entry is None:
+            cpu.set_flag(flags.CF, True)
+            cpu.r[CPU.AX] = INVALID_HANDLE
+        elif not isinstance(entry, OpenFile):  # the keyboard and the devices: not yet
+            raise NotImplementedError(f"INT 21h AH=3F on the handle {handle}: {type(entry).__name__}")
+        elif not entry.readable:  # the file was opened to be written only
+            cpu.set_flag(flags.CF, True)
+            cpu.r[CPU.AX] = ACCESS_DENIED
+        else:
+            # Fewer bytes than asked for are normal: the end of the file. At the end it is 0, and that is no error.
+            # The file goes on from where the last read left it.
+            try:
+                data = entry.file.read(count)
+            except OSError:
+                cpu.set_flag(flags.CF, True)
+                cpu.r[CPU.AX] = ACCESS_DENIED
+            else:
+                for i, byte in enumerate(data):
+                    cpu.wb(cpu.s[CPU.DS], (cpu.r[CPU.DX] + i) & 0xFFFF, byte)
+                cpu.r[CPU.AX] = len(data)
+                cpu.set_flag(flags.CF, False)
     elif ah == 0x40:  # write CX bytes from DS:DX to the file handle in BX; AX = how many were written
         handle, count = cpu.r[CPU.BX], cpu.r[CPU.CX]
         entry = state.handles.get(handle)
         if entry is None:  # error 06: invalid handle: not open
             cpu.set_flag(flags.CF, True)
             cpu.r[CPU.AX] = 6
+        elif isinstance(entry, OpenFile) and not entry.writable:  # the file was opened to be read only
+            cpu.set_flag(flags.CF, True)
+            cpu.r[CPU.AX] = ACCESS_DENIED
         elif isinstance(entry, OpenFile):
             # A file takes the bytes at its current position. CX = 0 is not an empty write: it cuts the file
             # off at that position.

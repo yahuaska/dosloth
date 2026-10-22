@@ -25,9 +25,12 @@ class NullDevice:
 @dataclass(frozen=True)
 class OpenFile:
     """A file opened or created by the program. `file` is the file object of the file system; `dos_path` is
-    the full name, for messages."""
+    the full name, for messages. `readable` and `writable` are what the program asked for when it opened the file:
+    a file opened to be read only is not to be written, and the other way round."""
     file: object
     dos_path: str
+    readable: bool = True
+    writable: bool = True
 
 
 class HandleTable:
