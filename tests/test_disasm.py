@@ -172,7 +172,8 @@ class TestAgreesWithCpu(unittest.TestCase):
                     pass
                 length, text = disasm(machine(code), 0x1000, 0x100)
                 self.assertFalse(text.startswith("db"), text)
-                self.assertEqual(length, len(fetched), text)
+                # step() reads the opcode itself, and the rest of the instruction through fetch8
+                self.assertEqual(length, len(fetched) + 1, text)
 
 
 if __name__ == "__main__":

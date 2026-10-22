@@ -103,6 +103,42 @@ class TestDecode(unittest.TestCase):
         self.assertEqual((cpu.r, cpu.s, cpu.flags), before)
 
 
+class TestEveryByte(unittest.TestCase):
+    """All 256 values of the ModRM byte, each with every kind of thing that can follow it, against the plain rules."""
+
+    def expected(self, cpu, byte, following, override):
+        """(reg, is_reg, n, seg, off, how many bytes are read), worked out from the rules of the 8086 one by one."""
+        mod, reg, rm = byte >> 6, byte >> 3 & 7, byte & 7
+        if mod == 3:
+            return reg, True, rm, 0, 0, 1
+        r = {name: cpu.r[number] for name, number in (("bx", CPU.BX), ("si", CPU.SI), ("di", CPU.DI), ("bp", CPU.BP))}
+        if mod == 0 and rm == 6:
+            return reg, False, 0, SEGMENTS["DS" if override is None else override], following[0] | following[1] << 8, 3
+        name, offset, segment = WAYS[rm]
+        total = offset(r)
+        if mod == 1:
+            total += following[0] - 256 if following[0] & 0x80 else following[0]
+            used = 2
+        elif mod == 2:
+            total += following[0] | following[1] << 8
+            used = 3
+        else:
+            used = 1
+        return reg, False, 0, SEGMENTS[segment if override is None else override], total & 0xFFFF, used
+
+    def test_every_byte_with_displacements_of_both_signs_and_every_prefix(self):
+        for byte in range(256):
+            for following in ((0x00, 0x00), (0x7F, 0x01), (0x80, 0x80), (0xFF, 0xFF), (0x34, 0x12)):
+                for override, number in ((None, None), ("ES", CPU.ES), ("CS", CPU.CS), ("SS", CPU.SS), ("DS", CPU.DS)):
+                    cpu = machine(bytes([byte]) + bytes(following))
+                    cpu.r[CPU.BX], cpu.r[CPU.SI], cpu.r[CPU.DI], cpu.r[CPU.BP] = 0xF123, 0x8765, 0x0FED, 0xCBA9
+                    reg, is_reg, n, seg, off, used = self.expected(cpu, byte, following, override)
+                    got = modrm.decode(cpu, number)
+                    self.assertEqual((got.reg, got.is_reg, got.n, got.seg, got.off), (reg, is_reg, n, seg, off),
+                                     (hex(byte), following, override))
+                    self.assertEqual(cpu.ip, used, (hex(byte), following))
+
+
 class TestTheDecodedOperand(unittest.TestCase):
     def memory(self, seg=0x2000, off=0x0100):
         return ModRM(reg=2, is_reg=False, seg=seg, off=off)
@@ -144,6 +180,39 @@ class TestTheDecodedOperand(unittest.TestCase):
         self.assertEqual((operand.read(cpu, 16), operand.read(cpu, 8)), (0xABCD, 0xCD))
         operand.write(cpu, 8, 0x01)
         self.assertEqual(operand.read(cpu, 16), 0xAB01)
+
+    def test_all_the_registers_by_width_for_reading_and_writing(self):
+        # the 8-bit registers are AL CL DL BL (the low halves of AX CX DX BX), then AH CH DH BH (the high halves)
+        base = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888]
+        cpu = machine(b"")
+        for number in range(8):
+            operand = ModRM(0, True, n=number)
+            cpu.r[:] = base
+            self.assertEqual(operand.read(cpu, 16), base[number])
+            self.assertEqual(operand.read(cpu, 8), base[number & 3] >> (8 if number >= 4 else 0) & 0xFF, number)
+            operand.write(cpu, 16, 0xABCD)
+            expected = list(base)
+            expected[number] = 0xABCD
+            self.assertEqual(cpu.r, expected, number)  # that register and no other
+
+    def test_a_byte_written_to_a_register_leaves_the_other_half_of_it(self):
+        cpu = machine(b"")
+        for number, register, shift in ((0, CPU.AX, 0), (1, CPU.CX, 0), (2, CPU.DX, 0), (3, CPU.BX, 0),
+                                        (4, CPU.AX, 8), (5, CPU.CX, 8), (6, CPU.DX, 8), (7, CPU.BX, 8)):
+            cpu.r[register] = 0x1234
+            ModRM(0, True, n=number).write(cpu, 8, 0xFFAB)  # more than 8 bits: only the low 8 count
+            kept = 0x1234 & (0xFF00 if shift == 0 else 0x00FF)
+            self.assertEqual(cpu.r[register], kept | 0xAB << shift, number)
+
+    def test_a_word_written_is_cut_to_16_bits_in_a_register_and_in_memory(self):
+        cpu = machine(b"")
+        ModRM(0, True, n=3).write(cpu, 16, 0x1ABCD)
+        self.assertEqual(cpu.r[CPU.BX], 0xABCD)
+        memory = ModRM(0, False, seg=0x2000, off=0x0200)
+        memory.write(cpu, 16, 0x1BEEF)
+        self.assertEqual(memory.read(cpu, 16), 0xBEEF)
+        memory.write(cpu, 8, 0x1CC)
+        self.assertEqual((memory.read(cpu, 8), memory.read(cpu, 16)), (0xCC, 0xBECC))
 
     def test_the_two_words_of_a_far_pointer(self):
         cpu = machine(b"")

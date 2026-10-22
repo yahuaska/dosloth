@@ -24,6 +24,30 @@ EVEN_PARITY = [bin(n).count("1") % 2 == 0 for n in range(256)]
 PREFIXES = frozenset((Op.ES_PREFIX, Op.CS_PREFIX, Op.SS_PREFIX, Op.DS_PREFIX, Op.REP_PREFIX, Op.REPNE_PREFIX))
 
 
+# the flags that the conditions of the conditional jumps look at, and for each combination of them the 16 answers
+CONDITION_FLAGS = flags.CF | flags.PF | flags.ZF | flags.SF | flags.OF
+CONDITION_ROWS = {}
+
+
+def condition_holds(flags_value, cc):
+    """Tell whether condition number cc (0-15, the low 4 bits of a 70-7F opcode) holds for these flags.
+
+    The conditions come in pairs that are each other's opposite: an even number tests something
+    and the odd number after it tests that it is not so. The tested things are:
+        0 overflow (OF)            4 negative result (SF)
+        1 below, unsigned (CF)     5 even parity (PF)
+        2 equal (ZF)               6 less, signed (SF differs from OF)
+        3 below or equal, unsigned 7 less or equal, signed
+          (CF or ZF)                 (ZF, or SF differs from OF)
+    """
+    cf = bool(flags_value & flags.CF)
+    zf = bool(flags_value & flags.ZF)
+    sf = bool(flags_value & flags.SF)
+    of = bool(flags_value & flags.OF)
+    holds = (of, cf, zf, cf or zf, sf, bool(flags_value & flags.PF), sf != of, zf or sf != of)[cc >> 1]
+    return holds != bool(cc & 1)  # odd numbers are the opposite condition
+
+
 def signed(value, bits):
     """Read `value` (an unsigned number of `bits` bits) as a two's complement signed number."""
     return value - (1 << bits) if value >> (bits - 1) else value
@@ -269,6 +293,27 @@ class CPU:
             new |= flags.PF
         self.flags = new
 
+    def set_arithmetic_flags(self, cf, of, af, result, bits):
+        """Set the six flags that ADD, SUB and their kin set: CF, OF and AF as given, ZF, SF and PF from the result.
+
+        It is set_flag three times and set_szp, in one go: they are called for most of the instructions there are.
+        """
+        new = self.flags & ~(flags.CF | flags.OF | flags.AF | flags.ZF | flags.SF | flags.PF)
+        if cf:
+            new |= flags.CF
+        if of:
+            new |= flags.OF
+        if af:
+            new |= flags.AF
+        result &= (1 << bits) - 1
+        if result == 0:
+            new |= flags.ZF
+        if result >> (bits - 1):
+            new |= flags.SF
+        if EVEN_PARITY[result & 0xFF]:
+            new |= flags.PF
+        self.flags = new
+
     def set_logic_flags(self, result, bits):
         """Set the flags the way AND, OR, XOR and TEST do.
 
@@ -313,29 +358,21 @@ class CPU:
         b &= mask
         result = (a + b + carry) & mask
         sign = 1 << (bits - 1)
-        self.set_flag(flags.CF, a + b + carry > mask)
-        self.set_flag(flags.OF, bool(~(a ^ b) & (a ^ result) & sign))
-        self.set_flag(flags.AF, bool((a ^ b ^ result) & 0x10))
-        self.set_szp(result, bits)
+        self.set_arithmetic_flags(a + b + carry > mask, bool(~(a ^ b) & (a ^ result) & sign),
+                                  bool((a ^ b ^ result) & 0x10), result, bits)
         return result
 
     def condition(self, cc):
-        """Tell whether condition number cc (0-15, the low 4 bits of a 70-7F opcode) holds.
+        """Tell whether condition number cc (0-15, the low 4 bits of a 70-7F opcode) holds, see condition_holds.
 
-        The conditions come in pairs that are each other's opposite: an even number tests something
-        and the odd number after it tests that it is not so. The tested things are:
-            0 overflow (OF)            4 negative result (SF)
-            1 below, unsigned (CF)     5 even parity (PF)
-            2 equal (ZF)               6 less, signed (SF differs from OF)
-            3 below or equal, unsigned 7 less or equal, signed
-              (CF or ZF)                 (ZF, or SF differs from OF)
+        There are only 32 combinations of the five flags that the conditions look at, so the answers for each
+        one are worked out the first time it comes and kept.
         """
-        cf = self.get_flag(flags.CF)
-        zf = self.get_flag(flags.ZF)
-        sf = self.get_flag(flags.SF)
-        of = self.get_flag(flags.OF)
-        holds = (of, cf, zf, cf or zf, sf, self.get_flag(flags.PF), sf != of, zf or sf != of)[cc >> 1]
-        return holds != bool(cc & 1)  # odd numbers are the opposite condition
+        key = self.flags & CONDITION_FLAGS
+        row = CONDITION_ROWS.get(key)
+        if row is None:
+            row = CONDITION_ROWS[key] = tuple(condition_holds(key, n) for n in range(16))
+        return row[cc]
 
     def shift_with_flags(self, kind, value, count, bits):
         """Shift or rotate `value` by `count` bits and set the flags. Returns the new value.
@@ -360,7 +397,7 @@ class CPU:
             return value
         mask = (1 << bits) - 1
         top = 1 << (bits - 1)
-        cf = self.get_flag(flags.CF)
+        cf = bool(self.flags & flags.CF)
         of = False
         for _ in range(count):
             if kind in (4, 6):  # SHL
@@ -393,8 +430,12 @@ class CPU:
                 value = (value >> 1) | (top if cf else 0)
                 cf = out
                 of = bool(value & top) != bool(value & (top >> 1))
-        self.set_flag(flags.CF, cf)
-        self.set_flag(flags.OF, of)
+        new = self.flags & ~(flags.CF | flags.OF)
+        if cf:
+            new |= flags.CF
+        if of:
+            new |= flags.OF
+        self.flags = new
         if kind in (4, 5, 6, 7):
             self.set_szp(value, bits)
         return value
@@ -411,10 +452,8 @@ class CPU:
         b &= mask
         result = (a - b - borrow) & mask
         sign = 1 << (bits - 1)
-        self.set_flag(flags.CF, a < b + borrow)
-        self.set_flag(flags.OF, bool((a ^ b) & (a ^ result) & sign))
-        self.set_flag(flags.AF, bool((a ^ b ^ result) & 0x10))
-        self.set_szp(result, bits)
+        self.set_arithmetic_flags(a < b + borrow, bool((a ^ b) & (a ^ result) & sign),
+                                  bool((a ^ b ^ result) & 0x10), result, bits)
         return result
 
     # --- I/O ports ---
@@ -475,10 +514,15 @@ class CPU:
         self.instructions += 1
         if self.trace:
             self.trace(self)
-        self.start_ip = self.ip  # where this instruction began (for error messages)
         self.seg_override = None  # set by a prefix, applies to this instruction only
         self.rep = None  # same for the repeat prefix
-        op = self.fetch8()
+        ip = self.start_ip = self.ip  # where this instruction began (for error messages)
+        address = (self.s[self.CS] * 16 + ip) & 0xFFFFF  # the first byte is read here, as fetch8 does, with no call
+        self.ip = (ip + 1) & 0xFFFF
+        if self.video_start <= address < self.video_end:
+            op = self.video.read_memory(address - self.video_start)
+        else:
+            op = self.mem[address]
         while op in PREFIXES:  # prefixes come before the opcode, in any order; the last of a kind counts
             if op in self.SEG_PREFIXES:
                 self.seg_override = self.SEG_PREFIXES[op]

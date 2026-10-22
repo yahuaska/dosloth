@@ -72,13 +72,46 @@ class ModRM:
 
     # The same, with the width (8 or 16) as an argument, for code that handles both sizes alike.
     def read(self, cpu, bits):
-        return self.read16(cpu) if bits == 16 else self.read8(cpu)
+        if self.is_reg:
+            return cpu.r[self.n] if bits == 16 else cpu.get8(self.n)
+        return cpu.rw(self.seg, self.off) if bits == 16 else cpu.rb(self.seg, self.off)
 
     def write(self, cpu, bits, val):
-        if bits == 16:
-            self.write16(cpu, val)
+        if self.is_reg:
+            if bits == 16:
+                cpu.r[self.n] = val & 0xFFFF
+            else:
+                cpu.set8(self.n, val)
+        elif bits == 16:
+            cpu.ww(self.seg, self.off, val)
         else:
-            self.write8(cpu, val)
+            cpu.wb(self.seg, self.off, val)
+
+
+# What follows the ModRM byte, and how the operand is made of it.
+REGISTER, NO_DISPLACEMENT, DISPLACEMENT_8, DISPLACEMENT_16, DIRECT = range(5)
+
+
+def _make_table():
+    """For each of the 256 values a ModRM byte can have: (the reg field, what follows, the first register of the
+    address (or the register of the operand), the second register or -1, the segment that goes with it)."""
+    table = []
+    for b in range(256):
+        mod, reg, rm = b >> 6, (b >> 3) & 7, b & 7
+        if mod == 3:  # r/m is a register, no memory involved
+            table.append((reg, REGISTER, rm, -1, regs.DS))
+        elif mod == 0 and rm == 6:  # special case: direct address [disp16], in the data segment
+            table.append((reg, DIRECT, -1, -1, regs.DS))
+        else:
+            bases = _BASES[rm]
+            kind = (NO_DISPLACEMENT, DISPLACEMENT_8, DISPLACEMENT_16)[mod]
+            # Addresses based on BP default to the stack segment, all others to DS.
+            table.append((reg, kind, bases[0], bases[1] if len(bases) == 2 else -1,
+                          regs.SS if regs.BP in bases else regs.DS))
+    return table
+
+
+_TABLE = _make_table()
 
 
 def decode(cpu, seg_override=None):
@@ -87,25 +120,18 @@ def decode(cpu, seg_override=None):
     seg_override is a segment register index (regs.ES/CS/SS/DS) from a prefix such as
     2E, or None to use the default segment.
     """
-    b = cpu.fetch8()
-    mod, reg, rm = b >> 6, (b >> 3) & 7, b & 7
-
-    if mod == 3:  # r/m is a register, no memory involved
-        return ModRM(reg=reg, is_reg=True, n=rm)
-
-    if mod == 0 and rm == 6:  # special case: direct address [disp16]
+    reg, kind, first, second, default_seg = _TABLE[cpu.fetch8()]
+    if kind == REGISTER:
+        return ModRM(reg, True, first)
+    if kind == DIRECT:
         off = cpu.fetch16()
-        default_seg = regs.DS
     else:
-        bases = _BASES[rm]
-        off = cpu.r[bases[0]] + cpu.r[bases[1]] if len(bases) == 2 else cpu.r[bases[0]]
-        if mod == 1:  # 8-bit displacement, sign-extended
+        off = cpu.r[first]
+        if second >= 0:
+            off += cpu.r[second]
+        if kind == DISPLACEMENT_8:  # sign-extended
             d = cpu.fetch8()
             off += d - 256 if d & 0x80 else d
-        elif mod == 2:  # 16-bit displacement
+        elif kind == DISPLACEMENT_16:
             off += cpu.fetch16()
-        # Addresses based on BP default to the stack segment, all others to DS.
-        default_seg = regs.SS if regs.BP in _BASES[rm] else regs.DS
-
-    seg = cpu.s[default_seg if seg_override is None else seg_override]
-    return ModRM(reg=reg, is_reg=False, seg=seg, off=off & 0xFFFF)
+    return ModRM(reg, False, 0, cpu.s[default_seg if seg_override is None else seg_override], off & 0xFFFF)
