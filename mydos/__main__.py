@@ -141,7 +141,7 @@ def main():
         host_path = str(where.filesystem.host_path(where.parts))
 
     cpu = CPU()
-    keyboard = bios.install(cpu)
+    keyboard = bios.install(cpu, machine)
     dos.install(cpu, volumes)
     timer.install(cpu)
     card = vga.install(cpu)

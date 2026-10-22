@@ -1,6 +1,8 @@
+import tomllib
 import unittest
+from pathlib import Path
 
-from mydos import bios, flags, vga
+from mydos import bios, config, flags, vga
 from mydos.cpu import CPU
 
 
@@ -462,6 +464,113 @@ class TestPaletteFunctions(unittest.TestCase):
         cpu.r[CPU.AX] = 0x1012
         with self.assertRaises(NotImplementedError):
             cpu.step()
+
+
+def machine_with_floppies(count):
+    """A configuration with this many floppy drives, a hard disk, a CD-ROM drive and a memory disk to go with them."""
+    drives = "".join(f"[disks.{'ABCD'[n]}]\ntype = 'floppy'\n" for n in range(count))
+    text = drives + "[disks.E]\ntype = 'hdd'\n[disks.F]\ntype = 'cdrom'\n[mounts]\nE = { type = 'tmpfs' }\n"
+    return config.parse(tomllib.loads(text), Path("."))
+
+
+class TestEquipmentAndMemory(unittest.TestCase):
+    """INT 11h: the equipment list. INT 12h: the memory size in KB."""
+
+    def machine(self, configuration=None):
+        cpu = CPU()
+        bios.install(cpu, configuration)
+        cpu.s[CPU.CS] = 0x1000
+        return cpu
+
+    def call(self, cpu, number, ax=0x7777):
+        cpu.mem[0x10000:0x10002] = bytes([0xCD, number])
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = ax, 0x1111, 0x2222, 0x3333
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x4444, 0x5555
+        cpu.ip = 0
+        cpu.step()
+        return cpu.r[CPU.AX]
+
+    def test_the_word_for_each_number_of_floppy_drives(self):
+        for count, word in ((0, 0x0020), (1, 0x0021), (2, 0x0061), (3, 0x00A1), (4, 0x00E1)):
+            self.assertEqual(bios.equipment_word(machine_with_floppies(count)), word, count)
+
+    def test_more_than_4_drives_is_still_4_and_other_drives_are_not_floppies(self):
+        text = "".join(f"[disks.{letter}]\ntype = 'floppy'\n" for letter in "ABCDEF")
+        text += "[disks.G]\ntype = 'cdrom'\n[mounts]\nA = { type = 'tmpfs' }\n"
+        self.assertEqual(bios.equipment_word(config.parse(tomllib.loads(text), Path("."))), 0x00E1)
+        only_others = "[disks.C]\ntype = 'hdd'\n[disks.D]\ntype = 'cdrom'\n[mounts]\nC = { type = 'tmpfs' }\n"
+        self.assertEqual(bios.equipment_word(config.parse(tomllib.loads(only_others), Path("."))), 0x0020)
+
+    def test_without_a_configuration_the_machine_has_two_floppy_drives(self):
+        self.assertEqual(bios.equipment_word(), 0x0061)
+        self.assertEqual(bios.equipment_word(None), 0x0061)
+
+    def test_the_built_in_machine_has_the_default_word(self):
+        self.assertEqual(bios.equipment_word(config.default(Path("."))), 0x0061)
+
+    def test_what_the_word_says_of_the_things_we_do_not_have(self):
+        for count in range(5):
+            word = bios.equipment_word(machine_with_floppies(count))
+            self.assertEqual(word >> 4 & 3, 0b10, "a color display of 80 by 25")
+            self.assertEqual(word & 0x0002, 0, "no coprocessor")
+            self.assertEqual(word & 0x0100, 0, "DMA is there")
+            self.assertEqual(word >> 9 & 7, 0, "no serial ports")
+            self.assertEqual(word & 0x1000, 0, "no game port")
+            self.assertEqual(word >> 14, 0, "no printers")
+            self.assertEqual(word & 0x000C, 0)
+
+    def test_int_11h_gives_the_word_in_ax_whatever_ax_was(self):
+        for ax in (0x0000, 0x7777, 0xFFFF):
+            self.assertEqual(self.call(self.machine(), 0x11, ax=ax), 0x0061)
+
+    def test_int_11h_tells_of_the_configuration_it_was_installed_with(self):
+        for count, word in ((0, 0x0020), (1, 0x0021), (3, 0x00A1)):
+            self.assertEqual(self.call(self.machine(machine_with_floppies(count)), 0x11), word)
+
+    def test_the_word_is_in_the_data_area_of_the_bios_and_that_is_where_int_11h_reads_it(self):
+        cpu = self.machine(machine_with_floppies(1))
+        self.assertEqual(cpu.rw(0x40, 0x10), 0x0021)
+        cpu.ww(0x40, 0x10, 0x1234)
+        self.assertEqual(self.call(cpu, 0x11), 0x1234)
+
+    def test_int_11h_changes_no_other_register_and_no_flag(self):
+        cpu = self.machine()
+        cpu.flags = 0x0FD7
+        self.call(cpu, 0x11)
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.r[CPU.SI], cpu.r[CPU.DI]),
+                         (0x1111, 0x2222, 0x3333, 0x4444, 0x5555))
+        self.assertEqual((cpu.flags, cpu.s[CPU.CS], cpu.ip), (0x0FD7, 0x1000, 2))
+
+    def test_int_12h_gives_640_kb(self):
+        for ax in (0x0000, 0x7777):
+            self.assertEqual(self.call(self.machine(), 0x12, ax=ax), 640)
+
+    def test_the_memory_size_is_in_the_data_area_too_and_that_is_where_int_12h_reads_it(self):
+        cpu = self.machine()
+        self.assertEqual(cpu.rw(0x40, 0x13), 640)
+        cpu.ww(0x40, 0x13, 512)
+        self.assertEqual(self.call(cpu, 0x12), 512)
+
+    def test_the_640_kb_are_the_memory_dos_gives_to_programs(self):
+        from mydos import dos
+        self.assertEqual(bios.CONVENTIONAL_MEMORY_KB * 1024 // 16, dos.MEMORY_TOP_SEG)
+
+    def test_int_12h_changes_no_other_register_and_no_flag(self):
+        cpu = self.machine()
+        cpu.flags = 0x0FD7
+        self.call(cpu, 0x12)
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.r[CPU.SI], cpu.r[CPU.DI]),
+                         (0x1111, 0x2222, 0x3333, 0x4444, 0x5555))
+        self.assertEqual(cpu.flags, 0x0FD7)
+
+    def test_the_words_are_stored_low_byte_first_where_the_bios_keeps_them(self):
+        cpu = self.machine(machine_with_floppies(2))
+        self.assertEqual((cpu.mem[0x410], cpu.mem[0x411]), (0x61, 0x00))
+        self.assertEqual((cpu.mem[0x413], cpu.mem[0x414]), (0x80, 0x02))
+
+    def test_each_machine_has_its_own(self):
+        one, other = self.machine(machine_with_floppies(1)), self.machine(machine_with_floppies(3))
+        self.assertEqual((self.call(one, 0x11), self.call(other, 0x11)), (0x0021, 0x00A1))
 
 
 if __name__ == "__main__":

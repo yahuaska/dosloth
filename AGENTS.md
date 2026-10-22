@@ -14,7 +14,7 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/cpu.py`  - memory, registers, flags, instruction loop
 - `mydos/dos.py`  - INT 21h and friends (Python-side handlers)
 - `mydos/bios.py` - BIOS interrupts (INT 1Ah time of day, INT 16h keyboard, INT 10h video: modes 03h/12h, the
-  colors AH=10h, the VGA check so far), also Python-side handlers
+  colors AH=10h, the VGA check; INT 11h equipment, INT 12h memory size), also Python-side handlers
 - `mydos/config.py` - the configuration (TOML): drives, what is mounted in them, where a program starts;
   `config.example.toml` shows the format. `python -m mydos -c FILE program` uses it; without `-c` the machine is
   built in: floppies A: B:, a CD-ROM D: with no disc, the current directory as the hard disk C:. A drive is a

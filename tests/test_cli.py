@@ -314,5 +314,34 @@ class TestTheDumpOfACrashOnACdRom(CommandLineTest):
         self.assertEqual(sorted(os.listdir(self.disc)), ["T.COM"])
 
 
+# int 11h ; mov ah,4Ch ; int 21h     the exit code is the low byte of the equipment list
+EQUIPMENT = bytes([0xCD, 0x11, 0xB4, 0x4C, 0xCD, 0x21])
+# int 12h ; mov ah,4Ch ; int 21h     the exit code is the low byte of the memory size in KB
+MEMORY_SIZE = bytes([0xCD, 0x12, 0xB4, 0x4C, 0xCD, 0x21])
+
+
+class TestTheEquipmentOfTheMachine(CommandLineTest):
+    def test_the_built_in_machine_has_two_floppy_drives(self):
+        self.program(EQUIPMENT)
+        result = self.run_emulator("t.com")
+        self.assertEqual((result.returncode, result.stderr), (0x61, ""))
+
+    def test_the_floppy_drives_of_the_config_are_what_int_11h_counts(self):
+        config = self.config("[disks.A]\ntype = 'floppy'\n[disks.C]\ntype = 'hdd'\n[mounts]\n"
+                             "C = { type = 'dir', path = '.' }\n")
+        self.program(EQUIPMENT)
+        result = self.run_emulator("-c", config, "t.com")
+        self.assertEqual((result.returncode, result.stderr), (0x21, ""))
+
+    def test_a_machine_with_no_floppy_drive(self):
+        config = self.config("[disks.C]\ntype = 'hdd'\n[mounts]\nC = { type = 'dir', path = '.' }\n")
+        self.program(EQUIPMENT)
+        self.assertEqual(self.run_emulator("-c", config, "t.com").returncode, 0x20)
+
+    def test_int_12h_gives_640_kb(self):
+        self.program(MEMORY_SIZE)
+        self.assertEqual(self.run_emulator("t.com").returncode, 640 & 0xFF)  # 0x80
+
+
 if __name__ == "__main__":
     unittest.main()

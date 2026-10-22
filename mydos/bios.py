@@ -11,9 +11,12 @@ from .cpu import CPU
 
 TICKS_PER_DAY = 0x1800B0  # the BIOS timer ticks 18.2065 times a second: 1,573,040 ticks make a day
 # where the BIOS keeps the state of the video, in its data area at 0040:0000
+BDA_EQUIPMENT = 0x410  # a word: the equipment list that INT 11h gives
+BDA_MEMORY_KB = 0x413  # a word: how many KB of memory there are below 640 KB, which INT 12h gives
 BDA_VIDEO_MODE = 0x449  # a byte
 BDA_COLUMNS = 0x44A  # a word: the characters in a line
 BDA_PAGE = 0x462  # a byte: the page of the screen that is shown
+CONVENTIONAL_MEMORY_KB = 640  # the memory of a PC that DOS gives to programs: up to the video memory at A0000h
 TEXT_MODE = 0x03  # 80 by 25 characters in 16 colors: what DOS is in before a program starts
 GRAPHICS_MODE = 0x12  # 640 by 480 pixels in 16 colors
 TEXT_BUFFER = 0xB8000  # where the characters of the text modes are, a pair of bytes each: the character, its color
@@ -103,6 +106,31 @@ def palette_function(cpu, al):
         raise NotImplementedError(f"INT 10h AH=10 AL={al:02X}")
 
 
+def equipment_word(config=None):
+    """The equipment list that INT 11h gives, for the machine of this configuration (2 floppies without one).
+
+    Bit 0 says there are floppy drives and bits 6-7 how many, less 1 (the most it can tell is 4). Bits 4-5 are 10:
+    a color display of 80 by 25 characters. The rest is 0: no coprocessor, no serial or parallel ports, no game port,
+    and DMA is there (bit 8 clear), as it is in any PC. We emulate none of those, so a program must not think it
+    has them.
+    """
+    floppies = 2 if config is None else sum(1 for disk in config.disks.values() if disk.type == "floppy")
+    word = 0x20
+    if floppies:
+        word |= 0x01 | (min(floppies, 4) - 1) << 6
+    return word
+
+
+def int11(cpu):
+    """INT 11h: the equipment list into AX, read from the data area of the BIOS, where it was put at the start."""
+    cpu.r[CPU.AX] = cpu.rw(0x40, BDA_EQUIPMENT - 0x400)
+
+
+def int12(cpu):
+    """INT 12h: how many KB of memory there are (below 640 KB) into AX, read from the data area of the BIOS."""
+    cpu.r[CPU.AX] = cpu.rw(0x40, BDA_MEMORY_KB - 0x400)
+
+
 def int10(cpu):
     """INT 10h: the BIOS video services, selected by AH. So far 00h (modes 03h and 12h only), 0Fh, 10h (the colors,
     but not their page or gray sums) and 1Ah AL=00h."""
@@ -167,14 +195,19 @@ def int16(cpu, keyboard):
         raise NotImplementedError(f"INT 16h AH={ah:02X}")
 
 
-def install(cpu):
-    """Hook the BIOS interrupt handlers into the CPU. Returns the keyboard, for whoever wants to press keys on it."""
+def install(cpu, config=None):
+    """Hook the BIOS interrupt handlers into the CPU, for the machine of the configuration `config` (see config.py:
+    what it has is what INT 11h tells). Returns the keyboard, for whoever wants to press keys on it."""
     keyboard = Keyboard()
     cpu.keyboard = keyboard  # for DOS, which reads keys from the same buffer as the BIOS
+    cpu.mem[BDA_EQUIPMENT:BDA_EQUIPMENT + 2] = equipment_word(config).to_bytes(2, "little")
+    cpu.mem[BDA_MEMORY_KB:BDA_MEMORY_KB + 2] = CONVENTIONAL_MEMORY_KB.to_bytes(2, "little")
     cpu.mem[BDA_VIDEO_MODE] = TEXT_MODE  # the machine starts in text mode, as it is at the DOS prompt
     cpu.mem[BDA_COLUMNS:BDA_COLUMNS + 2] = (80).to_bytes(2, "little")
     cpu.mem[BDA_PAGE] = 0
     cpu.int_handlers[0x10] = int10
+    cpu.int_handlers[0x11] = int11
+    cpu.int_handlers[0x12] = int12
     cpu.int_handlers[0x1A] = int1a
     cpu.int_handlers[0x16] = lambda cpu: int16(cpu, keyboard)
     return keyboard
