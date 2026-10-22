@@ -15,6 +15,7 @@ CONSOLE_INFO = 0x80D3  # IOCTL answer for the console: a character device, stand
 DEVICE_INFO = 0x80C0  # the IOCTL answer for the auxiliary and printer devices: a character device, nothing special
 TOO_MANY_OPEN_FILES = 4
 INVALID_ACCESS_CODE = 0x0C
+INVALID_FUNCTION = 1
 INVALID_HANDLE = 6
 MSCDEX_MAGIC = 0xADAD  # what MSCDEX puts in BX to say that it is there
 MSCDEX_VERSION = 0x020A  # MSCDEX 2.10, the one of Windows 95
@@ -64,7 +65,7 @@ def boot_drive(config):
 def int21(cpu, state):
     """INT 21h: DOS services, selected by AH.
 
-    So far 09h, 0Eh, 19h, 25h, 2Ch, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 43h, 44h, 4Ah, 4Ch.
+    So far 09h, 0Eh, 19h, 25h, 2Ch, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 43h, 44h, 4Ah, 4Ch, 63h.
     """
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
@@ -252,6 +253,14 @@ def int21(cpu, state):
                 cpu.r[CPU.AX] = 0x0F
         else:
             raise NotImplementedError(f"INT 21h AH=44 AL={al:02X}")
+    elif ah == 0x63:  # the table of lead bytes of two-byte characters, for the Chinese, Japanese and Korean pages
+        al = cpu.get8(0)
+        if al != 0x00:
+            raise NotImplementedError(f"INT 21h AH=63 AL={al:02X}")
+        # AL=0 asks for a pointer to the table in DS:SI. Ours is the western machine, whose characters all take one
+        # byte, so there is no table: error 01 (no such function) is the answer a program takes as "none".
+        cpu.set_flag(flags.CF, True)
+        cpu.r[CPU.AX] = INVALID_FUNCTION
     elif ah == 0x4A:  # resize the memory block that starts at segment ES to BX paragraphs
         # Naive: we keep no list of blocks, only the top of memory. A block can grow or shrink as
         # long as it ends below that top. (DOS error 09, "not a block", cannot be told apart yet.)

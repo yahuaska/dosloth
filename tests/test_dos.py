@@ -1441,5 +1441,55 @@ class TestOpenModesAndWriting(FileFunctionsTest):
         self.assertEqual((self.base / "NOTES.TXT").read_bytes(), b"XXXX notes")
 
 
+class TestLeadByteTable(unittest.TestCase):
+    """INT 21h AH=63h AL=00h: the table of lead bytes of two-byte characters. This machine has none."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        dos.install(self.cpu)
+        self.cpu.s[CPU.CS], self.cpu.s[CPU.DS], self.cpu.s[CPU.ES] = 0x1000, 0x2000, 0x3000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+
+    def call(self, ax=0x6300):
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = ax, 0x1111, 0x2222, 0x3333
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x4444, 0x5555
+        cpu.ip = 0
+        cpu.step()
+
+    def test_the_answer_is_that_there_is_no_such_function_with_the_carry_flag_set(self):
+        self.cpu.set_flag(flags.CF, False)
+        self.call()
+        self.assertTrue(self.cpu.get_flag(flags.CF))
+        self.assertEqual(self.cpu.r[CPU.AX], 1)
+
+    def test_the_other_registers_and_flags_stay_and_so_does_the_pointer_the_caller_would_have_got(self):
+        self.cpu.set_flag(flags.ZF, True)
+        self.cpu.set_flag(flags.SF, False)
+        self.call()
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.r[CPU.SI], cpu.r[CPU.DI]),
+                         (0x1111, 0x2222, 0x3333, 0x4444, 0x5555))
+        self.assertEqual((cpu.s[CPU.DS], cpu.s[CPU.ES]), (0x2000, 0x3000))
+        self.assertTrue(cpu.get_flag(flags.ZF))
+        self.assertFalse(cpu.get_flag(flags.SF))
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 2))
+
+    def test_the_old_ah_al_do_not_matter_but_only_al_0_is_done(self):
+        self.call(0x6300)
+        for al in (0x01, 0x02, 0x03, 0x80, 0xFF):
+            with self.assertRaises(NotImplementedError, msg=hex(al)):
+                self.call(0x6300 | al)
+
+    def test_the_idiom_of_the_game_ends_with_a_null_pointer_and_so_no_table(self):
+        # mov ax,6300h ; int 21h ; jae +6 ; xor si,si ; xor ax,ax ; mov ds,ax ; (there) mov di,ds
+        code = bytes([0xB8, 0x00, 0x63, 0xCD, 0x21, 0x73, 0x06, 0x31, 0xF6, 0x31, 0xC0, 0x8E, 0xD8, 0x8C, 0xDF])
+        self.cpu.mem[0x10000:0x10000 + len(code)] = code
+        self.cpu.ip = 0
+        for _ in range(7):  # mov, int, jae (not taken), xor, xor, mov ds, mov di
+            self.cpu.step()
+        self.assertEqual((self.cpu.r[CPU.SI], self.cpu.r[CPU.DI], self.cpu.s[CPU.DS]), (0, 0, 0))
+
+
 if __name__ == "__main__":
     unittest.main()
