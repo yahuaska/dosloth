@@ -63,6 +63,22 @@ def take_key(cpu, state):
     return word & 0xFF
 
 
+def wait_for_key(cpu, state):
+    """The next character, waiting for it if there is none yet: what the keyboard functions that wait are made of.
+
+    Waiting is done by the keyboard's waiter (see bios.Keyboard): there is one only when something can press keys,
+    a window. Without one, waiting would be for ever, and the emulator stops instead.
+    """
+    while True:
+        key = take_key(cpu, state)
+        if key is not None:
+            return key
+        keyboard = cpu.keyboard
+        if keyboard is None or keyboard.waiter is None:
+            raise NotImplementedError("INT 21h: the program waits for a key, and no key can be pressed")
+        keyboard.waiter()
+
+
 def put_record(cpu, state, number, entry):
     """Write what a search found into the DTA, for a program to read."""
     segment, offset = state.dta
@@ -111,7 +127,7 @@ class DosState:
         self.break_checking = False  # the Ctrl-Break flag of AH=33h; DOS starts with it off
         self.dta = (PSP_SEG, DTA_OFFSET)  # where the disk transfer area is, as segment and offset: see AH=1Ah
         self.searches = Searches()  # the file searches that AH=4Eh began and AH=4Fh goes on with
-        self.pending_scan = None  # the scan code of a key with no character, to be given by the next AH=06h read
+        self.pending_scan = None  # the scan code of a key with no character, to be given by the next read of a key
 
 
 def boot_drive(config):
@@ -123,7 +139,7 @@ def boot_drive(config):
 def int21(cpu, state):
     """INT 21h: DOS services, selected by AH.
 
-    So far 06h, 09h, 0Eh, 19h, 1Ah, 25h, 2Ch, 2Fh, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 43h, 44h, 4Ah, 4Ch, 4Eh,
+    So far 06h, 08h, 09h, 0Eh, 19h, 1Ah, 25h, 2Ch, 2Fh, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 43h, 44h, 4Ah, 4Ch, 4Eh,
     4Fh, 63h.
     """
     ah = cpu.get8(4)
@@ -145,6 +161,10 @@ def int21(cpu, state):
             key = take_key(cpu, state)
             cpu.set_flag(flags.ZF, key is None)
             cpu.set8(0, 0 if key is None else key)
+    elif ah == 0x08:  # wait for a key and take it, without showing it: AL = the character
+        # Ctrl-C is not looked for (the real call would run the Ctrl-C handler, INT 23h): it is a character like any.
+        # A key with no character comes as 0 now and its scan code at the next call, as with AH=06h.
+        cpu.set8(0, wait_for_key(cpu, state))
     elif ah == 0x0E:  # make drive DL the current one (0 is A:, 1 is B:, ...); AL = how many drives there are
         drive = cpu.get8(2)  # 8-bit register 2 is DL
         if drive in state.config.disks:  # a drive that does not exist is not an error: the call just does nothing

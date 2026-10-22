@@ -1970,5 +1970,124 @@ class TestDirectConsole(unittest.TestCase):
         self.assertTrue(self.cpu.get_flag(flags.ZF))
 
 
+class TestConsoleInputWithoutEcho(unittest.TestCase):
+    """INT 21h AH=08h: wait for a key and take it, without showing it."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        self.keyboard = bios.install(self.cpu)
+        self.state = dos.install(self.cpu)
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+
+    def call(self, cpu=None, al=0x77):
+        cpu = cpu or self.cpu
+        cpu.r[CPU.AX] = 0x0800 | al
+        cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = 0x1111, 0x2222, 0x3333
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x4444, 0x5555
+        cpu.ip = 0
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            cpu.step()
+        return cpu.get8(0), out.getvalue() + err.getvalue()
+
+    def test_the_key_that_is_there_is_taken_and_not_shown(self):
+        self.keyboard.press(0x1E, 0x61)
+        self.assertEqual(self.call(), (0x61, ""))
+        self.assertEqual(len(self.keyboard.buffer), 0)
+
+    def test_the_keys_come_in_the_order_they_were_pressed(self):
+        for scan, ascii_code in ((0x1E, 0x61), (0x30, 0x62), (0x1C, 0x0D)):
+            self.keyboard.press(scan, ascii_code)
+        self.assertEqual([self.call()[0] for _ in range(3)], [0x61, 0x62, 0x0D])
+
+    def test_ctrl_c_is_a_character_like_any_other_for_now(self):
+        self.keyboard.press(0x2E, 0x03)
+        self.assertEqual(self.call()[0], 0x03)
+
+    def test_with_no_key_and_nothing_that_could_press_one_the_emulator_stops(self):
+        with self.assertRaises(NotImplementedError):
+            self.call()
+
+    def test_a_machine_with_no_bios_cannot_wait_either(self):
+        cpu = CPU()
+        dos.install(cpu)
+        cpu.s[CPU.CS] = 0x1000
+        cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        with self.assertRaises(NotImplementedError):
+            self.call(cpu=cpu)
+
+    def test_it_waits_through_the_waiter_when_there_is_one_and_takes_the_key_that_came(self):
+        calls = []
+
+        def waiter():
+            calls.append(len(self.keyboard.buffer))
+            self.keyboard.press(0x1C, 0x0D)
+
+        self.keyboard.waiter = waiter
+        self.assertEqual(self.call(), (0x0D, ""))
+        self.assertEqual(calls, [0])
+        self.assertEqual(len(self.keyboard.buffer), 0)
+
+    def test_it_does_not_wait_when_a_key_is_already_there(self):
+        self.keyboard.waiter = lambda: self.fail("it should not wait")
+        self.keyboard.press(0x1E, 0x61)
+        self.assertEqual(self.call()[0], 0x61)
+
+    def test_a_waiter_that_comes_back_with_no_key_is_called_again(self):
+        calls = []
+
+        def waiter():
+            calls.append(1)
+            if len(calls) == 3:
+                self.keyboard.press(0x1E, 0x7A)
+
+        self.keyboard.waiter = waiter
+        self.assertEqual(self.call()[0], 0x7A)
+        self.assertEqual(len(calls), 3)
+
+    def test_a_key_with_no_character_comes_as_0_and_then_its_scan_code_with_no_waiting_for_the_second(self):
+        calls = []
+        self.keyboard.waiter = lambda: calls.append(1) or self.keyboard.press(0x48, 0x00)  # the up arrow
+        self.assertEqual(self.call()[0], 0x00)
+        self.assertEqual(self.call()[0], 0x48)
+        self.assertEqual(len(calls), 1)  # the second half was there already
+
+    def test_the_second_half_of_a_key_may_be_taken_by_the_other_keyboard_function_of_dos(self):
+        self.keyboard.press(0x3B, 0x00)  # F1
+        self.assertEqual(self.call()[0], 0x00)
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.DX] = 0x0600, 0x00FF  # AH=06h, DL=FFh: is there a key?
+        cpu.ip = 0
+        cpu.step()
+        self.assertEqual((cpu.get_flag(flags.ZF), cpu.get8(0)), (False, 0x3B))
+
+    def test_no_register_is_changed_but_al_and_no_flag(self):
+        self.keyboard.press(0x1E, 0x61)
+        self.cpu.flags = 0x0FD7
+        self.call()
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.r[CPU.SI], cpu.r[CPU.DI]),
+                         (0x1111, 0x2222, 0x3333, 0x4444, 0x5555))
+        self.assertEqual((cpu.get8(4), cpu.flags), (0x08, 0x0FD7))
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 2))
+
+    def test_the_old_al_does_not_matter(self):
+        for al in (0x00, 0x77, 0xFF):
+            self.keyboard.press(0x1E, 0x61)
+            self.assertEqual(self.call(al=al)[0], 0x61)
+
+    def test_each_machine_has_its_own_keys_and_its_own_half_read_key(self):
+        self.keyboard.press(0x48, 0x00)
+        self.call()  # the scan code is waiting in this machine
+        other = CPU()
+        other_keyboard = bios.install(other)
+        dos.install(other)
+        other.s[CPU.CS] = 0x1000
+        other.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        other_keyboard.press(0x1E, 0x61)
+        self.assertEqual(self.call(cpu=other)[0], 0x61)
+
+
 if __name__ == "__main__":
     unittest.main()
