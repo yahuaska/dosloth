@@ -6,6 +6,7 @@ from pathlib import Path
 
 from mydos import config
 from mydos.config import ConfigError
+from tests.iso_builder import build
 
 REPOSITORY = Path(__file__).resolve().parent.parent
 
@@ -235,6 +236,40 @@ class TestTheDisks(ConfigTest):
         self.assertRejects("[disks.D]\ntype = 'cdrom'\n[mounts]\nD = {type = 'tmpfs'}", "mounts.D", "CD-ROM")
         c = self.parse("[disks.D]\ntype = 'cdrom'\n[mounts]\nD = {type = 'dir', path = 'games', readonly = true}")
         self.assertTrue(c.disks[3].mount.readonly)
+
+    def test_a_disc_image_in_a_cdrom_is_an_iso_mount_with_the_path_of_the_file(self):
+        (self.base / "disc.iso").write_bytes(build({"A.TXT": b"x"}))
+        c = self.parse("[disks.D]\ntype = 'cdrom'\n[mounts]\nD = {type = 'iso', path = 'disc.iso'}")
+        mount = c.disks[3].mount
+        self.assertEqual((mount.type, mount.path, mount.readonly), ("iso", self.base / "disc.iso", True))
+
+    def test_an_image_can_be_said_to_be_read_only_but_not_writable(self):
+        (self.base / "disc.iso").write_bytes(build({}))
+        self.parse("[disks.D]\ntype = 'cdrom'\n[mounts]\nD = {type = 'iso', path = 'disc.iso', readonly = true}")
+        self.assertRejects("[disks.D]\ntype = 'cdrom'\n[mounts]\n"
+                           "D = {type = 'iso', path = 'disc.iso', readonly = false}", "mounts.D", "CD-ROM", "written")
+
+    def test_an_image_is_for_a_cdrom_drive_only(self):
+        (self.base / "disc.iso").write_bytes(build({}))
+        for kind in ("floppy", "hdd"):
+            self.assertRejects(f"[disks.D]\ntype = '{kind}'\n[mounts]\nD = {{type = 'iso', path = 'disc.iso'}}",
+                               "mounts.D", "CD-ROM drive")
+
+    def test_an_image_needs_a_path_that_is_a_file(self):
+        (self.base / "disc.iso").write_bytes(build({}))
+        self.assertRejects("[disks.D]\ntype = 'cdrom'\n[mounts]\nD = {type = 'iso'}", "mounts.D", "path")
+        self.assertRejects("[disks.D]\ntype = 'cdrom'\n[mounts]\nD = {type = 'iso', path = 'games'}",
+                           "mounts.D.path", "not a file")
+        self.assertRejects("[disks.D]\ntype = 'cdrom'\n[mounts]\nD = {type = 'iso', path = 'missing.iso'}",
+                           "mounts.D.path", "not a file")
+
+    def test_a_file_that_is_not_an_image_is_said_when_the_config_is_read(self):
+        (self.base / "junk.iso").write_bytes(b"junk" * 20000)
+        self.assertRejects("[disks.D]\ntype = 'cdrom'\n[mounts]\nD = {type = 'iso', path = 'junk.iso'}",
+                           "mounts.D.path", "volume descriptor")
+
+    def test_a_tmpfs_in_a_cdrom_is_still_refused_and_the_message_names_the_image_too(self):
+        self.assertRejects("[disks.D]\ntype = 'cdrom'\n[mounts]\nD = {type = 'tmpfs'}", "image")
 
     def test_a_disk_is_a_table_with_known_keys(self):
         self.assertRejects("[disks]\nA = 5", "disks.A", "table")

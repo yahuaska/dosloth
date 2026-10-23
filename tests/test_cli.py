@@ -348,6 +348,46 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestADiscImage(CommandLineTest):
+    """A disc image in a CD-ROM drive: the program is on the disc, and reads its sectors."""
+
+    def setUp(self):
+        super().setUp()
+        from tests.iso_builder import build
+        self.image = self.dir / "game.iso"
+        self.image.write_bytes(build({"T.COM": CURRENT_DRIVE, "GAMES": {"G.COM": DRIVE_COUNT}}))
+        self.config("cwd = 'D:\\'\n[disks.C]\ntype = 'hdd'\n[disks.D]\ntype = 'cdrom'\n[mounts]\n"
+                    "C = { type = 'tmpfs' }\nD = { type = 'iso', path = 'game.iso' }\n")
+
+    def test_a_program_that_is_on_the_disc_runs_from_it(self):
+        result = self.run_emulator("-c", self.dir / "machine.toml", "T.COM")
+        self.assertEqual((result.returncode, result.stderr), (3, ""))  # the current drive is D:
+        result = self.run_emulator("-c", self.dir / "machine.toml", "games\\g.com")
+        self.assertEqual((result.returncode, result.stderr), (4, ""))
+
+    def test_a_program_that_is_not_on_the_disc_is_not_found(self):
+        result = self.run_emulator("-c", self.dir / "machine.toml", "NOTHING.COM")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("cannot run NOTHING.COM", result.stderr)
+
+    def test_a_file_that_is_not_an_image_is_said_before_anything_runs(self):
+        (self.dir / "game.iso").write_bytes(b"junk" * 20000)
+        result = self.run_emulator("-c", self.dir / "machine.toml", "T.COM")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("mounts.D.path", result.stderr)
+        self.assertIn("volume descriptor", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_a_crash_of_a_program_from_the_disc_leaves_its_dump_in_the_current_directory(self):
+        from tests.iso_builder import build
+        (self.dir / "game.iso").write_bytes(build({"T.COM": CRASH}))
+        here = self.dir / "here"
+        here.mkdir()
+        result = self.run_emulator("-c", self.dir / "machine.toml", "T.COM", cwd=here)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(sorted(os.listdir(here)), ["T.COM.crash.json", "T.COM.crash.mem", "T.COM.crash.state"])
+
+
 class TestGoingOnFromAState(CommandLineTest):
     """The state of the machine, saved by F12 or by a crash, is what a run can go on from (-r)."""
 

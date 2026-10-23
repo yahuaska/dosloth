@@ -36,6 +36,7 @@ PATH_NOT_FOUND = 3
 ACCESS_DENIED = 5
 INVALID_DRIVE = 15
 DRIVE_NOT_READY = 21
+SECTOR_NOT_FOUND = 27
 
 # the bits of a DOS file's attributes
 ATTR_READONLY = 0x01
@@ -498,7 +499,10 @@ class MemFs:
 
 
 def for_mount(mount):
-    """The file system of a config.Mount: a HostDir for a directory, a fresh MemFs for a tmpfs."""
+    """The file system of a config.Mount: a HostDir for a directory, an IsoFs for a disc image, a MemFs for a tmpfs."""
     if mount.type == "dir":
         return HostDir(mount.path, mount.readonly)
+    if mount.type == "iso":
+        from .iso import IsoFs, IsoImage  # here, because iso.py needs this file
+        return IsoFs(IsoImage(mount.path))
     return MemFs(mount.readonly)

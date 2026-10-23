@@ -9,6 +9,7 @@ from pathlib import Path
 
 from mydos import bios, config, dos, flags, vga
 from mydos.cpu import CPU, Exit
+from mydos.filesystem import SECTOR_NOT_FOUND
 from mydos.handles import OpenFile
 from mydos.volumes import Volumes
 
@@ -2265,6 +2266,142 @@ class TestSeek(FileFunctionsTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReadSectorsOfTheDisc(unittest.TestCase):
+    """INT 2Fh AX=1508h: sectors of the CD-ROM in CX, DX of them from the number in SI:DI, to ES:BX."""
+
+    SYSTEM = bytes(range(256)) * 8 * 4  # the first four sectors: something that is not zeros
+
+    def setUp(self):
+        from tests.iso_builder import build
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name).resolve()
+        self.image = build({"A.TXT": b"abc"}, system_area=self.SYSTEM)
+        (self.base / "disc.iso").write_bytes(self.image)
+        (self.base / "files").mkdir()
+        self.machine(f"""
+            [disks.C]
+            type = 'hdd'
+            [disks.D]
+            type = 'cdrom'
+            [disks.E]
+            type = 'cdrom'
+            [disks.F]
+            type = 'cdrom'
+            [mounts]
+            C = {{ type = 'tmpfs' }}
+            D = {{ type = 'iso', path = 'disc.iso' }}
+            E = {{ type = 'dir', path = 'files' }}
+        """)
+
+    def machine(self, text):
+        self.cpu = CPU()
+        dos.install(self.cpu, Volumes(config.parse(tomllib.loads(text), self.base)))
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x2F])
+
+    def read(self, drive=3, count=1, first=0, buffer=0x0100, fill=0xAA, size=3 * 2048 + 64):
+        cpu = self.cpu
+        for i in range(size):
+            cpu.wb(0x3000, (buffer + i) & 0xFFFF, fill)
+        cpu.r[CPU.AX], cpu.r[CPU.CX], cpu.r[CPU.DX] = 0x1508, drive, count
+        cpu.r[CPU.BX], cpu.r[CPU.SI], cpu.r[CPU.DI] = buffer, first >> 16, first & 0xFFFF
+        cpu.s[CPU.ES] = 0x3000
+        cpu.ip = 0
+        cpu.step()
+        return bytes(cpu.rb(0x3000, (buffer + i) & 0xFFFF) for i in range(size))
+
+    def failed(self):
+        return self.cpu.r[CPU.AX] if self.cpu.get_flag(flags.CF) else None
+
+    def test_sectors_are_put_where_es_bx_says_and_nothing_after_them(self):
+        got = self.read(count=2, first=1)
+        self.assertIsNone(self.failed())
+        self.assertEqual(got[:4096], self.image[2048:6144])
+        self.assertEqual(got[4096:], bytes([0xAA]) * (len(got) - 4096))
+
+    def test_the_first_sector_is_the_one_in_si_di_with_si_the_high_word(self):
+        self.assertEqual(self.read(first=16)[:6], b"\x01CD001")  # the primary volume descriptor
+        self.assertIsNone(self.failed())
+        self.read(first=0x10000 | 16)  # SI = 1: 65552, far beyond a disc of 26 sectors
+        self.assertEqual(self.failed(), SECTOR_NOT_FOUND)
+
+    def test_the_system_area_is_read_as_the_disc_has_it(self):
+        got = self.read(count=3, first=0)
+        self.assertEqual(got[:3 * 2048], self.SYSTEM[:3 * 2048])
+
+    def test_fifteen_sectors_from_the_start_as_the_installer_asks(self):
+        got = self.read(count=15, first=0, size=15 * 2048)
+        self.assertIsNone(self.failed())
+        self.assertEqual(got, self.image[:15 * 2048])
+
+    def test_the_other_registers_stay_and_the_carry_is_clear(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.read(count=1, first=2)
+        cpu = self.cpu
+        self.assertFalse(cpu.get_flag(flags.CF))
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.r[CPU.BX]), (0x1508, 3, 1, 0x0100))
+        self.assertEqual((cpu.r[CPU.SI], cpu.r[CPU.DI], cpu.s[CPU.ES]), (0, 2, 0x3000))
+
+    def test_no_sectors_is_all_right_and_writes_nothing(self):
+        got = self.read(count=0)
+        self.assertIsNone(self.failed())
+        self.assertEqual(set(got), {0xAA})
+
+    def test_the_last_sector_of_the_disc_is_there_and_the_next_one_is_not(self):
+        last = len(self.image) // 2048 - 1
+        self.assertEqual(self.read(first=last)[:2048], self.image[-2048:])
+        self.assertIsNone(self.failed())
+        self.read(first=last + 1)
+        self.assertEqual(self.failed(), SECTOR_NOT_FOUND)
+        self.read(first=last, count=2)
+        self.assertEqual(self.failed(), SECTOR_NOT_FOUND)
+
+    def test_a_failed_read_writes_nothing(self):
+        got = self.read(first=len(self.image) // 2048 - 1, count=2)
+        self.assertEqual(set(got), {0xAA})
+
+    def test_the_buffer_may_go_round_the_end_of_the_segment(self):
+        got = self.read(count=1, first=16, buffer=0xFFF0, size=2048)
+        self.assertEqual(got, self.image[16 * 2048:17 * 2048])
+        self.assertEqual(self.cpu.rb(0x3000, 0), self.image[16 * 2048 + 16])
+
+    def test_a_drive_that_is_not_a_cd_rom_is_error_15(self):
+        for drive in (2, 4 + 3, 0):  # the hard disk C:, a drive that is not there, a drive A: that is not there
+            self.read(drive=drive)
+            self.assertEqual(self.failed(), 15, drive)
+
+    def test_a_cd_rom_drive_with_no_disc_in_it_is_not_ready(self):
+        self.read(drive=5)
+        self.assertEqual(self.failed(), 21)
+
+    def test_a_cd_rom_that_is_a_directory_has_no_sectors_and_says_so(self):
+        with self.assertRaisesRegex(NotImplementedError, r"1508h.*directory.*type = \"iso\""):
+            self.read(drive=4)
+
+    def test_without_any_cd_rom_drive_the_call_is_not_known(self):
+        self.machine("[disks.C]\ntype = 'hdd'\n[mounts]\nC = { type = 'tmpfs' }\n")
+        with self.assertRaisesRegex(NotImplementedError, "AX=1508"):
+            self.read()
+
+    def test_the_files_of_the_same_disc_are_there_as_files(self):
+        cpu = self.cpu
+        cpu.s[CPU.CS] = 0x1000
+        cpu.mem[0x10010:0x10012] = bytes([0xCD, 0x21])
+        for i, byte in enumerate(b"D:\\A.TXT\0"):
+            cpu.wb(0x2000, 0x0100 + i, byte)
+        cpu.s[CPU.DS] = 0x2000
+        cpu.r[CPU.AX], cpu.r[CPU.DX] = 0x3D00, 0x0100
+        cpu.ip = 0x10
+        cpu.step()
+        self.assertFalse(cpu.get_flag(flags.CF))
+        handle = cpu.r[CPU.AX]
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = 0x3F00, handle, 10, 0x0200
+        cpu.ip = 0x10
+        cpu.step()
+        self.assertEqual((cpu.r[CPU.AX], bytes(cpu.rb(0x2000, 0x200 + i) for i in range(3))), (3, b"abc"))
 
 
 class TestGetCurrentDirectory(FileFunctionsTest):

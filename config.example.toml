@@ -25,3 +25,5 @@ type = "cdrom"       # a CD-ROM drive: what is mounted in it can never be writte
 B = { type = "tmpfs" }                                  # a floppy in memory: gone when the emulator exits
 C = { type = "dir", path = "." }                        # the directory of this file is the root of C:
 D = { type = "dir", path = "samples" }                  # a disc: the files of this directory
+# D = { type = "iso", path = "game.iso" }               # or an image of a disc: its files, and its sectors for the
+#                                                       # programs that read them (a directory has no sectors)

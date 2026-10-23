@@ -14,7 +14,8 @@ It is a TOML file. A drive and the medium in it are described apart, as they are
     [mounts]                              # the medium: what is in the drive
     C = { type = "dir", path = "." }      # a directory of the host (relative paths: from the config's directory)
     B = { type = "tmpfs" }                # a file system in memory, gone when the emulator exits
-    D = { type = "dir", path = "/mnt/cd" }
+    D = { type = "iso", path = "cd.iso" } # a disc image: its files, and its sectors for programs that read them
+                                          # (a CD-ROM can also hold a directory of the host: type = "dir")
 
 `removable = true` (a floppy) and `removable = false` (a hard disk) are the old way to say the same as `type`; a drive
 has one of the two, not both.
@@ -28,12 +29,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .filesystem import FsError, for_mount
+from .iso import IsoError, IsoImage
 
 TOP_LEVEL_KEYS = {"cwd", "disks", "mounts"}
 DISK_KEYS = {"type", "removable"}
 DISK_TYPES = ("floppy", "hdd", "cdrom")
 MOUNT_KEYS = {"type", "path", "readonly"}
-MOUNT_TYPES = ("dir", "tmpfs")
+MOUNT_TYPES = ("dir", "tmpfs", "iso")
 
 
 class ConfigError(Exception):
@@ -42,9 +44,10 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class Mount:
-    """What is in a drive: a host directory (type "dir", with its path) or memory (type "tmpfs")."""
+    """What is in a drive: a host directory (type "dir", with its path), a disc image (type "iso", with the path of
+    the file) or memory (type "tmpfs")."""
     type: str
-    path: Path | None  # the directory of the host, absolute; None for tmpfs
+    path: Path | None  # the directory or the image file of the host, absolute; None for tmpfs
     readonly: bool
 
 
@@ -134,7 +137,9 @@ def _parse_mount(letter, table, base, disk_type):
     if cdrom and not readonly:
         raise ConfigError(f"{where}.readonly: a CD-ROM cannot be written to")
     if cdrom and kind == "tmpfs":
-        raise ConfigError(f"{where}: a CD-ROM holds a directory of the host, not a file system in memory")
+        raise ConfigError(f"{where}: a CD-ROM holds a directory or an image of the host, not a file system in memory")
+    if kind == "iso" and not cdrom:
+        raise ConfigError(f"{where}: a disc image can only be in a CD-ROM drive")
     if kind == "tmpfs":
         if "path" in table:
             raise ConfigError(f"{where}: a tmpfs is in memory and has no path")
@@ -144,6 +149,14 @@ def _parse_mount(letter, table, base, disk_type):
     if not isinstance(table["path"], str) or not table["path"]:
         raise ConfigError(f"{where}.path must be the name of a directory")
     path = (base / table["path"]).resolve()  # an absolute path stays as it is
+    if kind == "iso":
+        if not path.is_file():
+            raise ConfigError(f"{where}.path: {path} is not a file")
+        try:
+            IsoImage(path)  # to say now, and not when a program looks at the disc, that it cannot be read
+        except IsoError as error:
+            raise ConfigError(f"{where}.path: {error}") from None
+        return Mount("iso", path, readonly)
     if not path.is_dir():
         raise ConfigError(f"{where}.path: {path} is not a directory")
     return Mount("dir", path, readonly)

@@ -22,6 +22,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   INT 2Fh answers MSCDEX questions from the CD-ROM drives
 - `mydos/filesystem.py` - the file systems of the drives: HostDir (a host directory, names matched without
   regard to case, only 8.3 names visible) and MemFs (in memory), with one interface and DOS error numbers
+- `mydos/iso.py` - a disc image (`.iso`, ISO 9660, 2048-byte sectors) as a CD-ROM: IsoFs gives its files like a host
+  directory, IsoImage its raw sectors (MSCDEX INT 2Fh AX=1508h); config `D = { type = "iso", path = "cd.iso" }`
 - `mydos/volumes.py` - the drives as a program uses them: a file system per drive, the current directory of each, and
   resolve(): a DOS path (`D:\X`, `..\Y`, `a/b`) -> file system + names. The program on the command line is named this way too
 - `mydos/search.py` - the file search of INT 21h AH=4Eh/4Fh: DOS wildcard masks, the attributes a program asks for,

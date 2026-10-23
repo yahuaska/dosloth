@@ -555,6 +555,20 @@ class TestForMount(unittest.TestCase):
         self.assertTrue(filesystem.for_mount(Mount("tmpfs", None, True)).readonly)
 
 
+class TestForAnImage(unittest.TestCase):
+    def test_an_image_mount_is_an_isofs_on_that_file(self):
+        from mydos.iso import IsoFs
+        from tests.iso_builder import build
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "disc.iso"
+            path.write_bytes(build({"A.TXT": b"abc"}))
+            fs = filesystem.for_mount(Mount("iso", path, True))
+            self.assertIsInstance(fs, IsoFs)
+            self.assertEqual(Path(fs.image.path), path)
+            with fs.open(["A.TXT"]) as file:
+                self.assertEqual(file.read(), b"abc")
+
+
 class TestFindingAFileWhateverItsCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

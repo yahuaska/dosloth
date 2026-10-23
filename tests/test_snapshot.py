@@ -369,6 +369,27 @@ class TestAMachineThatGoesOn(SnapshotTest):
         self.assertEqual((b.cpu.ip, b.cpu.instructions), (a.cpu.start_ip, 4))
 
 
+class TestAFileOnADiscImage(SnapshotTest):
+    def test_a_file_open_on_the_disc_is_open_again_at_its_place(self):
+        from tests.iso_builder import build
+        (self.base / "disc.iso").write_bytes(build({"DATA.BIN": bytes(range(200))}))
+        text = TEXT.replace("[mounts]", "[disks.E]\n    type = 'cdrom'\n    [mounts]").replace(
+            'D = { type = "tmpfs" }', 'D = { type = "tmpfs" }\n    E = { type = "iso", path = "disc.iso" }')
+        volumes = Volumes(config.parse(tomllib.loads(text), self.base))
+        a = machine.build(volumes)
+        self.call(a, 0x3D00, "E:\\DATA.BIN")
+        self.call(a, 0x3F00, bx=5, cx=10, dx=0x0300)
+        path = str(self.out / "x.state")
+        snapshot.save(path, a)
+        a.state.handles.close_all()
+        b = machine.build(Volumes(config.parse(tomllib.loads(text), self.base)))
+        snapshot.load(path, b)
+        self.assertEqual(b.state.handles.get(5).file.tell(), 10)
+        self.assertEqual(b.state.handles.get(5).file.read(4), bytes([10, 11, 12, 13]))
+        self.assertEqual(b.state.handles.get(5).dos_path, "E:\\DATA.BIN")
+        b.state.handles.close_all()
+
+
 class TestWhatIsPutBack(SnapshotTest):
     def saved(self, name="x.state"):
         a = self.make()
