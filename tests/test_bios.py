@@ -573,5 +573,57 @@ class TestEquipmentAndMemory(unittest.TestCase):
         self.assertEqual((self.call(one, 0x11), self.call(other, 0x11)), (0x0021, 0x00A1))
 
 
+class TestEgaInformation(unittest.TestCase):
+    """INT 10h AH=12h BL=10h: what kind of EGA is there?"""
+
+    def setUp(self):
+        self.cpu = CPU()
+        bios.install(self.cpu)
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x10])
+
+    def call(self, ax=0x1203, bx=0x0010, cx=0x2222, dx=0x1111):
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = ax, bx, cx, dx
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x3333, 0x4444
+        cpu.ip = 0
+        cpu.step()
+
+    def test_a_color_display_with_256_kb_no_features_and_the_switches_of_a_color_ega(self):
+        self.call()
+        cpu = self.cpu
+        self.assertEqual((cpu.get8(7), cpu.get8(3), cpu.get8(5), cpu.get8(1)), (0, 3, 0, 9))  # BH BL CH CL
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX]), (0x0003, 0x0009))
+
+    def test_the_old_registers_do_not_matter_but_bl(self):
+        for bx, cx in ((0x0010, 0x0000), (0xFF10, 0xFFFF), (0x5A10, 0x1234)):
+            self.call(bx=bx, cx=cx)
+            self.assertEqual((self.cpu.r[CPU.BX], self.cpu.r[CPU.CX]), (0x0003, 0x0009))
+
+    def test_ax_dx_si_di_and_the_flags_stay(self):
+        self.cpu.flags = 0x0FD7
+        self.call(ax=0x1277)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.DX], cpu.r[CPU.SI], cpu.r[CPU.DI]), (0x1277, 0x1111, 0x3333, 0x4444))
+        self.assertEqual((cpu.flags, cpu.s[CPU.CS], cpu.ip), (0x0FD7, 0x1000, 2))
+
+    def test_the_other_alternate_functions_are_not_done_yet(self):
+        for bl in (0x00, 0x0F, 0x11, 0x20, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x7F, 0xFF):
+            with self.assertRaises(NotImplementedError, msg=hex(bl)):
+                self.call(bx=bl)
+
+    def test_the_error_says_which_function(self):
+        with self.assertRaises(NotImplementedError) as caught:
+            self.call(bx=0x0032)
+        self.assertIn("AH=12 BL=32", str(caught.exception))
+
+    def test_it_does_not_disturb_the_other_functions_of_ah_12h_numbers(self):
+        self.call()
+        self.cpu.ip = 0
+        self.cpu.r[CPU.AX], self.cpu.r[CPU.BX] = 0x0F00, 0
+        self.cpu.step()
+        self.assertEqual(self.cpu.get8(0), 0x03)  # AH=0Fh still tells the mode
+
+
 if __name__ == "__main__":
     unittest.main()

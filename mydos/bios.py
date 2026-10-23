@@ -133,7 +133,7 @@ def int12(cpu):
 
 def int10(cpu):
     """INT 10h: the BIOS video services, selected by AH. So far 00h (modes 03h and 12h only), 0Fh, 10h (the colors,
-    but not their page or gray sums) and 1Ah AL=00h."""
+    but not their page or gray sums), 12h BL=10h and 1Ah AL=00h."""
     ah, al = cpu.get8(4), cpu.get8(0)
     if ah == 0x10:
         palette_function(cpu, al)
@@ -143,6 +143,16 @@ def int10(cpu):
         cpu.set8(0, cpu.mem[BDA_VIDEO_MODE])
         cpu.set8(4, cpu.mem[BDA_COLUMNS])
         cpu.set8(7, cpu.mem[BDA_PAGE])
+    elif ah == 0x12:  # the alternate functions of the EGA and VGA, picked by BL; only 10h so far
+        if cpu.get8(3) != 0x10:
+            raise NotImplementedError(f"INT 10h AH=12 BL={cpu.get8(3):02X}")
+        # BL=10h asks what kind of EGA there is. BH = 0 color (1 is monochrome), BL = how much memory there is (3 is
+        # 256 KB, all of it), CH = the feature bits (none), CL = the settings of the switches of the card (09h: a
+        # color display on a card in the EGA way).
+        cpu.set8(7, 0)
+        cpu.set8(3, 3)
+        cpu.set8(5, 0)
+        cpu.set8(1, 9)
     elif ah == 0x1A and al == 0x00:
         # Which video cards and monitors are there? AL = 1Ah says that the BIOS knows this call, which only a VGA
         # BIOS does: it is the way a program finds out that it is on a VGA. BL = the code of the active display,
