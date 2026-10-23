@@ -1127,6 +1127,24 @@ class TestMultiplex(unittest.TestCase):
             self.assertEqual((self.cpu.r[CPU.AX], self.cpu.r[CPU.BX]), (answer, 0xADAD), f"drive {drive}")
             self.assertEqual(self.cpu.r[CPU.CX], drive)
 
+    def test_1600_says_windows_is_not_running_with_or_without_a_cd_rom_drive(self):
+        for text in (None, self.FLOPPIES_ONLY, self.TWO_CDROMS):
+            self.machine(text)
+            self.cpu.set_flag(flags.CF, True)
+            self.call(0x1600, bx=0x5555)
+            cpu = self.cpu
+            self.assertEqual(cpu.get8(0), 0x00)  # AL=00h: not running (a value 80h would say so too)
+            self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]),
+                             (0x1600, 0x5555, 0x2222, 0x3333))
+            self.assertTrue(cpu.get_flag(flags.CF))
+            self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 2))
+
+    def test_1600_is_the_only_one_of_the_windows_questions_that_is_answered(self):
+        self.machine()
+        for ax in (0x1601, 0x1605, 0x1606, 0x1607, 0x160A, 0x1680, 0x1681, 0x1683, 0x4680, 0x4A33):
+            with self.assertRaises(NotImplementedError, msg=hex(ax)):
+                self.call(ax)
+
     def test_150c_gives_the_version_2_10(self):
         self.machine()
         self.call(0x150C, bx=0)
@@ -1140,7 +1158,7 @@ class TestMultiplex(unittest.TestCase):
 
     def test_the_other_services_are_not_done_yet(self):
         self.machine()
-        for ax in (0x1501, 0x1510, 0x1600, 0x4300, 0x0000):
+        for ax in (0x1501, 0x1510, 0x1601, 0x1680, 0x160A, 0x4300, 0x4680, 0x0000):
             with self.assertRaises(NotImplementedError):
                 self.call(ax)
 

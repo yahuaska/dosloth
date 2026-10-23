@@ -388,6 +388,9 @@ def int2f(cpu, state):
     So far the questions to MSCDEX, the CD-ROM extension of DOS: 1500h, how many CD-ROM drives there are. It is
     there when the machine has a CD-ROM drive, and then it also answers 150Bh and 150Ch. Without a drive there is
     no MSCDEX, and the count is 0.
+
+    And 1600h, "is Windows running in the enhanced mode?" Not here: AL stays 00h, which is what a machine with no
+    Windows answers, because nothing answers.
     """
     ax = cpu.r[CPU.AX]
     cdroms = cdrom_drives(state.config)
@@ -400,6 +403,8 @@ def int2f(cpu, state):
         cpu.r[CPU.BX] = MSCDEX_MAGIC
     elif cdroms and ax == 0x150C:  # the version of MSCDEX in BX: the major number in BH, the minor in BL
         cpu.r[CPU.BX] = MSCDEX_VERSION
+    elif ax == 0x1600:  # nothing of Windows is installed to answer, so AX is as the program left it
+        pass
     else:
         raise NotImplementedError(f"INT 2Fh AX={ax:04X}")
 
