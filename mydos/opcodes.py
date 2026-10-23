@@ -30,6 +30,7 @@ class Op(IntEnum):
     POPA = 0x61          # 80186 and later: pop DI SI BP (skip SP) BX DX CX AX
     PUSH_IMM16 = 0x68    # 80186 and later, followed by imm16: push the constant
     PUSH_IMM8 = 0x6A     # 80186 and later, followed by imm8: push the constant, sign-extended to a word
+    TWO_BYTE = 0x0F      # 80386 and later: the first byte of an instruction of two; the second one says which
     JCC = 0x70           # 70..7F: conditional short jump, followed by a signed 8-bit displacement
     ALU_RM8_IMM8 = 0x80    # + ModRM + imm8:  the operation is the ModRM 'reg' field (see Alu)
     ALU_RM16_IMM16 = 0x81  # + ModRM + imm16

@@ -151,6 +151,12 @@ def _decode_opcode(r, op, seg_override):
     if Op.JCC <= op < Op.JCC + 16:
         d = r.s8()
         return f"{JCC[op - Op.JCC]} {(r.pos + d) & 0xFFFF:04X}"
+    if op == Op.TWO_BYTE:
+        second = r.u8()
+        if 0x80 <= second <= 0x8F:  # the jumps that reach 32 KB away
+            d = r.u16()
+            return f"{JCC[second - 0x80]} {(r.pos + d) & 0xFFFF:04X}"
+        return None
     if op in (Op.ALU_RM8_IMM8, Op.ALU_RM16_IMM16, Op.ALU_RM16_IMM8):
         bits = 8 if op == Op.ALU_RM8_IMM8 else 16
         reg, rm, is_mem = _modrm(r, seg_override, bits)

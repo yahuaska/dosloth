@@ -270,7 +270,7 @@ class TestPrefixes(unittest.TestCase):
         cpu.ip = 5
         with self.assertRaises(NotImplementedError) as caught:
             cpu.step()
-        self.assertIn("0F at 1000:0005", str(caught.exception))
+        self.assertIn("opcode 0F 00 at 1000:0005", str(caught.exception))  # 0F 00 is not an instruction we know
 
     def test_the_prefix_changes_what_a_memory_operand_means(self):
         cpu = CPU()

@@ -1880,6 +1880,109 @@ class TestInterruptsThroughTheTable(unittest.TestCase):
         self.assertEqual((cpu.s[CPU.ES], cpu.r[CPU.BX]), (0x2000, 0x0100))
 
 
+class TestNearConditionalJumps(unittest.TestCase):
+    """0F 80-8F (80386 and later): the conditional jumps with a distance of a word."""
+
+    FLAG_SETS = [0x0002, 0x0002 | flags.ZF, 0x0002 | flags.CF, 0x0002 | flags.SF, 0x0002 | flags.OF,
+                 0x0002 | flags.PF, 0x0002 | flags.SF | flags.OF, 0x0002 | flags.CF | flags.ZF,
+                 0x0002 | flags.ZF | flags.SF, 0x0002 | flags.ZF | flags.OF | flags.PF,
+                 0x0FD7, 0x0002 | flags.DF | flags.IF | flags.AF | flags.TF]
+
+    def jump(self, second, distance, flag_word=0x0002, at=0x0000, extra=b""):
+        cpu = machine(bytes(extra) + bytes([0x0F, second, distance & 0xFF, distance >> 8 & 0xFF]), False)
+        cpu.ip = len(extra) + at if at == 0 else at
+        if at:
+            cpu.mem[0x10000 + at:0x10000 + at + 4] = bytes([0x0F, second, distance & 0xFF, distance >> 8 & 0xFF])
+        cpu.flags = flag_word
+        cpu.step()
+        return cpu
+
+    def test_it_is_four_bytes_long_taken_or_not_and_a_distance_of_0_is_the_next_instruction(self):
+        for second in range(0x80, 0x90):
+            for flag_word in self.FLAG_SETS:
+                cpu = self.jump(second, 0, flag_word)
+                self.assertEqual(cpu.ip, 4, (hex(second), hex(flag_word)))
+                self.assertEqual(cpu.flags, flag_word)
+
+    def test_it_agrees_with_the_short_jump_of_the_same_condition(self):
+        for cc in range(16):
+            for flag_word in self.FLAG_SETS:
+                short = machine(bytes([0x70 + cc, 0x10]), False)
+                short.flags = flag_word
+                short.step()
+                near = self.jump(0x80 + cc, 0x0010, flag_word)
+                self.assertEqual(short.ip == 0x12, near.ip == 0x14, (cc, hex(flag_word)))  # taken, or not
+                self.assertEqual(near.ip, 0x14 if short.ip == 0x12 else 4)
+
+    def test_the_names_of_the_jumps(self):
+        rows = [(0x84, flags.ZF, True), (0x84, 0, False), (0x85, 0, True), (0x85, flags.ZF, False),
+                (0x82, flags.CF, True), (0x83, flags.CF, False), (0x86, flags.CF, True), (0x86, flags.ZF, True),
+                (0x87, 0, True), (0x87, flags.CF, False), (0x88, flags.SF, True), (0x89, flags.SF, False),
+                (0x80, flags.OF, True), (0x81, flags.OF, False), (0x8A, flags.PF, True), (0x8B, flags.PF, False),
+                (0x8C, flags.SF, True), (0x8C, flags.SF | flags.OF, False), (0x8D, flags.SF | flags.OF, True),
+                (0x8E, flags.ZF, True), (0x8E, flags.SF | flags.OF, False), (0x8F, 0, True), (0x8F, flags.ZF, False)]
+        for second, bits, taken in rows:
+            cpu = self.jump(second, 0x0100, 0x0002 | bits)
+            self.assertEqual(cpu.ip, 0x0104 if taken else 4, (hex(second), hex(bits)))
+
+    def test_the_distance_is_signed_and_counted_from_the_end_of_the_instruction(self):
+        for distance, target in ((0x0001, 5), (0x0100, 0x0104), (0x7FFF, 0x8003), (0x8000, 0x8004), (0xFFFF, 3),
+                                 (0xFFFC, 0), (0xFFF0, 0xFFF4), (0xFF00, 0xFF04)):
+            cpu = self.jump(0x84, distance, 0x0002 | flags.ZF)
+            self.assertEqual(cpu.ip, target, hex(distance))
+
+    def test_it_goes_round_the_segment_in_both_directions(self):
+        cpu = self.jump(0x84, 0x0020, 0x0002 | flags.ZF, at=0xFFF0)  # FFF4 + 20 = 10014
+        self.assertEqual(cpu.ip, 0x0014)
+        cpu = self.jump(0x84, 0xFF00, 0x0002 | flags.ZF, at=0x0010)  # 0014 - 100
+        self.assertEqual(cpu.ip, 0xFF14)
+
+    def test_it_can_be_the_last_bytes_of_the_segment(self):
+        cpu = machine(b"", False)
+        cpu.ip = 0xFFFE
+        cpu.mem[0x1FFFE:0x20000] = bytes([0x0F, 0x84])
+        cpu.mem[0x10000:0x10002] = bytes([0x05, 0x00])  # the distance is read from the start of the segment
+        cpu.flags = 0x0002 | flags.ZF
+        cpu.step()
+        self.assertEqual(cpu.ip, 0x0002 + 5)
+
+    def test_no_register_and_no_flag_changes(self):
+        for second in range(0x80, 0x90):
+            cpu = machine(bytes([0x0F, second, 0x10, 0x00]), False)
+            cpu.flags = 0x0FD7
+            before = (list(cpu.r), list(cpu.s))
+            cpu.step()
+            self.assertEqual(((cpu.r, cpu.s), cpu.flags), (before, 0x0FD7), hex(second))
+
+    def test_a_prefix_in_front_is_taken_and_does_no_harm(self):
+        for prefix in (0x26, 0x2E, 0x36, 0x3E, 0xF2, 0xF3):
+            cpu = machine(bytes([prefix, 0x0F, 0x84, 0x10, 0x00]), False)
+            cpu.flags = 0x0002 | flags.ZF
+            cpu.step()
+            self.assertEqual((cpu.ip, cpu.start_ip), (0x15, 0), hex(prefix))
+
+    def test_the_other_instructions_that_start_with_0f_stop_the_emulator_and_say_which(self):
+        for second in (0x00, 0x01, 0x0B, 0x20, 0x7F, 0x90, 0xA0, 0xAF, 0xB6, 0xBE, 0xFF, 0x7F):
+            cpu = machine(bytes([0x0F, second, 0x12, 0x34]), False)
+            with self.assertRaises(NotImplementedError) as caught:
+                cpu.step()
+            self.assertIn(f"opcode 0F {second:02X} at 1000:0000: 0f {second:02x} 12 34", str(caught.exception))
+
+    def test_the_address_in_the_message_is_where_the_instruction_began_prefixes_and_all(self):
+        cpu = machine(bytes([0x90, 0x26, 0x0F, 0xB6]), False)
+        cpu.ip = 1
+        with self.assertRaises(NotImplementedError) as caught:
+            cpu.step()
+        self.assertIn("opcode 0F B6 at 1000:0001", str(caught.exception))
+
+    def test_it_is_one_instruction_for_the_count_and_for_the_trace(self):
+        cpu = machine(bytes([0x0F, 0x84, 0x00, 0x00]), False)
+        seen = []
+        cpu.trace = lambda c: seen.append((c.ip, c.instructions))
+        cpu.step()
+        self.assertEqual((seen, cpu.instructions), ([(0, 1)], 1))
+
+
 class TestEnter(unittest.TestCase):
     """C8 ENTER size, level (80186 and later): push bp ; mov bp, sp ; sub sp, size, and for nested levels a display."""
 

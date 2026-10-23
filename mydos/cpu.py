@@ -143,6 +143,7 @@ class CPU:
             Op.RETF_POP: self.retf_pop,
             Op.RETF: self.retf,
             Op.IRET: self.iret,
+            Op.TWO_BYTE: self.two_byte,
             Op.JMP_NEAR: self.jmp_near,
             Op.JMP_FAR: self.jmp_far_imm,
             Op.JMP_SHORT: self.jmp_short,
@@ -1236,6 +1237,22 @@ class CPU:
         target = self.fetch_rel8()
         if self.condition(op & 0xF):
             self.ip = target
+
+    def two_byte(self, op):
+        """The instructions of two bytes, which start with 0F (80386 and later). The second byte says which.
+
+        So far only 0F 80-8F: the conditional jumps that reach a place up to 32 KB away, a word after the opcode
+        for the distance. The 8086 and the 286 have only the short ones (70-7F, 127 bytes either way), and a long
+        jump had to be written as the opposite short jump over a JMP. The conditions are the same as for those.
+        """
+        second = self.fetch8()
+        if 0x80 <= second <= 0x8F:
+            target = self.fetch_rel16()
+            if self.condition(second & 0xF):
+                self.ip = target
+            return
+        raw = bytes(self.mem[self.addr(self.s[self.CS], self.start_ip):][:8]).hex(" ")
+        raise NotImplementedError(f"opcode 0F {second:02X} at {self.s[self.CS]:04X}:{self.start_ip:04X}: {raw}")
 
     def jmp_near(self, op):
         """Jump anywhere in the code segment (opcode E9 + a signed 16-bit distance).

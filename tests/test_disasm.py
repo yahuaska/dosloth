@@ -7,8 +7,8 @@ from mydos.disasm import disasm
 # A ModRM byte that is valid after the opcode: a register operand, and the 'reg' field the opcode needs.
 # Most opcodes accept any; the groups below only know some operations (8F, C6 and C7 /0 = POP and MOV,
 # FE and FF /0 = INC),
-# and LEA, LES and LDS need a memory operand ([bx]).
-MODRM_FOR = {0x8D: 0x1F, 0x8F: 0xC0, 0xC6: 0xC0, 0xC7: 0xC0, 0xFE: 0xC0, 0xFF: 0xC0, 0xC4: 0x1F, 0xC5: 0x1F}
+# and LEA, LES and LDS need a memory operand ([bx]); 0F is followed by an opcode of its own, 84 is a jump.
+MODRM_FOR = {0x0F: 0x84, 0x8D: 0x1F, 0x8F: 0xC0, 0xC6: 0xC0, 0xC7: 0xC0, 0xFE: 0xC0, 0xFF: 0xC0, 0xC4: 0x1F, 0xC5: 0x1F}
 
 
 def machine(code):
@@ -95,6 +95,10 @@ class TestText(unittest.TestCase):
             (b"\xC9", "leave"),   # from esetup.exe
             (b"\xF5", "cmc"),   # from xcomapoc.exe
             (b"\xCF", "iret"),
+            (b"\x0F\x84\xBA\x00", "je 01BE"),   # from install.exe: 0104 + 0xBA
+            (b"\x0F\x80\x00\x00", "jo 0104"),
+            (b"\x0F\x8F\xFC\xFF", "jg 0100"),
+            (b"\x0F\x85\x00\x80", "jne 8104"),
             (b"\xE6\x43", "out 43, al"),   # from esetup.exe
             (b"\xE4\x40", "in al, 40"),
             (b"\xE5\x61", "in ax, 61"),
