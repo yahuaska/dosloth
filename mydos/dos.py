@@ -3,7 +3,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import flags
+from . import fcb, flags
 from .config import default as default_config
 from .cpu import CPU, Exit, signed
 from .filesystem import (ACCESS_DENIED, ATTR_DIRECTORY, ATTR_READONLY, ATTR_VOLUME, DRIVE_NOT_READY, FILE_NOT_FOUND,
@@ -190,6 +190,14 @@ def int21(cpu, state):
         state.dta = (cpu.s[CPU.DS], cpu.r[CPU.DX])
     elif ah == 0x2F:  # get the disk transfer area into ES:BX
         cpu.s[CPU.ES], cpu.r[CPU.BX] = state.dta
+    elif ah == 0x29:  # take apart the file name at DS:SI into the FCB at ES:DI; AL = what it was (see fcb.parse)
+        text = bytes(cpu.rb(cpu.s[CPU.DS], (cpu.r[CPU.SI] + i) & 0xFFFF) for i in range(MAX_PATH))
+        old = bytes(cpu.rb(cpu.s[CPU.ES], (cpu.r[CPU.DI] + i) & 0xFFFF) for i in range(fcb.SIZE))
+        parsed, used, code = fcb.parse(text, cpu.get8(0), old, lambda drive: drive - 1 in state.config.disks)
+        for i, byte in enumerate(parsed):
+            cpu.wb(cpu.s[CPU.ES], (cpu.r[CPU.DI] + i) & 0xFFFF, byte)
+        cpu.r[CPU.SI] = (cpu.r[CPU.SI] + used) & 0xFFFF
+        cpu.set8(0, code)
     elif ah == 0x2C:  # get the time: CH = hour, CL = minute, DH = second, DL = hundredths of a second
         moment = now()
         local = time.localtime(moment)
