@@ -6,8 +6,8 @@ from pathlib import Path
 from . import flags
 from .config import default as default_config
 from .cpu import CPU, Exit, signed
-from .filesystem import (ACCESS_DENIED, ATTR_DIRECTORY, ATTR_READONLY, ATTR_VOLUME, FILE_NOT_FOUND, PATH_NOT_FOUND,
-                         FsError)
+from .filesystem import (ACCESS_DENIED, ATTR_DIRECTORY, ATTR_READONLY, ATTR_VOLUME, DRIVE_NOT_READY, FILE_NOT_FOUND,
+                         INVALID_DRIVE, PATH_NOT_FOUND, FsError)
 from .handles import Console, HandleTable, NullDevice, OpenFile
 from .memory import Blocks
 from . import sysvars
@@ -397,6 +397,20 @@ def int21(cpu, state):
         cpu.s[CPU.ES], cpu.r[CPU.BX] = sysvars.SEGMENT, sysvars.LIST_OFFSET
     elif ah in (0x51, 0x62):  # BX = the segment of the PSP of the running program (51h is the old name of 62h)
         cpu.r[CPU.BX] = PSP_SEG
+    elif ah == 0x47:  # get the current directory of drive DL (0 is the current one, 1 is A:) into the buffer at DS:SI
+        drive = cpu.get8(2)
+        drive = state.volumes.current_drive if drive == 0 else drive - 1
+        if drive not in state.config.disks:
+            fail(cpu, FsError(INVALID_DRIVE, f"there is no drive {chr(ord('A') + drive)}:"))
+        elif state.volumes.filesystems[drive] is None:
+            fail(cpu, FsError(DRIVE_NOT_READY, f"the drive {chr(ord('A') + drive)}: has nothing in it"))
+        else:
+            # No drive letter and no backslash in front. The buffer is 64 bytes in DOS; a longer path is not cut here.
+            path = state.volumes.current_directory(drive).encode("cp437", "replace") + b"\0"
+            for i, byte in enumerate(path):
+                cpu.wb(cpu.s[CPU.DS], (cpu.r[CPU.SI] + i) & 0xFFFF, byte)
+            cpu.set_flag(flags.CF, False)
+            cpu.r[CPU.AX] = 0x0100  # what DOS leaves there, which some programs take for granted
     elif ah == 0x48:  # allocate BX paragraphs; AX = the segment of the block
         segment = state.memory.allocate(cpu.r[CPU.BX])
         if segment is None:  # error 08: not enough memory; BX says how big a block there could be

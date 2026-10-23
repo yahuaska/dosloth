@@ -2265,3 +2265,89 @@ class TestSeek(FileFunctionsTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGetCurrentDirectory(FileFunctionsTest):
+    """INT 21h AH=47h: the current directory of a drive, written at DS:SI without the drive and the first backslash."""
+
+    def ask(self, drive, si=0x0300, fill=0xAA):
+        for i in range(80):
+            self.cpu.wb(0x2000, (si + i) & 0xFFFF, fill)
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = 0x4700, 0x1111, 0x2222, 0x0300 | drive
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = si, 0x4444
+        cpu.ip = 0
+        cpu.step()
+
+    def written(self, si=0x0300):
+        """The bytes at DS:SI up to the zero, and the byte after it."""
+        text = bytearray()
+        for i in range(80):
+            byte = self.cpu.rb(0x2000, (si + i) & 0xFFFF)
+            if byte == 0:
+                return bytes(text), self.cpu.rb(0x2000, (si + i + 1) & 0xFFFF)
+            text.append(byte)
+        self.fail("no zero")
+
+    def test_the_root_is_an_empty_string(self):
+        self.volumes.directories[2] = []
+        self.ask(3)
+        self.assertIsNone(self.failed())
+        self.assertEqual(self.written(), (b"", 0xAA))
+
+    def test_a_directory_is_written_in_capitals_without_the_first_backslash(self):
+        self.volumes.chdir("GAMES")
+        self.ask(3)
+        self.assertEqual(self.written(), (b"GAMES", 0xAA))
+
+    def test_drive_0_is_the_current_drive_and_a_number_is_that_drive(self):
+        self.volumes.chdir("GAMES")
+        self.volumes.current_drive = 3
+        self.ask(0)
+        self.assertEqual(self.written(), (b"", 0xAA))
+        self.volumes.current_drive = 3
+        self.ask(3)  # C:, whatever the current drive is
+        self.assertEqual(self.written(), (b"GAMES", 0xAA))
+
+    def test_the_directory_is_that_of_the_drive_asked_not_of_the_current_one(self):
+        self.volumes.chdir("GAMES")
+        self.volumes.directories[3] = ["A", "B"]
+        self.volumes.current_drive = 2
+        self.ask(4)
+        self.assertEqual(self.written(), (b"A\\B", 0xAA))
+        self.ask(0)
+        self.assertEqual(self.written(), (b"GAMES", 0xAA))
+
+    def test_the_answer_is_ax_0100_and_the_other_registers_stay(self):
+        self.ask(3)
+        cpu = self.cpu
+        self.assertEqual(cpu.r[CPU.AX], 0x0100)
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (0x1111, 0x2222, 0x0303))
+        self.assertEqual((cpu.r[CPU.SI], cpu.r[CPU.DI], cpu.s[CPU.DS]), (0x0300, 0x4444, 0x2000))
+        self.assertFalse(cpu.get_flag(flags.CF))
+
+    def test_a_good_call_clears_the_carry_flag(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.ask(3)
+        self.assertFalse(self.cpu.get_flag(flags.CF))
+
+    def test_a_drive_that_is_not_there_is_error_15(self):
+        self.ask(10)
+        self.assertEqual(self.failed(), 15)
+        self.assertEqual(self.cpu.rb(0x2000, 0x0300), 0xAA)
+
+    def test_a_drive_with_nothing_in_it_is_not_ready(self):
+        self.ask(1)
+        self.assertEqual(self.failed(), 21)
+        self.assertEqual(self.cpu.rb(0x2000, 0x0300), 0xAA)
+
+    def test_the_buffer_may_go_round_the_end_of_the_segment(self):
+        self.volumes.chdir("GAMES")
+        self.ask(3, si=0xFFFD)
+        self.assertEqual(self.written(si=0xFFFD), (b"GAMES", 0xAA))
+        self.assertEqual(self.cpu.rb(0x2000, 0x0002), 0)
+
+    def test_a_long_path_is_written_whole(self):
+        self.volumes.directories[2] = ["ABCDEFGH"] * 7 + ["IJ"]
+        self.ask(3)
+        self.assertEqual(self.written(), (b"\\".join([b"ABCDEFGH"] * 7 + [b"IJ"]), 0xAA))
