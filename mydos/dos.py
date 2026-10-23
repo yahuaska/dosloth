@@ -9,6 +9,7 @@ from .cpu import CPU, Exit, signed
 from .filesystem import (ACCESS_DENIED, ATTR_DIRECTORY, ATTR_READONLY, ATTR_VOLUME, FILE_NOT_FOUND, PATH_NOT_FOUND,
                          FsError)
 from .handles import Console, HandleTable, NullDevice, OpenFile
+from . import sysvars
 from .psp import DTA_OFFSET, PSP_SEG
 from .search import Searches, find, record
 from .volumes import Volumes
@@ -141,7 +142,7 @@ def int21(cpu, state):
     """INT 21h: DOS services, selected by AH.
 
     So far 06h, 08h, 09h, 0Eh, 19h, 1Ah, 25h, 2Ch, 2Fh, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 42h, 43h, 44h, 4Ah, 4Ch,
-    4Eh, 4Fh, 63h.
+    4Eh, 4Fh, 52h, 63h.
     """
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
@@ -390,6 +391,8 @@ def int21(cpu, state):
             cpu.set_flag(flags.CF, False)
         except FsError as error:
             fail(cpu, error)
+    elif ah == 0x52:  # get the List of Lists, the inner variables of DOS (see sysvars.py), into ES:BX
+        cpu.s[CPU.ES], cpu.r[CPU.BX] = sysvars.SEGMENT, sysvars.LIST_OFFSET
     elif ah == 0x4A:  # resize the memory block that starts at segment ES to BX paragraphs
         # Naive: we keep no list of blocks, only the top of memory. A block can grow or shrink as
         # long as it ends below that top. (DOS error 09, "not a block", cannot be told apart yet.)
@@ -445,6 +448,7 @@ def install(cpu, volumes=None):
     Without any, the machine is the built-in one: the directory the emulator was started in is the hard disk C:.
     """
     state = DosState(volumes if volumes is not None else Volumes(default_config(Path.cwd())))
+    sysvars.write(cpu, state.config, MEMORY_TOP_SEG)  # the tables of DOS, which a program finds with AH=52h
     cpu.int_handlers[0x21] = lambda cpu: int21(cpu, state)
     cpu.int_handlers[0x2F] = lambda cpu: int2f(cpu, state)
     return state  # for whoever wants to look at what DOS holds, the tests in particular
