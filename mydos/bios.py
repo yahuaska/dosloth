@@ -6,22 +6,16 @@ back into them.
 import time
 from collections import deque
 
-from . import flags
+from . import flags, text
 from .cpu import CPU
+from .text import BDA_COLUMNS, BDA_PAGE, BDA_VIDEO_MODE, BLANK_CELL, GRAPHICS_MODE, TEXT_BASE, TEXT_MODE
 
 TICKS_PER_DAY = 0x1800B0  # the BIOS timer ticks 18.2065 times a second: 1,573,040 ticks make a day
 # where the BIOS keeps the state of the video, in its data area at 0040:0000
 BDA_EQUIPMENT = 0x410  # a word: the equipment list that INT 11h gives
 BDA_MEMORY_KB = 0x413  # a word: how many KB of memory there are below 640 KB, which INT 12h gives
-BDA_VIDEO_MODE = 0x449  # a byte
-BDA_COLUMNS = 0x44A  # a word: the characters in a line
-BDA_PAGE = 0x462  # a byte: the page of the screen that is shown
 CONVENTIONAL_MEMORY_KB = 640  # the memory of a PC that DOS gives to programs: up to the video memory at A0000h
-TEXT_MODE = 0x03  # 80 by 25 characters in 16 colors: what DOS is in before a program starts
-GRAPHICS_MODE = 0x12  # 640 by 480 pixels in 16 colors
-TEXT_BUFFER = 0xB8000  # where the characters of the text modes are, a pair of bytes each: the character, its color
-TEXT_CLEARED = 0x4000  # how much of it a mode set clears: the four pages of 80 by 25
-BLANK_CELL = bytes([0x20, 0x07])  # a space, light grey on black
+TEXT_CLEARED = 0x8000  # how much of the text memory a mode set clears: B8000h to BFFFFh, the 8 pages
 OVERSCAN = 0x11  # the number of the attribute controller register of the border color
 VGA_COLOR_DISPLAY = 0x08  # the code of a VGA with a color monitor in the answer of INT 10h AH=1Ah
 NO_DISPLAY = 0x00  # the code that says there is no second monitor
@@ -50,13 +44,11 @@ def set_video_mode(cpu, mode, keep_picture):
     picture is to be kept (the registers of the card are set up either way)."""
     if mode not in (TEXT_MODE, GRAPHICS_MODE):
         raise NotImplementedError(f"INT 10h AH=00 AL={mode:02X}: video mode {mode:02X}")
-    cpu.mem[BDA_VIDEO_MODE] = mode
-    cpu.mem[BDA_COLUMNS:BDA_COLUMNS + 2] = (80).to_bytes(2, "little")
-    cpu.mem[BDA_PAGE] = 0
+    text.set_up(cpu, mode)
     if cpu.video is not None:
         cpu.video.clear(keep_planes=keep_picture)
     if not keep_picture:
-        cpu.mem[TEXT_BUFFER:TEXT_BUFFER + TEXT_CLEARED] = BLANK_CELL * (TEXT_CLEARED // 2)
+        cpu.mem[TEXT_BASE:TEXT_BASE + TEXT_CLEARED] = BLANK_CELL * (TEXT_CLEARED // 2)
 
 
 def palette_function(cpu, al):
@@ -132,11 +124,35 @@ def int12(cpu):
 
 
 def int10(cpu):
-    """INT 10h: the BIOS video services, selected by AH. So far 00h (modes 03h and 12h only), 0Fh, 10h (the colors,
-    but not their page or gray sums), 12h BL=10h and 1Ah AL=00h."""
+    """INT 10h: the BIOS video services, selected by AH. So far 00h (modes 03h and 12h only), the cursor and the
+    characters at it (01h, 02h, 03h, 08h, 09h, 0Ah), 0Fh, 10h (the colors, but not their page or gray sums), 12h BL=10h
+    and 1Ah AL=00h."""
     ah, al = cpu.get8(4), cpu.get8(0)
     if ah == 0x10:
         palette_function(cpu, al)
+    elif ah == 0x01:  # set the shape of the cursor: CH = its first scan line, CL = its last
+        text.set_cursor_shape(cpu, cpu.r[CPU.CX])
+    elif ah == 0x02:  # put the cursor of page BH at row DH, column DL
+        text.check_page(cpu.get8(7), "INT 10h AH=02")
+        text.set_cursor(cpu, cpu.get8(7), cpu.get8(6), cpu.get8(2))
+    elif ah == 0x03:  # where is the cursor of page BH? DH = row, DL = column, CX = its shape; AX = 0
+        text.check_page(cpu.get8(7), "INT 10h AH=03")
+        row, column = text.get_cursor(cpu, cpu.get8(7))
+        cpu.r[CPU.AX] = 0
+        cpu.set8(6, row)
+        cpu.set8(2, column)
+        cpu.r[CPU.CX] = text.cursor_shape(cpu)
+    elif ah == 0x08:  # read the character at the cursor of page BH: AL = the character, AH = its attribute
+        text.check_page(cpu.get8(7), "INT 10h AH=08")
+        text.require_text(cpu, "INT 10h AH=08")
+        character, attribute = text.read_cell(cpu, cpu.get8(7), "INT 10h AH=08")
+        cpu.set8(0, character)
+        cpu.set8(4, attribute)
+    elif ah in (0x09, 0x0A):  # write the character AL, CX times, from the cursor of page BH; 09h sets the attribute BL
+        text.check_page(cpu.get8(7), f"INT 10h AH={ah:02X}")
+        text.require_text(cpu, f"INT 10h AH={ah:02X}")
+        text.write_cells(cpu, cpu.get8(7), al, cpu.get8(3) if ah == 0x09 else None, cpu.r[CPU.CX],
+                         f"INT 10h AH={ah:02X}")
     elif ah == 0x00:  # set the video mode AL; bit 7 of AL says to keep what is on the screen
         set_video_mode(cpu, al & 0x7F, bool(al & 0x80))
     elif ah == 0x0F:  # get the video mode: AL = the mode, AH = characters in a line, BH = the page shown
@@ -212,9 +228,8 @@ def install(cpu, config=None):
     cpu.keyboard = keyboard  # for DOS, which reads keys from the same buffer as the BIOS
     cpu.mem[BDA_EQUIPMENT:BDA_EQUIPMENT + 2] = equipment_word(config).to_bytes(2, "little")
     cpu.mem[BDA_MEMORY_KB:BDA_MEMORY_KB + 2] = CONVENTIONAL_MEMORY_KB.to_bytes(2, "little")
-    cpu.mem[BDA_VIDEO_MODE] = TEXT_MODE  # the machine starts in text mode, as it is at the DOS prompt
-    cpu.mem[BDA_COLUMNS:BDA_COLUMNS + 2] = (80).to_bytes(2, "little")
-    cpu.mem[BDA_PAGE] = 0
+    text.set_up(cpu, TEXT_MODE)  # the machine starts in text mode, as it is at the DOS prompt, with a clean screen
+    cpu.mem[TEXT_BASE:TEXT_BASE + TEXT_CLEARED] = BLANK_CELL * (TEXT_CLEARED // 2)
     cpu.int_handlers[0x10] = int10
     cpu.int_handlers[0x11] = int11
     cpu.int_handlers[0x12] = int12

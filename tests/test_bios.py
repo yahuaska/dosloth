@@ -267,14 +267,14 @@ class TestVideoMode(unittest.TestCase):
 
     def test_a_mode_set_fills_the_text_screen_with_light_grey_spaces(self):
         self.cpu.mem[0xB8000:0xB8010] = bytes(range(1, 17))
-        self.cpu.mem[0xBBFFE:0xBC000] = b"\x41\x42"  # the end of the four pages
-        self.cpu.mem[0xBC000] = 0x99  # the next byte is not cleared
+        self.cpu.mem[0xBFFFE:0xC0000] = b"\x41\x42"  # the end of the eight pages
+        self.cpu.mem[0xC0000] = 0x99  # the next byte is not cleared
         self.call(0x0003)
         self.assertEqual(bytes(self.cpu.mem[0xB8000:0xB8006]), b" \x07 \x07 \x07")
-        self.assertEqual(bytes(self.cpu.mem[0xBBFFE:0xBC000]), b" \x07")
-        self.assertEqual(self.cpu.mem[0xBC000], 0x99)
-        self.assertEqual(sum(1 for i in range(0xB8000, 0xBC000, 2) if self.cpu.mem[i] != 0x20), 0)
-        self.assertEqual(sum(1 for i in range(0xB8001, 0xBC000, 2) if self.cpu.mem[i] != 0x07), 0)
+        self.assertEqual(bytes(self.cpu.mem[0xBFFFE:0xC0000]), b" \x07")
+        self.assertEqual(self.cpu.mem[0xC0000], 0x99)
+        self.assertEqual(sum(1 for i in range(0xB8000, 0xC0000, 2) if self.cpu.mem[i] != 0x20), 0)
+        self.assertEqual(sum(1 for i in range(0xB8001, 0xC0000, 2) if self.cpu.mem[i] != 0x07), 0)
 
     def test_other_modes_stop_the_emulator_and_change_nothing(self):
         self.call(0x0012)
@@ -623,6 +623,202 @@ class TestEgaInformation(unittest.TestCase):
         self.cpu.r[CPU.AX], self.cpu.r[CPU.BX] = 0x0F00, 0
         self.cpu.step()
         self.assertEqual(self.cpu.get8(0), 0x03)  # AH=0Fh still tells the mode
+
+
+class TestTextScreen(unittest.TestCase):
+    """INT 10h AH=01h, 02h, 03h, 08h, 09h and 0Ah: the cursor and the characters at it, in the text mode."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        bios.install(self.cpu)
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x10])
+
+    def call(self, ah, al=0, bx=0, cx=0x2222, dx=0x1111):
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = ah << 8 | al, bx, cx, dx
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x3333, 0x4444
+        cpu.ip = 0
+        cpu.step()
+
+    def put_cursor(self, row, column, page=0):
+        self.call(0x02, bx=page << 8, dx=row << 8 | column)
+
+    def cell(self, row, column, page=0):
+        address = 0xB8000 + page * 0x1000 + (row * 80 + column) * 2
+        return self.cpu.mem[address], self.cpu.mem[address + 1]
+
+    def test_the_machine_starts_with_a_clean_text_screen_on_every_page(self):
+        self.assertEqual(bytes(self.cpu.mem[0xB8000:0xC0000]), bytes([0x20, 0x07]) * 0x4000)
+
+    def test_the_state_at_the_start(self):
+        cpu = self.cpu
+        self.assertEqual(bytes(cpu.mem[0x450:0x460]), bytes(16))  # every cursor at the top left
+        self.assertEqual(cpu.rw(0x40, 0x60), 0x0607)
+        self.assertEqual((cpu.mem[0x484], cpu.rw(0x40, 0x85)), (24, 16))  # 25 rows, characters of 16 scan lines
+        self.call(0x03)
+        self.assertEqual((cpu.get8(6), cpu.get8(2), cpu.r[CPU.CX], cpu.r[CPU.AX]), (0, 0, 0x0607, 0))
+
+    def test_set_and_get_the_cursor_of_every_page(self):
+        for page in range(8):
+            self.put_cursor(page + 1, 10 + page, page)
+        for page in range(8):
+            self.call(0x03, bx=page << 8)
+            self.assertEqual((self.cpu.get8(6), self.cpu.get8(2)), (page + 1, 10 + page), page)
+
+    def test_the_column_is_the_low_byte_and_the_row_the_high_byte_of_the_word_in_the_data_area(self):
+        self.put_cursor(7, 33, page=2)
+        self.assertEqual((self.cpu.mem[0x454], self.cpu.mem[0x455]), (33, 7))
+        self.assertEqual(bytes(self.cpu.mem[0x450:0x454]), bytes(4))
+
+    def test_a_cursor_may_be_put_outside_the_screen_to_hide_it(self):
+        self.put_cursor(25, 0)
+        self.call(0x03)
+        self.assertEqual((self.cpu.get8(6), self.cpu.get8(2)), (25, 0))
+        self.put_cursor(200, 255)
+        self.call(0x03)
+        self.assertEqual((self.cpu.get8(6), self.cpu.get8(2)), (200, 255))
+
+    def test_the_shape_of_the_cursor(self):
+        self.call(0x01, cx=0x0F0F)
+        self.call(0x03)
+        self.assertEqual(self.cpu.r[CPU.CX], 0x0F0F)
+        self.call(0x01, cx=0x2000)  # bit 5 of CH hides the cursor on a real card: the word is kept as it is
+        self.call(0x03)
+        self.assertEqual(self.cpu.r[CPU.CX], 0x2000)
+
+    def test_get_cursor_changes_only_ax_cx_and_dx_and_no_flag(self):
+        self.cpu.flags = 0x0FD7
+        self.call(0x03, bx=0x0000)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.SI], cpu.r[CPU.DI], cpu.flags), (0, 0x3333, 0x4444, 0x0FD7))
+
+    def test_set_cursor_and_shape_change_no_register_and_no_flag(self):
+        self.cpu.flags = 0x0FD7
+        self.call(0x02, bx=0x0100, dx=0x0506)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.flags),
+                         (0x0200, 0x0100, 0x2222, 0x0506, 0x0FD7))
+        self.call(0x01, cx=0x0506)
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.DX], cpu.flags), (0x0100, 0x1111, 0x0FD7))
+
+    def test_a_page_that_does_not_exist_stops_the_emulator(self):
+        for ah in (0x02, 0x03, 0x08, 0x09, 0x0A):
+            with self.assertRaises(NotImplementedError, msg=hex(ah)):
+                self.call(ah, bx=0x0800)
+
+    def test_read_the_character_and_the_attribute_at_the_cursor(self):
+        self.cpu.mem[0xB8000 + (3 * 80 + 7) * 2:0xB8000 + (3 * 80 + 7) * 2 + 2] = bytes([0x41, 0x1F])
+        self.put_cursor(3, 7)
+        self.call(0x08, al=0x77, bx=0x0000)
+        self.assertEqual((self.cpu.get8(0), self.cpu.get8(4)), (0x41, 0x1F))
+
+    def test_reading_goes_by_the_page_and_the_ends_of_the_screen_are_there(self):
+        for page, row, column in ((0, 0, 0), (0, 24, 79), (1, 0, 0), (7, 24, 79), (3, 12, 40)):
+            address = 0xB8000 + page * 0x1000 + (row * 80 + column) * 2
+            self.cpu.mem[address:address + 2] = bytes([0x30 + page, 0x70 + row % 16])
+            self.put_cursor(row, column, page)
+            self.call(0x08, bx=page << 8)
+            self.assertEqual((self.cpu.get8(0), self.cpu.get8(4)), (0x30 + page, 0x70 + row % 16), (page, row, column))
+
+    def test_reading_changes_no_register_but_ax_and_no_flag(self):
+        self.cpu.flags = 0x0FD7
+        self.call(0x08, bx=0x0000)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.flags), (0, 0x2222, 0x1111, 0x0FD7))
+
+    def test_reading_with_the_cursor_outside_the_screen_stops_the_emulator(self):
+        for row, column in ((25, 0), (0, 80), (24, 80), (255, 255)):
+            self.put_cursor(row, column)
+            with self.assertRaises(NotImplementedError, msg=(row, column)):
+                self.call(0x08)
+
+    def test_write_a_character_with_an_attribute_at_the_cursor_and_the_cursor_stays(self):
+        self.put_cursor(2, 5)
+        self.call(0x09, al=0x58, bx=0x001E, cx=1)
+        self.assertEqual(self.cell(2, 5), (0x58, 0x1E))
+        self.assertEqual(self.cell(2, 6), (0x20, 0x07))
+        self.call(0x03)
+        self.assertEqual((self.cpu.get8(6), self.cpu.get8(2)), (2, 5))
+
+    def test_write_it_several_times_in_a_row(self):
+        self.put_cursor(2, 5)
+        self.call(0x09, al=0x2D, bx=0x0070, cx=6)
+        self.assertEqual([self.cell(2, c) for c in range(4, 13)],
+                         [(0x20, 0x07)] + [(0x2D, 0x70)] * 6 + [(0x20, 0x07)] * 2)
+
+    def test_it_goes_on_into_the_next_line_and_stops_at_the_end_of_the_page(self):
+        self.put_cursor(23, 75)
+        self.call(0x09, al=0x23, bx=0x0007, cx=0x3000)  # far more than is left
+        self.assertEqual(self.cell(23, 74), (0x20, 0x07))
+        self.assertEqual([self.cell(23, c) for c in (75, 79)], [(0x23, 0x07)] * 2)
+        self.assertEqual([self.cell(24, c) for c in (0, 79)], [(0x23, 0x07)] * 2)
+        self.assertEqual(self.cell(0, 0, page=1), (0x20, 0x07))  # not into the next page: it is blank as it was
+        self.assertEqual(self.cpu.mem[0xB8000 + 4000:0xB8000 + 4096], bytes([0x20, 0x07] * 48))  # nor the rest of it
+
+    def test_every_character_code_0_to_255_is_kept_as_it_is(self):
+        for code in range(256):
+            self.put_cursor(code // 80, code % 80)
+            self.call(0x09, al=code, bx=0x0007, cx=1)
+            self.assertEqual(self.cell(code // 80, code % 80), (code, 0x07), code)
+            self.call(0x08, bx=0x0000)
+            self.assertEqual(self.cpu.get8(0), code)
+
+    def test_nothing_is_written_for_a_count_of_0(self):
+        self.put_cursor(1, 1)
+        self.call(0x09, al=0x41, bx=0x0007, cx=0)
+        self.call(0x0A, al=0x41, bx=0x0000, cx=0)
+        self.assertEqual(self.cell(1, 1), (0x20, 0x07))
+
+    def test_writing_goes_by_the_page(self):
+        self.put_cursor(4, 4, page=3)
+        self.call(0x09, al=0x5A, bx=0x0320, cx=2)
+        self.assertEqual([self.cell(4, 4, 3), self.cell(4, 5, 3)], [(0x5A, 0x20)] * 2)
+        self.assertEqual(self.cell(4, 4, 0), (0x20, 0x07))
+        self.assertEqual(self.cell(4, 4, 2), (0x20, 0x07))
+
+    def test_the_other_form_changes_the_character_and_leaves_the_attribute(self):
+        self.put_cursor(5, 5)
+        self.call(0x09, al=0x41, bx=0x004E, cx=3)
+        self.call(0x0A, al=0x42, bx=0x00FF, cx=2)  # BL means nothing here
+        self.assertEqual([self.cell(5, c) for c in (5, 6, 7)], [(0x42, 0x4E), (0x42, 0x4E), (0x41, 0x4E)])
+
+    def test_writing_changes_no_register_and_no_flag(self):
+        self.cpu.flags = 0x0FD7
+        self.put_cursor(0, 0)
+        self.call(0x09, al=0x41, bx=0x0007, cx=1)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.flags), (0x0941, 0x0007, 1, 0x0FD7))
+
+    def test_writing_with_the_cursor_outside_the_screen_stops_the_emulator(self):
+        self.put_cursor(25, 0)
+        with self.assertRaises(NotImplementedError):
+            self.call(0x09, al=0x41, bx=0x0007, cx=1)
+
+    def test_in_the_graphics_mode_reading_and_writing_characters_stop_the_emulator(self):
+        self.call(0x00, al=0x12)
+        for ah in (0x08, 0x09, 0x0A):
+            with self.assertRaises(NotImplementedError, msg=hex(ah)):
+                self.call(ah)
+
+    def test_a_mode_set_puts_the_cursors_and_the_shape_back(self):
+        self.put_cursor(9, 9, page=4)
+        self.call(0x01, cx=0x0F0F)
+        self.call(0x00, al=0x03)
+        self.assertEqual(bytes(self.cpu.mem[0x450:0x460]), bytes(16))
+        self.assertEqual(self.cpu.rw(0x40, 0x60), 0x0607)
+
+    def test_the_graphics_mode_has_30_rows_of_16_scan_lines_and_the_text_mode_25(self):
+        self.call(0x00, al=0x12)
+        self.assertEqual((self.cpu.mem[0x484], self.cpu.rw(0x40, 0x85)), (29, 16))
+        self.call(0x00, al=0x03)
+        self.assertEqual((self.cpu.mem[0x484], self.cpu.rw(0x40, 0x85)), (24, 16))
+
+    def test_the_cursor_functions_work_in_the_graphics_mode_too_as_they_only_keep_numbers(self):
+        self.call(0x00, al=0x12)
+        self.put_cursor(10, 20)
+        self.call(0x03)
+        self.assertEqual((self.cpu.get8(6), self.cpu.get8(2)), (10, 20))
 
 
 if __name__ == "__main__":
