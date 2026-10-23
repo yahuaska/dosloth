@@ -2107,5 +2107,161 @@ class TestConsoleInputWithoutEcho(unittest.TestCase):
         self.assertEqual(self.call(cpu=other)[0], 0x61)
 
 
+class TestSeek(FileFunctionsTest):
+    """INT 21h AH=42h: move the position in the file of a handle; DX:AX is the new one."""
+
+    def open(self, name="NOTES.TXT", mode=2):
+        self.call(0x3D00 | mode, name)
+        self.assertIsNone(self.failed())
+        return self.cpu.r[CPU.AX]
+
+    def seek(self, handle, whence, distance):
+        """Seek and give back (the error or None, the position as DX:AX)."""
+        distance &= 0xFFFFFFFF
+        self.call(0x4200 | whence, bx=handle, cx=distance >> 16, dx=distance & 0xFFFF)
+        return self.failed(), self.cpu.r[CPU.DX] << 16 | self.cpu.r[CPU.AX]
+
+    def read(self, handle, count):
+        self.call(0x3F00, bx=handle, cx=count, dx=0x0100)
+        return bytes(self.cpu.rb(0x2000, 0x0100 + i) for i in range(self.cpu.r[CPU.AX]))
+
+    def test_from_the_start(self):
+        handle = self.open()
+        self.assertEqual(self.seek(handle, 0, 4), (None, 4))
+        self.assertEqual(self.read(handle, 3), b" no")
+        self.assertEqual(self.seek(handle, 0, 0), (None, 0))
+        self.assertEqual(self.read(handle, 4), b"some")
+
+    def test_from_where_it_is_with_a_distance_in_either_direction(self):
+        handle = self.open()
+        self.read(handle, 3)
+        self.assertEqual(self.seek(handle, 1, 0), (None, 3))  # where am I?
+        self.assertEqual(self.seek(handle, 1, 2), (None, 5))
+        self.assertEqual(self.seek(handle, 1, -2), (None, 3))
+        self.assertEqual(self.read(handle, 2), b"e ")
+
+    def test_from_the_end(self):
+        handle = self.open()
+        self.assertEqual(self.seek(handle, 2, 0), (None, 10))
+        self.assertEqual(self.seek(handle, 2, -3), (None, 7))
+        self.assertEqual(self.read(handle, 10), b"tes")
+        self.assertEqual(self.seek(handle, 2, -10), (None, 0))
+
+    def test_asking_where_it_is_does_not_move_it(self):
+        handle = self.open()
+        self.read(handle, 4)
+        for _ in range(3):
+            self.assertEqual(self.seek(handle, 1, 0), (None, 4))
+        self.assertEqual(self.read(handle, 2), b" n")
+
+    def test_the_idiom_for_the_size_of_a_file_and_back(self):
+        handle = self.open()
+        self.read(handle, 2)
+        self.assertEqual(self.seek(handle, 2, 0), (None, 10))  # the size
+        self.assertEqual(self.seek(handle, 0, 0), (None, 0))  # back to the start
+
+    def test_past_the_end_is_all_right_and_a_read_there_finds_nothing(self):
+        handle = self.open()
+        self.assertEqual(self.seek(handle, 2, 5), (None, 15))
+        self.assertEqual(self.read(handle, 4), b"")
+        self.assertEqual(self.seek(handle, 0, 1000), (None, 1000))
+        self.assertEqual(self.read(handle, 4), b"")
+
+    def test_a_write_past_the_end_makes_the_gap_zeros(self):
+        for name in ("D:\\GAP", "GAP.BIN"):
+            self.call(0x3C00, name)
+            handle = self.cpu.r[CPU.AX]
+            self.assertEqual(self.seek(handle, 0, 5), (None, 5))
+            self.call(0x4000, "x", bx=handle, cx=1)
+            self.assertEqual(self.seek(handle, 2, 0), (None, 6))
+            self.assertEqual(self.seek(handle, 0, 0), (None, 0))
+            self.assertEqual(self.read(handle, 10), b"\0\0\0\0\0x", name)
+
+    def test_before_the_start_is_error_131_and_the_file_stays_where_it_was(self):
+        handle = self.open()
+        self.read(handle, 4)
+        for whence, distance in ((0, -1), (0, -0x7FFFFFFF - 1), (1, -5), (2, -11), (2, -0x7FFFFFFF)):
+            self.assertEqual(self.seek(handle, whence, distance)[0], 131, (whence, distance))
+            self.assertEqual(self.cpu.r[CPU.AX], 131)
+            self.assertEqual(self.seek(handle, 1, 0), (None, 4), (whence, distance))
+
+    def test_exactly_the_start_and_exactly_the_end_are_all_right(self):
+        handle = self.open()
+        self.read(handle, 4)
+        self.assertEqual(self.seek(handle, 1, -4), (None, 0))
+        self.assertEqual(self.seek(handle, 2, -10), (None, 0))
+        self.assertEqual(self.seek(handle, 1, 10), (None, 10))
+
+    def test_big_distances_come_back_in_dx_and_ax(self):
+        self.call(0x3C00, "D:\\BIG")
+        handle = self.cpu.r[CPU.AX]
+        self.assertEqual(self.seek(handle, 0, 0x00012345), (None, 0x00012345))
+        self.assertEqual((self.cpu.r[CPU.DX], self.cpu.r[CPU.AX]), (0x0001, 0x2345))
+        self.assertEqual(self.seek(handle, 1, 0x00010000), (None, 0x00022345))
+        self.assertEqual(self.seek(handle, 1, -0x00020000), (None, 0x00002345))
+
+    def test_a_position_over_4_gb_goes_round_to_the_start_of_32_bits(self):
+        self.call(0x3C00, "D:\\WRAP")
+        handle = self.cpu.r[CPU.AX]
+        self.seek(handle, 0, 0x7FFFFFFF)
+        self.seek(handle, 1, 0x7FFFFFFF)  # 0xFFFFFFFE
+        self.assertEqual(self.seek(handle, 1, 0), (None, 0xFFFFFFFE))
+        self.assertEqual(self.seek(handle, 1, 4), (None, 2))  # 0x100000002
+        self.assertEqual((self.cpu.r[CPU.DX], self.cpu.r[CPU.AX]), (0, 2))
+
+    def test_a_whence_that_is_not_0_1_or_2_is_error_1_and_the_file_stays(self):
+        handle = self.open()
+        self.read(handle, 3)
+        for whence in (3, 4, 0x7F, 0xFF):
+            self.assertEqual(self.seek(handle, whence, 2)[0], 1, whence)
+            self.assertEqual(self.cpu.r[CPU.AX], 1)
+        self.assertEqual(self.seek(handle, 1, 0), (None, 3))
+
+    def test_the_handles_that_are_not_open_are_error_6(self):
+        handle = self.open()
+        self.call(0x3E00, bx=handle)
+        for number in (handle, 6, 19, 20, 0xFFFF):
+            self.assertEqual(self.seek(number, 0, 0)[0], 6, number)
+
+    def test_the_console_and_the_devices_have_no_position_to_move(self):
+        for number in (0, 1, 2, 3, 4):
+            with self.assertRaises(NotImplementedError, msg=number):
+                self.seek(number, 0, 0)
+
+    def test_each_handle_of_a_file_has_a_position_of_its_own(self):
+        first, second = self.open(), self.open()
+        self.seek(first, 0, 6)
+        self.assertEqual(self.seek(second, 1, 0), (None, 0))
+        self.assertEqual(self.read(second, 4), b"some")
+        self.assertEqual(self.read(first, 4), b"otes")
+
+    def test_it_works_on_a_file_of_the_memory_disk_as_on_one_of_the_host(self):
+        self.call(0x3C00, "D:\\M")
+        handle = self.cpu.r[CPU.AX]
+        self.call(0x4000, "abcdefgh", bx=handle, cx=8)
+        self.assertEqual(self.seek(handle, 1, 0), (None, 8))
+        self.assertEqual(self.seek(handle, 0, 2), (None, 2))
+        self.assertEqual(self.read(handle, 3), b"cde")
+        self.assertEqual(self.seek(handle, 2, -1), (None, 7))
+
+    def test_the_registers_bx_cx_and_the_flags_but_the_carry_are_left_alone(self):
+        handle = self.open()
+        self.cpu.set_flag(flags.ZF, True)
+        self.cpu.set_flag(flags.CF, True)
+        self.call(0x4200, bx=handle, cx=0, dx=3)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX]), (handle, 0))
+        self.assertTrue(cpu.get_flag(flags.ZF))
+        self.assertFalse(cpu.get_flag(flags.CF))
+        self.assertEqual((cpu.r[CPU.DX], cpu.r[CPU.AX]), (0, 3))
+        self.assertEqual(cpu.get8(4), 0)  # AH = 0: AX holds the position
+
+    def test_a_failed_seek_leaves_dx_alone(self):
+        handle = self.open()
+        self.call(0x4200, bx=handle, cx=0xFFFF, dx=0xFFFF)
+        self.assertEqual(self.cpu.r[CPU.DX], 0xFFFF)  # what it was: the call put the distance there
+        self.assertTrue(self.cpu.get_flag(flags.CF))
+
+
 if __name__ == "__main__":
     unittest.main()

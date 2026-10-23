@@ -5,7 +5,7 @@ from pathlib import Path
 
 from . import flags
 from .config import default as default_config
-from .cpu import CPU, Exit
+from .cpu import CPU, Exit, signed
 from .filesystem import (ACCESS_DENIED, ATTR_DIRECTORY, ATTR_READONLY, ATTR_VOLUME, FILE_NOT_FOUND, PATH_NOT_FOUND,
                          FsError)
 from .handles import Console, HandleTable, NullDevice, OpenFile
@@ -20,6 +20,7 @@ DEVICE_INFO = 0x80C0  # the IOCTL answer for the auxiliary and printer devices: 
 TOO_MANY_OPEN_FILES = 4
 INVALID_ACCESS_CODE = 0x0C
 INVALID_FUNCTION = 1
+NEGATIVE_SEEK = 131  # an attempt to move the position of a file to before its start
 NO_MORE_FILES = 18
 INVALID_HANDLE = 6
 MSCDEX_MAGIC = 0xADAD  # what MSCDEX puts in BX to say that it is there
@@ -139,8 +140,8 @@ def boot_drive(config):
 def int21(cpu, state):
     """INT 21h: DOS services, selected by AH.
 
-    So far 06h, 08h, 09h, 0Eh, 19h, 1Ah, 25h, 2Ch, 2Fh, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 43h, 44h, 4Ah, 4Ch, 4Eh,
-    4Fh, 63h.
+    So far 06h, 08h, 09h, 0Eh, 19h, 1Ah, 25h, 2Ch, 2Fh, 30h, 33h, 35h, 3Ch, 3Dh, 3Eh, 3Fh, 40h, 42h, 43h, 44h, 4Ah, 4Ch,
+    4Eh, 4Fh, 63h.
     """
     ah = cpu.get8(4)
     if ah == 0x09:  # print $-terminated string at DS:DX
@@ -305,6 +306,35 @@ def int21(cpu, state):
                 stream.flush()
             cpu.r[CPU.AX] = count
             cpu.set_flag(flags.CF, False)
+    elif ah == 0x42:  # move the position in the file of handle BX; DX:AX = the new position
+        # AL = from where: 0 the start of the file, 1 where it is now, 2 the end of the file. CX:DX = how far, a
+        # signed number of 32 bits. A position past the end is all right: a read finds nothing there, and a write
+        # makes the gap zeros. A position before the start is not: error 131, and the file stays where it was.
+        entry = state.handles.get(cpu.r[CPU.BX])
+        whence = cpu.get8(0)
+        if entry is None:
+            cpu.set_flag(flags.CF, True)
+            cpu.r[CPU.AX] = INVALID_HANDLE
+        elif not isinstance(entry, OpenFile):  # the console and the devices have no position
+            raise NotImplementedError(f"INT 21h AH=42 on the handle {cpu.r[CPU.BX]}: {type(entry).__name__}")
+        elif whence > 2:
+            cpu.set_flag(flags.CF, True)
+            cpu.r[CPU.AX] = INVALID_FUNCTION
+        else:
+            before = entry.file.tell()
+            base = (0, before, None)[whence]
+            if base is None:
+                base = entry.file.seek(0, 2)
+            target = base + signed(cpu.r[CPU.CX] << 16 | cpu.r[CPU.DX], 32)
+            if target < 0:
+                entry.file.seek(before)
+                cpu.set_flag(flags.CF, True)
+                cpu.r[CPU.AX] = NEGATIVE_SEEK
+            else:
+                target &= 0xFFFFFFFF
+                entry.file.seek(target)
+                cpu.r[CPU.AX], cpu.r[CPU.DX] = target & 0xFFFF, target >> 16
+                cpu.set_flag(flags.CF, False)
     elif ah == 0x43:  # file attributes, by name at DS:DX: AL=0 get them into CX, AL=1 set them from CX
         al = cpu.get8(0)
         if al not in (0, 1):
