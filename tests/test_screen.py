@@ -265,6 +265,43 @@ class TestMonitor(unittest.TestCase):
         self.monitor.close()
         self.assertEqual((self.first.calls, self.second.calls), (["close"], ["close"]))
 
+    def test_the_hook_is_called_at_every_tick_after_the_displays_were_looked_after(self):
+        calls = []
+        self.monitor.hook = lambda inside: calls.append((inside, list(self.first.calls)))
+        self.monitor.tick()
+        self.monitor.tick()
+        self.assertEqual(calls, [(False, ["poll"]), (False, ["poll", "poll"])])
+
+    def test_a_tick_from_a_program_that_waits_says_so_to_the_hook(self):
+        calls = []
+        self.monitor.hook = calls.append
+        self.monitor.tick(inside=True)
+        self.assertEqual(calls, [True])
+
+    def test_waiting_for_a_key_ticks_inside_and_ends_when_there_is_a_key(self):
+        calls = []
+        keyboard = Keyboard()
+
+        def hook(inside):
+            calls.append(inside)
+            if len(calls) == 3:
+                keyboard.press(0x1E, 0x61)
+        self.monitor.hook = hook
+        self.monitor.wait_for_key(keyboard)
+        self.assertEqual(calls, [True, True, True])
+
+    def test_a_hook_that_is_not_there_is_not_called(self):
+        self.assertIsNone(self.monitor.hook)
+        self.monitor.tick()
+
+    def test_a_closed_window_stops_the_program_before_the_hook_is_called(self):
+        calls = []
+        self.monitor.hook = calls.append
+        self.first.closed = True
+        with self.assertRaises(Exit):
+            self.monitor.tick()
+        self.assertEqual(calls, [])
+
     def test_no_displays_at_all_is_fine(self):
         monitor = Monitor(self.card, [])
         self.card.write_memory(0, 1)

@@ -34,14 +34,16 @@ class TkWindow(Display):
     # the button numbers of Tk (1 left, 2 middle, 3 right) and their bits in a mask
     BUTTON_BITS = {1: 0b001, 3: 0b010, 2: 0b100}
 
-    def __init__(self, press, pointer=None, title="mydos", hidden=False):
-        """Open the window. `hidden` keeps it off the screen, for tests. Raises WindowError when it cannot be done."""
+    def __init__(self, press, pointer=None, title="mydos", hidden=False, save=None):
+        """Open the window. `hidden` keeps it off the screen, for tests. `save()` is called when F12 is pressed, a key
+        that the program does not get. Raises WindowError when it cannot be done."""
         try:
             import tkinter
         except ImportError:
             raise WindowError("this Python has no tkinter") from None
         self.press = press
         self.pointer = pointer
+        self.save = save
         self.buttons = 0  # the buttons that are down
         try:
             self.root = tkinter.Tk()
@@ -70,6 +72,9 @@ class TkWindow(Display):
             self.root.focus_force()
 
     def on_key(self, event):
+        if event.keysym == "F12" and self.save is not None:
+            self.save()
+            return
         key = keys.to_bios(event.keysym, event.char)
         if key is not None:
             self.press(*key)

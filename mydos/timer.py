@@ -112,10 +112,11 @@ class Timer:
 
 
 def install(cpu, ticks_per_instruction=TICKS_PER_INSTRUCTION):
-    """Put a timer on ports 40h-43h of the CPU. Its clock is the CPU's count of executed instructions."""
+    """Put a timer on ports 40h-43h of the CPU. Its clock is the CPU's count of executed instructions. Returns it."""
     timer = Timer(lambda: cpu.instructions * ticks_per_instruction)
     for port in (0x40, 0x41, 0x42):
         cpu.port_readers[port] = timer.read
     for port in (0x40, 0x41, 0x42, 0x43):  # the control port can only be written
         cpu.port_writers[port] = timer.write
+    return timer
     return timer

@@ -178,6 +178,14 @@ class TestOnTheCpu(unittest.TestCase):
             cpu.step()
         self.assertEqual(cpu.instructions, 3)
 
+    def test_install_gives_the_timer_for_whoever_wants_to_look_at_it(self):
+        cpu = CPU()
+        chip = timer.install(cpu)
+        self.assertIsInstance(chip, timer.Timer)
+        self.assertEqual(len(chip.counters), 3)
+        cpu.instructions = 100
+        self.assertEqual(chip.now(), 100 * timer.TICKS_PER_INSTRUCTION)
+
     def test_the_ports_are_wired_and_the_control_port_cannot_be_read(self):
         cpu = CPU()
         timer.install(cpu)

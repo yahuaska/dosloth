@@ -467,6 +467,29 @@ class MemFs:
         _check_settable(attributes)
         node.readonly = bool(attributes & ATTR_READONLY)
 
+    def dump(self):
+        """The whole tree as plain data, to be saved with the rest of the machine (see snapshot.py)."""
+        def data_of(node):
+            if isinstance(node, _Directory):
+                children = {name: data_of(child) for name, child in node.children.items()}
+                return {"mtime": node.mtime, "children": children}
+            return {"data": bytearray(node.data), "mtime": node.mtime, "readonly": node.readonly}
+        return data_of(self.root)
+
+    def load(self, data):
+        """Make the tree what `dump` gave once. What was in it is gone."""
+        def node_of(item):
+            if "children" in item:
+                directory = _Directory()
+                directory.mtime = item["mtime"]
+                directory.children = {name: node_of(child) for name, child in item["children"].items()}
+                return directory
+            file = _File()
+            file.data = bytearray(item["data"])
+            file.mtime, file.readonly = item["mtime"], item["readonly"]
+            return file
+        self.root = node_of(data)
+
     def free_space(self):
         def used(directory):
             return sum(used(node) if isinstance(node, _Directory) else len(node.data)

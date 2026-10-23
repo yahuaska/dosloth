@@ -213,6 +213,7 @@ class TestTheDumpOfACrash(CommandLineTest):
         self.assertIn("NotImplementedError", result.stderr)
         self.assertTrue((self.dir / "sub" / "Prog.Com.crash.json").exists())
         self.assertTrue((self.dir / "sub" / "Prog.Com.crash.mem").exists())
+        self.assertTrue((self.dir / "sub" / "Prog.Com.crash.state").exists())
         self.assertEqual(sorted(os.listdir(self.dir)), ["sub"])  # and nowhere else
 
 
@@ -310,7 +311,7 @@ class TestTheDumpOfACrashOnACdRom(CommandLineTest):
         self.assertIn("NotImplementedError", result.stderr)
         self.assertNotIn("OSError", result.stderr)
         self.assertIn("the directory of the program cannot be written to", result.stderr)
-        self.assertEqual(sorted(os.listdir(self.here)), ["T.COM.crash.json", "T.COM.crash.mem"])
+        self.assertEqual(sorted(os.listdir(self.here)), ["T.COM.crash.json", "T.COM.crash.mem", "T.COM.crash.state"])
         self.assertEqual(sorted(os.listdir(self.disc)), ["T.COM"])
 
 
@@ -345,3 +346,110 @@ class TestTheEquipmentOfTheMachine(CommandLineTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGoingOnFromAState(CommandLineTest):
+    """The state of the machine, saved by F12 or by a crash, is what a run can go on from (-r)."""
+
+    def machine_with(self, code, steps):
+        """A machine that has run `steps` instructions of the program `code`, as the emulator would load it."""
+        from mydos import config as settings, dos, loader, machine, psp
+        from mydos.psp import ENV_SEG, PSP_SEG
+        from mydos.volumes import Volumes
+        computer = machine.build(Volumes(settings.default(self.dir)))
+        psp.build(computer.cpu, PSP_SEG, ENV_SEG, dos.MEMORY_TOP_SEG, "C:\\T.COM")
+        loader.load(computer.cpu, code, PSP_SEG)
+        for _ in range(steps):
+            computer.cpu.step()
+        return computer
+
+    def test_the_program_goes_on_where_it_was_with_what_it_had(self):
+        from mydos import snapshot
+        # mov al,7 ; mov ah,4Ch ; int 21h     the exit code is what AL had
+        code = bytes([0xB0, 0x07, 0xB4, 0x4C, 0xCD, 0x21])
+        computer = self.machine_with(code, 1)
+        snapshot.save(str(self.dir / "t.state"), computer)
+        result = self.run_emulator("-r", "t.state")
+        self.assertEqual((result.returncode, result.stderr), (7, ""))
+
+    def test_the_same_state_can_be_gone_on_from_again_and_again(self):
+        from mydos import snapshot
+        computer = self.machine_with(bytes([0xB0, 0x09, 0xB4, 0x4C, 0xCD, 0x21]), 1)
+        snapshot.save(str(self.dir / "t.state"), computer)
+        for _ in range(2):
+            self.assertEqual(self.run_emulator("-r", "t.state").returncode, 9)
+
+    def test_a_crash_leaves_a_state_to_go_on_from_at_the_instruction_that_failed(self):
+        from mydos import snapshot
+        self.program(bytes([0xB0, 0x07]) + CRASH)  # mov al,7 ; and then an opcode that is not there
+        result = self.run_emulator("t.com")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("state saved: " + str(self.dir / "t.com.crash.state"), result.stderr)
+        self.assertTrue((self.dir / "t.com.crash.state").exists())
+        computer = self.machine_with(b"", 0)
+        snapshot.load(str(self.dir / "t.com.crash.state"), computer)
+        self.assertEqual((computer.cpu.ip, computer.cpu.instructions), (0x102, 1))  # at the opcode, after the mov
+        self.assertEqual(computer.cpu.get8(0), 7)
+        self.assertEqual(computer.program, str(self.dir / "t.com"))
+
+    def test_the_state_of_a_crash_fails_the_same_way_until_the_missing_piece_is_there(self):
+        self.program(CRASH)
+        first = self.run_emulator("t.com")
+        again = self.run_emulator("-r", "t.com.crash.state")
+        self.assertEqual(again.returncode, 1)
+        self.assertIn("NotImplementedError", again.stderr)
+
+        def error_line(result):
+            return [line for line in result.stderr.splitlines() if line.startswith("NotImplementedError")]
+        self.assertEqual(error_line(again), error_line(first))
+        self.assertTrue(error_line(first))
+        self.assertTrue((self.dir / "t.com.crash.state").exists())  # a new one, named after the first run's program
+
+    def test_a_state_that_was_moved_still_names_its_program_for_the_next_crash(self):
+        self.program(CRASH)
+        self.run_emulator("t.com")
+        (self.dir / "t.com.crash.state").rename(self.dir / "moved.state")
+        result = self.run_emulator("-r", "moved.state")
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue((self.dir / "t.com.crash.state").exists())
+        self.assertFalse((self.dir / "moved.state.crash.state").exists())
+        self.assertTrue((self.dir / "t.com.crash.json").exists())
+
+    def test_a_program_and_a_state_together_or_neither_are_a_mistake(self):
+        for arguments in (("-r", "x.state", "t.com"), ()):
+            result = self.run_emulator(*arguments)
+            self.assertEqual(result.returncode, 2, arguments)
+            self.assertIn("a state to go on from (-r)", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_a_state_that_is_not_there_or_not_a_state_is_said_in_plain_words(self):
+        (self.dir / "junk.state").write_bytes(b"junk")
+        for name in ("missing.state", "junk.state"):
+            result = self.run_emulator("-r", name)
+            self.assertEqual(result.returncode, 2, name)
+            self.assertIn(f"cannot read the snapshot {name}", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_a_state_made_with_other_drives_is_refused_by_the_drives_it_names(self):
+        from mydos import snapshot
+        computer = self.machine_with(bytes([0xB4, 0x4C, 0xCD, 0x21]), 0)
+        snapshot.save(str(self.dir / "t.state"), computer)
+        other = self.config("[disks.C]\ntype = 'hdd'\n[mounts]\nC = { type = 'dir', path = '.' }\n")
+        result = self.run_emulator("-c", other, "-r", "t.state")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("other drives", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_a_file_that_was_open_and_is_gone_is_said_by_name(self):
+        from mydos import snapshot
+        (self.dir / "DATA.TXT").write_bytes(b"data")
+        # mov ax,3D00h ; mov dx,0109h ; int 21h ; nop ; the name follows
+        code = bytes([0xB8, 0x00, 0x3D, 0xBA, 0x09, 0x01, 0xCD, 0x21, 0x90]) + b"DATA.TXT\0"
+        computer = self.machine_with(code, 3)
+        self.assertIsNotNone(computer.state.handles.get(5))
+        snapshot.save(str(self.dir / "t.state"), computer)
+        computer.state.handles.close_all()
+        (self.dir / "DATA.TXT").unlink()
+        result = self.run_emulator("-r", "t.state")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("cannot open C:\\DATA.TXT again", result.stderr)

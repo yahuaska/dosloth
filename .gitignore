@@ -1,5 +1,6 @@
 __pycache__/
 *.crash.json
 *.crash.mem
+*.state
 /samples/*
 !/samples/README.md

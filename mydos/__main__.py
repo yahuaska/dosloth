@@ -2,7 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import bios, config, disasm, dos, dump, loader, mouse, psp, screen, timer, vga
+from . import config, disasm, dos, dump, loader, machine, psp, screen, snapshot
 from .cpu import CPU
 from .display import PngFile
 from .window import TkWindow, WindowError
@@ -45,48 +45,64 @@ def main():
     parser.add_argument("-s", metavar="PNGFILE", help="show the screen in this PNG file: written again whenever the "
                         "picture has changed, and at the end, also after a crash")
     parser.add_argument("-w", action="store_true", help="show the screen in a window; the keys typed in it go to "
-                        "the program. Closing the window stops the program")
-    parser.add_argument("program", help="the .COM or .EXE file to run, named as DOS names it: `ESETUP.EXE`, "
-                        "`C:\\SETUP\\ESETUP.EXE`, `setup/esetup.exe`; relative to the current directory of the "
-                        "starting drive (the `cwd` of the configuration)")
+                        "the program. Closing the window stops the program. F12 saves the state of the machine "
+                        "beside the program, as PROGRAM.state")
+    parser.add_argument("-r", metavar="STATE", help="go on from a saved state (PROGRAM.state from F12, or "
+                        "PROGRAM.crash.state that a crash leaves) instead of starting a program; use the same "
+                        "configuration as when it was saved")
+    parser.add_argument("program", nargs="?", help="the .COM or .EXE file to run, named as DOS names it: "
+                        "`ESETUP.EXE`, `C:\\SETUP\\ESETUP.EXE`, `setup/esetup.exe`; relative to the current directory "
+                        "of the starting drive (the `cwd` of the configuration)")
     args = parser.parse_args()
+    if bool(args.program) == bool(args.r):
+        parser.error("name a program to run, or a state to go on from (-r), and not both")
     try:
-        machine = config.load(args.c) if args.c else config.default(Path.cwd())
+        settings = config.load(args.c) if args.c else config.default(Path.cwd())
     except config.ConfigError as error:
         parser.error(str(error))  # prints the message with the usage and exits with status 2, before anything runs
 
-    volumes = Volumes(machine)
-    try:
-        where = volumes.resolve(args.program)
-        with where.filesystem.open(where.parts) as program:
-            data = program.read()
-    except FsError as error:
-        # not found, not a file, or on a drive that is not there or has nothing in it
-        parser.error(f"cannot run {args.program}: {error} (the program is named as DOS names a file, from the "
-                     "starting directory; to run one that is elsewhere on the host, mount its directory with -c)")
+    volumes = Volumes(settings)
+    data = where = None
+    if args.program:
+        try:
+            where = volumes.resolve(args.program)
+            with where.filesystem.open(where.parts) as program:
+                data = program.read()
+        except FsError as error:
+            # not found, not a file, or on a drive that is not there or has nothing in it
+            parser.error(f"cannot run {args.program}: {error} (the program is named as DOS names a file, from the "
+                         "starting directory; to run one that is elsewhere on the host, mount its directory with -c)")
     # the dump of a crash goes beside the program on the host, when the program is there
     host_path = args.program
-    if hasattr(where.filesystem, "host_path"):
+    if where is not None and hasattr(where.filesystem, "host_path"):
         host_path = str(where.filesystem.host_path(where.parts))
 
-    cpu = CPU()
-    keyboard = bios.install(cpu, machine)
-    dos.install(cpu, volumes)
-    timer.install(cpu)
-    card = vga.install(cpu)
-    pointer = mouse.install(cpu)
+    computer = machine.build(volumes)
+    cpu = computer.cpu
+    if args.r:
+        try:
+            snapshot.load(args.r, computer)
+        except snapshot.SnapshotError as error:
+            parser.error(str(error))
+        host_path = computer.program or args.r
+    else:
+        computer.program = host_path
+    quick_save = snapshot.QuickSave(computer)
     displays = []
     if args.s:
         displays.append(PngFile(args.s))
     if args.w:
         try:
-            displays.append(TkWindow(keyboard.press, pointer.update))
+            displays.append(TkWindow(computer.keyboard.press, computer.mouse.update, save=quick_save.ask))
         except WindowError as error:
             parser.error(f"cannot open a window: {error}")
-    monitor = screen.Monitor(card, displays) if displays else None
+    monitor = screen.Monitor(computer.card, displays) if displays else None
+    if monitor:
+        monitor.hook = quick_save
     if args.w:  # only a window has keys to give, so only with one can a program wait for a key
-        keyboard.waiter = lambda: monitor.wait_for_key(keyboard)
-    load(cpu, data, where.dos_path())
+        computer.keyboard.waiter = lambda: monitor.wait_for_key(computer.keyboard)
+    if not args.r:
+        load(cpu, data, where.dos_path())
     log = open(args.d, "w") if args.d else None
     if log:
         cpu.trace = make_trace(log)
@@ -94,6 +110,7 @@ def main():
         code = cpu.run(TICK_EVERY, monitor.tick) if monitor else cpu.run()
     except Exception as e:
         dump.write(cpu, host_path, e)  # leave something to debug with, then fail as usual
+        snapshot.save_near(computer, host_path, ".crash.state", rewind=True)  # and a state to go on from, once fixed
         raise
     finally:
         if monitor:

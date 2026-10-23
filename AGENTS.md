@@ -27,6 +27,10 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/search.py` - the file search of INT 21h AH=4Eh/4Fh: DOS wildcard masks, the attributes a program asks for,
   the 43-byte record in the DTA, and the list of searches that are going on
 - `mydos/memory.py` - the memory blocks of INT 21h AH=48h/49h/4Ah: a list of blocks and the first gap that fits
+- `mydos/machine.py` - the CPU with BIOS, DOS, timer, video card and mouse on it (`build`), built the same way for a run
+  and for a run that goes on from a state
+- `mydos/snapshot.py` - the state of the machine saved to a zip file and put back: F12 in the window, a crash, and
+  `-r STATE`; drives must match, ROM data is written again from the code
 - `mydos/loader.py` - a .COM or .EXE put in memory at a PSP segment (the first program and the children of EXEC),
   and how much memory it asks for
 - `mydos/process.py` - INT 21h AH=4Bh (EXEC): the parent put aside, the child loaded; the end of a program
@@ -56,7 +60,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/__main__.py` - loads a .COM/.EXE and runs it: `python -m mydos tests/hello.com`;
   `-d LOGFILE` writes every executed instruction to LOGFILE, e.g. `1773:0880  8B C3  mov ax, bx`;
   `-s PNGFILE` keeps the screen in a PNG file, written again when the picture changes and at the end;
-  `-w` shows the screen in a window and takes the keys typed in it (closing the window stops the program)
+  `-w` shows the screen in a window and takes the keys typed in it (closing the window stops the program; F12 saves
+  the state as PROGRAM.state); `-r STATE` goes on from a saved state (a crash leaves PROGRAM.crash.state)
 - `tests/`        - tiny test programs (`make_hello.py` builds `hello.com`)
 
 ## Memory model

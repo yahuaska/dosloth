@@ -147,6 +147,27 @@ class TestTkWindow(unittest.TestCase):
             self.window.on_key(SimpleNamespace(keysym=keysym, char=char))
         self.assertEqual(self.keys, [(0x1C, 0x0D), (0x1E, 0x61), (0x1E, 0x41), (0x48, 0), (0x01, 0x1B)])
 
+    def test_f12_is_for_saving_the_state_and_the_program_does_not_get_it(self):
+        saved = []
+        self.window.save = lambda: saved.append(True)
+        self.window.on_key(SimpleNamespace(keysym="F12", char=""))
+        self.window.on_key(SimpleNamespace(keysym="F10", char=""))
+        self.assertEqual(saved, [True])
+        self.assertEqual(self.keys, [(0x44, 0)])  # F10 only
+
+    def test_without_anything_to_save_to_f12_does_nothing(self):
+        self.assertIsNone(self.window.save)
+        self.window.on_key(SimpleNamespace(keysym="F12", char=""))
+        self.assertEqual(self.keys, [])
+
+    def test_the_window_is_given_what_to_call_for_f12_when_it_is_made(self):
+        from mydos.window import TkWindow
+        saved = []
+        window = TkWindow(lambda scan, ascii_code: None, hidden=True, save=lambda: saved.append(1))
+        self.addCleanup(window.close)
+        window.on_key(SimpleNamespace(keysym="F12", char=""))
+        self.assertEqual(saved, [1])
+
     def test_keys_the_program_is_not_to_see_are_not_passed_on(self):
         for keysym, char in (("Shift_L", ""), ("Control_L", ""), ("Caps_Lock", ""), ("odiaeresis", "ö")):
             self.window.on_key(SimpleNamespace(keysym=keysym, char=char))

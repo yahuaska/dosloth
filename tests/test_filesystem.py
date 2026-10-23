@@ -486,6 +486,62 @@ class TestMemFs(Contract, unittest.TestCase):
     def test_the_disk_is_32_megabytes(self):
         self.assertEqual(self.fs.free_space()[0], 32 * 1024 * 1024)
 
+    def filled(self):
+        with mock.patch("mydos.filesystem.time.time", return_value=1000.0):
+            self.fs.mkdir(["D"])
+            self.fs.mkdir(["D", "E"])
+            self.put(["D", "F.TXT"], b"in a directory")
+            self.put(["TOP.DAT"], bytes(range(256)))
+            self.put(["EMPTY"], b"")
+        self.fs.set_attributes(["TOP.DAT"], ATTR_READONLY)
+
+    def test_the_tree_dumped_and_loaded_into_another_file_system_is_the_same(self):
+        self.filled()
+        other = MemFs()
+        other.load(self.fs.dump())
+        self.assertEqual(other.listdir([]), self.fs.listdir([]))
+        self.assertEqual(other.listdir(["D"]), self.fs.listdir(["D"]))
+        self.assertEqual(other.listdir(["D", "E"]), [])
+        for parts in (["D", "F.TXT"], ["TOP.DAT"], ["EMPTY"]):
+            with self.fs.open(parts) as first, other.open(parts) as second:
+                self.assertEqual(second.read(), first.read(), parts)
+        self.assertEqual(other.stat(["D"]), self.fs.stat(["D"]))  # the times too
+        self.assertEqual(other.stat(["TOP.DAT"]).attributes & ATTR_READONLY, ATTR_READONLY)
+        self.assertEqual(other.stat([]).mtime, self.fs.stat([]).mtime)
+
+    def test_loading_takes_away_what_was_there(self):
+        self.put(["OLD"], b"x")
+        other = MemFs()
+        other.mkdir(["NEW"])
+        self.fs.load(other.dump())
+        self.assertEqual([entry.name for entry in self.fs.listdir([])], ["NEW"])
+
+    def test_what_was_loaded_is_not_tied_to_the_dump(self):
+        self.filled()
+        data = self.fs.dump()
+        other = MemFs()
+        other.load(data)
+        with other.open(["TOP.DAT"], write=False):
+            pass
+        self.fs.remove(["D", "F.TXT"])
+        other.remove(["EMPTY"])
+        data["children"]["TOP.DAT"]["data"][0] = 99
+        third = MemFs()
+        third.load(self.fs.dump())
+        with third.open(["TOP.DAT"]) as file:
+            self.assertEqual(file.read()[:2], b"\0\1")
+        with other.open(["D", "F.TXT"]) as file:
+            self.assertEqual(file.read(), b"in a directory")
+
+    def test_the_dump_is_plain_data(self):
+        self.filled()
+        data = self.fs.dump()
+        self.assertEqual(sorted(data), ["children", "mtime"])
+        self.assertEqual(sorted(data["children"]), ["D", "EMPTY", "TOP.DAT"])
+        self.assertEqual(sorted(data["children"]["TOP.DAT"]), ["data", "mtime", "readonly"])
+        self.assertEqual(data["children"]["TOP.DAT"]["data"], bytearray(range(256)))
+        self.assertTrue(data["children"]["TOP.DAT"]["readonly"])
+
 
 class TestForMount(unittest.TestCase):
     def test_a_directory_mount_is_a_hostdir_and_a_tmpfs_is_a_memfs(self):

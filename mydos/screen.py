@@ -69,6 +69,7 @@ class Monitor:
     def __init__(self, card, displays):
         self.card = card
         self.displays = displays
+        self.hook = None  # a function(inside) called at every tick: `inside` is True if a program waits for a key
 
     def show(self):
         """Give every display the picture as it is now."""
@@ -77,18 +78,22 @@ class Monitor:
         for display in self.displays:
             display.present(frame)
 
-    def tick(self):
+    def tick(self, inside=False):
+        """Look after the displays. `inside` is True when this is called from a program that waits for a key, in the
+        middle of its instruction, and not between two instructions."""
         for display in self.displays:
             display.poll()
         if any(display.closed for display in self.displays):
             raise Exit(1)
         if self.card.changed:
             self.show()
+        if self.hook is not None:
+            self.hook(inside)
 
     def wait_for_key(self, keyboard):
         """Let the displays go on working until a key is in the keyboard's buffer: what INT 16h AH=00 waits for."""
         while not keyboard.buffer:
-            self.tick()
+            self.tick(inside=True)
             time.sleep(0.01)  # the person is slow, and nothing else is going on
 
     def close(self):
