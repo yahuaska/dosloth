@@ -9,6 +9,7 @@ from .cpu import CPU, Exit, signed
 from .filesystem import (ACCESS_DENIED, ATTR_DIRECTORY, ATTR_READONLY, ATTR_VOLUME, FILE_NOT_FOUND, PATH_NOT_FOUND,
                          FsError)
 from .handles import Console, HandleTable, NullDevice, OpenFile
+from .memory import Blocks
 from . import sysvars
 from .psp import DTA_OFFSET, PSP_SEG
 from .search import Searches, find, record
@@ -129,6 +130,7 @@ class DosState:
         self.break_checking = False  # the Ctrl-Break flag of AH=33h; DOS starts with it off
         self.dta = (PSP_SEG, DTA_OFFSET)  # where the disk transfer area is, as segment and offset: see AH=1Ah
         self.searches = Searches()  # the file searches that AH=4Eh began and AH=4Fh goes on with
+        self.memory = Blocks(MEMORY_TOP_SEG, PSP_SEG, MEMORY_TOP_SEG - PSP_SEG)  # the blocks AH=48h-4Ah deal in
         self.pending_scan = None  # the scan code of a key with no character, to be given by the next read of a key
 
 
@@ -393,16 +395,32 @@ def int21(cpu, state):
             fail(cpu, error)
     elif ah == 0x52:  # get the List of Lists, the inner variables of DOS (see sysvars.py), into ES:BX
         cpu.s[CPU.ES], cpu.r[CPU.BX] = sysvars.SEGMENT, sysvars.LIST_OFFSET
-    elif ah == 0x4A:  # resize the memory block that starts at segment ES to BX paragraphs
-        # Naive: we keep no list of blocks, only the top of memory. A block can grow or shrink as
-        # long as it ends below that top. (DOS error 09, "not a block", cannot be told apart yet.)
-        available = max(MEMORY_TOP_SEG - cpu.s[CPU.ES], 0)
-        if cpu.r[CPU.BX] <= available:
+    elif ah == 0x48:  # allocate BX paragraphs; AX = the segment of the block
+        segment = state.memory.allocate(cpu.r[CPU.BX])
+        if segment is None:  # error 08: not enough memory; BX says how big a block there could be
+            cpu.set_flag(flags.CF, True)
+            cpu.r[CPU.AX] = 8
+            cpu.r[CPU.BX] = state.memory.largest()
+        else:
             cpu.set_flag(flags.CF, False)
+            cpu.r[CPU.AX] = segment
+    elif ah == 0x49:  # free the memory block that starts at segment ES
+        if state.memory.free(cpu.s[CPU.ES]):
+            cpu.set_flag(flags.CF, False)
+        else:  # error 09: not a block
+            cpu.set_flag(flags.CF, True)
+            cpu.r[CPU.AX] = 9
+    elif ah == 0x4A:  # resize the memory block that starts at segment ES to BX paragraphs
+        done = state.memory.resize(cpu.s[CPU.ES], cpu.r[CPU.BX])
+        if done:
+            cpu.set_flag(flags.CF, False)
+        elif done is None:  # error 09: not a block
+            cpu.set_flag(flags.CF, True)
+            cpu.r[CPU.AX] = 9
         else:  # error 08: not enough memory; BX says how much there is
             cpu.set_flag(flags.CF, True)
             cpu.r[CPU.AX] = 8
-            cpu.r[CPU.BX] = available
+            cpu.r[CPU.BX] = state.memory.room_for(cpu.s[CPU.ES])
     elif ah == 0x4C:  # exit with code in AL
         state.handles.close_all()  # a file left open is closed, and what was written to it is kept
         raise Exit(cpu.get8(0))
