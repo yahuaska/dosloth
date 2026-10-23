@@ -2351,3 +2351,82 @@ class TestGetCurrentDirectory(FileFunctionsTest):
         self.volumes.directories[2] = ["ABCDEFGH"] * 7 + ["IJ"]
         self.ask(3)
         self.assertEqual(self.written(), (b"\\".join([b"ABCDEFGH"] * 7 + [b"IJ"]), 0xAA))
+
+
+class TestCountryInformation(FileFunctionsTest):
+    """INT 21h AH=38h: how dates, times and money are written. The United States is the only country."""
+
+    def ask(self, al=0, bx=0x1111, dx=0x0300, si=0x4444, fill=0xAA):
+        for i in range(48):
+            self.cpu.wb(0x2000, (dx + i) & 0xFFFF, fill)
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = 0x3800 | al, bx, 0x2222, dx
+        cpu.r[CPU.SI] = si
+        cpu.ip = 0
+        cpu.step()
+        return bytes(cpu.rb(0x2000, (dx + i) & 0xFFFF) for i in range(48))
+
+    def test_the_table_has_the_formats_of_the_united_states(self):
+        table = self.ask()
+        self.assertIsNone(self.failed())
+        self.assertEqual(table[0x00:0x02], b"\0\0")  # month, day, year
+        self.assertEqual(table[0x02:0x07], b"$\0\0\0\0")
+        self.assertEqual(table[0x07:0x09], b",\0")
+        self.assertEqual(table[0x09:0x0B], b".\0")
+        self.assertEqual(table[0x0B:0x0D], b"-\0")
+        self.assertEqual(table[0x0D:0x0F], b":\0")
+        self.assertEqual(table[0x0F:0x12], bytes([0, 2, 0]))  # the sign before, two digits, 12 hours
+        self.assertEqual(table[0x16:0x18], b",\0")
+        self.assertEqual(table[0x18:0x22], bytes(10))
+
+    def test_the_table_is_34_bytes_and_nothing_after_it_is_written(self):
+        table = self.ask()
+        self.assertEqual(table[34:], bytes([0xAA]) * 14)
+
+    def test_the_case_routine_is_a_far_pointer_to_a_return(self):
+        table = self.ask()
+        offset, segment = int.from_bytes(table[0x12:0x14], "little"), int.from_bytes(table[0x14:0x16], "little")
+        self.assertEqual(self.cpu.rb(segment, offset), 0xCB)
+
+    def test_bx_is_the_country_code_and_the_other_registers_stay(self):
+        self.ask()
+        cpu = self.cpu
+        self.assertEqual(cpu.r[CPU.BX], 1)
+        self.assertEqual((cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.r[CPU.SI], cpu.s[CPU.DS]), (0x2222, 0x0300, 0x4444, 0x2000))
+        self.assertFalse(cpu.get_flag(flags.CF))
+
+    def test_a_country_can_be_asked_for_by_al_or_by_bx_with_al_ff(self):
+        self.assertEqual(self.ask(al=1)[0x02], ord("$"))
+        self.assertIsNone(self.failed())
+        self.assertEqual(self.ask(al=0xFF, bx=1)[0x02], ord("$"))
+        self.assertIsNone(self.failed())
+
+    def test_another_country_is_error_2_and_nothing_is_written(self):
+        for al, bx in ((7, 0), (0xFE, 0), (0xFF, 7), (0xFF, 0)):
+            table = self.ask(al=al, bx=bx)
+            self.assertEqual(self.failed(), 2, (al, bx))
+            self.assertEqual(table, bytes([0xAA]) * 48)
+
+    def test_the_table_may_go_round_the_end_of_the_segment(self):
+        table = self.ask(dx=0xFFF0)
+        self.assertEqual(table[0x02], ord("$"))
+        self.assertEqual(table[0x10], 2)
+        self.assertEqual(self.cpu.rb(0x2000, 0x0000), 2)  # the byte at 0x10 of the table is at the start of the segment
+        self.assertEqual(table[0x16:0x18], b",\0")
+        self.assertEqual(table[34:], bytes([0xAA]) * 14)
+
+    def test_dx_ffff_sets_the_country_and_writes_nothing(self):
+        cpu = self.cpu
+        cpu.wb(0x2000, 0xFFFF, 0xAA)
+        self.ask(al=1, dx=0xFFFF)
+        self.assertIsNone(self.failed())
+        self.assertEqual(cpu.rb(0x2000, 0xFFFF), 0xAA)
+        self.assertEqual(cpu.r[CPU.BX], 0x1111)
+
+    def test_setting_another_country_is_error_2(self):
+        self.ask(al=7, dx=0xFFFF)
+        self.assertEqual(self.failed(), 2)
+        self.ask(al=0xFF, bx=7, dx=0xFFFF)
+        self.assertEqual(self.failed(), 2)
+        self.ask(al=0xFF, bx=1, dx=0xFFFF)
+        self.assertIsNone(self.failed())

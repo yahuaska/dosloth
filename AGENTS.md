@@ -31,6 +31,7 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   and how much memory it asks for
 - `mydos/process.py` - INT 21h AH=4Bh (EXEC): the parent put aside, the child loaded; the end of a program
   (AH=4Ch, INT 20h) gives the machine back to the parent
+- `mydos/country.py` - the country of INT 21h AH=38h: the United States, with the table of formats
 - `mydos/fcb.py` - a file name taken apart into the drive, name and extension of an FCB (INT 21h AH=29h)
 - `mydos/handles.py` - the table of 20 open handles (the JFT): 0-4 are the console, stderr, AUX and PRN, files
   take the lowest free slot

@@ -3,7 +3,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import fcb, flags
+from . import country, fcb, flags
 from .config import default as default_config
 from .cpu import CPU, signed
 from .filesystem import (ACCESS_DENIED, ATTR_DIRECTORY, ATTR_READONLY, ATTR_VOLUME, DRIVE_NOT_READY, FILE_NOT_FOUND,
@@ -230,6 +230,18 @@ def int21(cpu, state):
             cpu.set8(6, 0)  # DH = where DOS lives: bit 3 the ROM, bit 4 the high memory area; neither here
         else:
             raise NotImplementedError(f"INT 21h AH=33 AL={al:02X}")
+    elif ah == 0x38:  # country information: AL = 0 or the country, 0FFh with BX; the table goes to DS:DX
+        # DX = 0FFFFh means to set the country instead. We have only the one, the United States.
+        al = cpu.get8(0)
+        code = cpu.r[CPU.BX] if al == 0xFF else al or country.COUNTRY_CODE
+        if code != country.COUNTRY_CODE:
+            fail(cpu, FsError(FILE_NOT_FOUND, f"there is no country {code}"))  # error 2: DOS has no better word
+        else:
+            if cpu.r[CPU.DX] != 0xFFFF:
+                for i, byte in enumerate(country.information()):
+                    cpu.wb(cpu.s[CPU.DS], (cpu.r[CPU.DX] + i) & 0xFFFF, byte)
+                cpu.r[CPU.BX] = country.COUNTRY_CODE
+            cpu.set_flag(flags.CF, False)
     elif ah == 0x3C:  # create (or empty) the file named at DS:DX, with attributes CX; AX = its handle
         try:
             if cpu.r[CPU.CX] & (ATTR_DIRECTORY | ATTR_VOLUME):
@@ -505,6 +517,7 @@ def install(cpu, volumes=None):
     Without any, the machine is the built-in one: the directory the emulator was started in is the hard disk C:.
     """
     state = DosState(volumes if volumes is not None else Volumes(default_config(Path.cwd())))
+    country.install(cpu)
     sysvars.write(cpu, state.config, MEMORY_TOP_SEG)  # the tables of DOS, which a program finds with AH=52h
     cpu.int_handlers[0x20] = lambda cpu: process.terminate(cpu, state, 0)
     cpu.int_handlers[0x21] = lambda cpu: int21(cpu, state)
