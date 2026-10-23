@@ -171,5 +171,25 @@ class TestMemoryFunctions(unittest.TestCase):
         self.assertEqual(self.cpu.r[CPU.BX], dos.MEMORY_TOP_SEG - PSP_SEG)
 
 
+class TestPspSegment(unittest.TestCase):
+    def test_both_functions_give_the_segment_of_the_psp_in_bx_and_touch_nothing_else(self):
+        for ah in (0x51, 0x62):
+            cpu = CPU()
+            dos.install(cpu)
+            before = call(cpu, ah, bx=0x1111, es=0x3333).get_flag(flags.CF)
+            self.assertEqual(cpu.r[CPU.BX], PSP_SEG, hex(ah))
+            self.assertEqual(cpu.r[CPU.AX], ah << 8 | 0x77)
+            self.assertEqual((cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.s[CPU.ES]), (0x2222, 0x3333, 0x3333))
+            self.assertEqual(before, 0)
+
+    def test_the_carry_flag_is_left_as_it_was(self):
+        for carry in (False, True):
+            cpu = CPU()
+            dos.install(cpu)
+            cpu.set_flag(flags.CF, carry)
+            call(cpu, 0x62)
+            self.assertEqual(bool(cpu.get_flag(flags.CF)), carry)
+
+
 if __name__ == "__main__":
     unittest.main()

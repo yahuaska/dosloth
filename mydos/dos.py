@@ -395,6 +395,8 @@ def int21(cpu, state):
             fail(cpu, error)
     elif ah == 0x52:  # get the List of Lists, the inner variables of DOS (see sysvars.py), into ES:BX
         cpu.s[CPU.ES], cpu.r[CPU.BX] = sysvars.SEGMENT, sysvars.LIST_OFFSET
+    elif ah in (0x51, 0x62):  # BX = the segment of the PSP of the running program (51h is the old name of 62h)
+        cpu.r[CPU.BX] = PSP_SEG
     elif ah == 0x48:  # allocate BX paragraphs; AX = the segment of the block
         segment = state.memory.allocate(cpu.r[CPU.BX])
         if segment is None:  # error 08: not enough memory; BX says how big a block there could be
