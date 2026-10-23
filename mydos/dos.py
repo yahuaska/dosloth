@@ -173,8 +173,8 @@ def int21(cpu, state):
     elif ah == 0x19:  # get the current drive into AL: 0 for A:, 1 for B:, 2 for C:, ...
         cpu.set8(0, state.volumes.current_drive)
     elif ah == 0x25:  # set interrupt vector AL to DS:DX
-        # The vector table is real memory at 0000:0000, 4 bytes per interrupt: offset, segment.
-        # Nothing jumps through it yet: INT still calls the Python handlers.
+        # The vector table is real memory at 0000:0000, 4 bytes per interrupt: offset, segment. INT goes to the
+        # address a program puts there (see CPU.int_), and to our own handler where the table has 0000:0000.
         n = cpu.get8(0)
         cpu.ww(0, n * 4, cpu.r[CPU.DX])
         cpu.ww(0, n * 4 + 2, cpu.s[CPU.DS])

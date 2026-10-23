@@ -76,6 +76,7 @@ class Op(IntEnum):
     RETF_POP = 0xCA      # followed by imm16: pops IP and CS, then drops that many bytes of arguments
     RETF = 0xCB          # pops IP, then CS
     MOV_RM_IMM = 0xC6    # C6 (byte) and C7 (word) + ModRM (reg field 0) + the constant: r/m <- imm
+    IRET = 0xCF          # return from an interrupt: pops IP, CS and the flags
     INT = 0xCD           # followed by the interrupt number
     SHIFT_RM = 0xD0      # D0..D3 + ModRM: shift or rotate r/m by 1 or by CL, the 'reg' field picks how (CPU.shift_rm)
     LOOPNE = 0xE0        # followed by a signed 8-bit displacement

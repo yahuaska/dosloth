@@ -94,6 +94,7 @@ class TestText(unittest.TestCase):
             (b"\xCB", "retf"),
             (b"\xC9", "leave"),   # from esetup.exe
             (b"\xF5", "cmc"),   # from xcomapoc.exe
+            (b"\xCF", "iret"),
             (b"\xE6\x43", "out 43, al"),   # from esetup.exe
             (b"\xE4\x40", "in al, 40"),
             (b"\xE5\x61", "in ax, 61"),

@@ -142,6 +142,7 @@ class CPU:
             Op.LEAVE: self.leave,
             Op.RETF_POP: self.retf_pop,
             Op.RETF: self.retf,
+            Op.IRET: self.iret,
             Op.JMP_NEAR: self.jmp_near,
             Op.JMP_FAR: self.jmp_far_imm,
             Op.JMP_SHORT: self.jmp_short,
@@ -1257,14 +1258,37 @@ class CPU:
     def int_(self, op):
         """Call an interrupt (opcode CD + the interrupt number).
 
-        Here the interrupts are Python functions registered in self.int_handlers (see dos.py), not
-        code in the emulated memory. An interrupt nobody registered stops the emulator.
+        The table of vectors at 0000:0000 has 4 bytes for each interrupt, the offset and the segment of its
+        handler. If a program has put an address there (INT 21h AH=25h), the interrupt goes to that code, as on
+        the real machine: the flags, CS and IP are pushed, in that order, IF and TF are cleared, and the
+        handler starts. It ends with IRET, which takes the three back.
+
+        Where the table has 0000:0000 the interrupt is one of ours, a Python function registered in
+        self.int_handlers (see dos.py and bios.py). An interrupt that is neither stops the emulator.
         """
         n = self.fetch8()
+        offset, segment = self.rw(0, n * 4), self.rw(0, n * 4 + 2)
+        if offset or segment:
+            self.push16(self.flags)
+            self.push16(self.s[self.CS])
+            self.push16(self.ip)
+            self.flags &= ~(flags.IF | flags.TF)
+            self.s[self.CS], self.ip = segment, offset
+            return
         h = self.int_handlers.get(n)
         if h is None:
             raise NotImplementedError(f"INT {n:02X} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
         h(self)
+
+    def iret(self, op):
+        """Return from an interrupt handler (opcode CF): pop IP, then CS, then the flags.
+
+        What INT pushed, taken back in the opposite order. The flags come as in POPF, so IF and TF are what
+        they were before the interrupt, whatever the handler did to them.
+        """
+        self.ip = self.pop16()
+        self.s[self.CS] = self.pop16()
+        self.flags = (self.pop16() & flags.DEFINED) | flags.ALWAYS_ONE
 
     def hlt(self, op):
         """Stop the CPU (opcode F4). We treat it as the end of the program, with exit code 0."""

@@ -1672,6 +1672,214 @@ class TestRunTick(unittest.TestCase):
             cpu.run(2, tick)
 
 
+class TestIret(unittest.TestCase):
+    """CF IRET: pop IP, then CS, then the flags."""
+
+    def machine_with_stack(self, *words):
+        """CS=1000 on an IRET, the stack at 4000:0200 holding `words` (the first on top)."""
+        cpu = machine(bytes([0xCF]), False)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0200
+        for i, word in enumerate(words):
+            cpu.ww(0x4000, 0x0200 + 2 * i, word)
+        return cpu
+
+    def test_ip_then_cs_then_the_flags_come_off_the_stack(self):
+        cpu = self.machine_with_stack(0x1234, 0x5678, 0x0246)
+        cpu.step()
+        self.assertEqual((cpu.ip, cpu.s[CPU.CS], cpu.flags, cpu.r[CPU.SP]), (0x1234, 0x5678, 0x0246, 0x0206))
+
+    def test_only_the_flags_that_exist_are_taken_and_bit_1_stays_1(self):
+        for word in (0x0000, 0xFFFF, 0x0FD7, 0xF000, 0x0200, 0x0100, 0xAAAA, 0x5555):
+            cpu = self.machine_with_stack(0, 0x1000, word)
+            cpu.step()
+            self.assertEqual(cpu.flags, (word & 0x0FD5) | 0x0002, f"{word:04X}")
+
+    def test_if_and_tf_are_what_the_stack_says_not_what_they_were(self):
+        for old in (0x0002, 0x0202, 0x0302):
+            for saved in (0x0002, 0x0202, 0x0102, 0x0302):
+                cpu = self.machine_with_stack(0, 0x1000, saved)
+                cpu.flags = old
+                cpu.step()
+                self.assertEqual(cpu.flags & (flags.IF | flags.TF), saved & (flags.IF | flags.TF), (old, saved))
+
+    def test_no_register_changes_but_sp_cs_ip_and_the_flags(self):
+        cpu = self.machine_with_stack(0x0010, 0x2000, 0x0002)
+        before = list(cpu.r)
+        cpu.step()
+        expected = list(before)
+        expected[CPU.SP] += 6
+        self.assertEqual((cpu.r, cpu.s[CPU.DS], cpu.s[CPU.ES]), (expected, 0x2000, 0x3000))
+
+    def test_it_is_the_same_as_pop_ip_pop_cs_popf(self):
+        for words in ((0x0100, 0x2000, 0x0FD7), (0xFFFF, 0x0000, 0x0000), (0x0010, 0xFFFF, 0x0200)):
+            iret = self.machine_with_stack(*words)
+            iret.step()
+            by_hand = self.machine_with_stack(*words)
+            by_hand.ip = by_hand.pop16()  # what retf does ...
+            by_hand.s[CPU.CS] = by_hand.pop16()
+            by_hand.flags = (by_hand.pop16() & 0x0FD5) | 0x0002  # ... and popf
+            self.assertEqual((iret.ip, iret.s[CPU.CS], iret.flags, iret.r[CPU.SP]),
+                             (by_hand.ip, by_hand.s[CPU.CS], by_hand.flags, by_hand.r[CPU.SP]))
+
+    def test_the_stack_goes_round_the_segment(self):
+        cpu = machine(bytes([0xCF]), False)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0xFFFC  # the words are at FFFC, FFFE and 0000
+        cpu.ww(0x4000, 0xFFFC, 0x1111)
+        cpu.ww(0x4000, 0xFFFE, 0x2222)
+        cpu.ww(0x4000, 0x0000, 0x0246)
+        cpu.step()
+        self.assertEqual((cpu.ip, cpu.s[CPU.CS], cpu.flags, cpu.r[CPU.SP]), (0x1111, 0x2222, 0x0246, 0x0002))
+
+
+class TestInterruptsThroughTheTable(unittest.TestCase):
+    """CD n: if the table of vectors has an address for n the interrupt goes to the code there."""
+
+    def machine_with_handler(self, vector, segment, offset, code=b"", stack=0x0200):
+        """The program is at 1000:0000; the table says that `vector` is handled at segment:offset, by `code`."""
+        cpu = machine(bytes([0xCD, vector, 0x90, 0x90]), False)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, stack
+        cpu.ww(0, vector * 4, offset)
+        cpu.ww(0, vector * 4 + 2, segment)
+        cpu.mem[segment * 16 + offset:segment * 16 + offset + len(code)] = code
+        return cpu
+
+    def test_the_flags_cs_and_the_address_after_the_int_are_pushed_in_that_order_and_the_handler_starts(self):
+        cpu = self.machine_with_handler(0x60, 0x2000, 0x0100)
+        cpu.flags = 0x0246
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x2000, 0x0100))
+        self.assertEqual(cpu.r[CPU.SP], 0x01FA)
+        self.assertEqual([cpu.rw(0x4000, 0x01FA + 2 * i) for i in range(3)], [0x0002, 0x1000, 0x0246])
+
+    def test_if_and_tf_are_cleared_for_the_handler_and_no_other_flag_changes(self):
+        for pattern in (0x0002, 0x0FD7, 0x0302, 0x0102 | flags.CF | flags.ZF | flags.DF | flags.OF):
+            cpu = self.machine_with_handler(0x60, 0x2000, 0x0100)
+            cpu.flags = pattern
+            cpu.step()
+            self.assertEqual(cpu.flags, pattern & ~(flags.IF | flags.TF), hex(pattern))
+            self.assertEqual(cpu.rw(0x4000, 0x01FC + 2), pattern, hex(pattern))  # what is saved is the whole word
+
+    def test_the_handler_ends_with_iret_which_brings_back_the_flags_and_the_place(self):
+        cpu = self.machine_with_handler(0x60, 0x2000, 0x0100, code=bytes([0xCF]))
+        cpu.flags = 0x0246 | flags.CF
+        cpu.step()  # int 60h
+        cpu.step()  # iret
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.flags, cpu.r[CPU.SP]), (0x1000, 0x0002, 0x0246 | flags.CF, 0x0200))
+
+    def test_a_handler_that_changes_registers_and_flags_leaves_them_changed_but_not_if_and_tf(self):
+        # mov bx, 5 ; stc ; cli ; iret   (the caller had IF set and CF clear)
+        cpu = self.machine_with_handler(0x60, 0x2000, 0x0100, code=bytes([0xBB, 0x05, 0x00, 0xF9, 0xFA, 0xCF]))
+        cpu.flags = 0x0202
+        for _ in range(5):
+            cpu.step()
+        self.assertEqual((cpu.r[CPU.BX], cpu.get_flag(flags.CF), cpu.get_flag(flags.IF)), (5, False, True))
+
+    def test_the_program_goes_on_after_the_int(self):
+        # int 60h ; nop ; nop   with a handler that does mov ax, 1234h ; iret
+        cpu = self.machine_with_handler(0x60, 0x2000, 0x0100, code=bytes([0xB8, 0x34, 0x12, 0xCF]))
+        for _ in range(3):
+            cpu.step()
+        self.assertEqual((cpu.r[CPU.AX], cpu.s[CPU.CS], cpu.ip), (0x1234, 0x1000, 2))
+        cpu.step()
+        self.assertEqual(cpu.ip, 3)
+
+    def test_a_handler_may_change_the_address_it_returns_to(self):
+        """What an emulator of the coprocessor does: it takes the bytes after the INT as its own and skips them."""
+        # pop bx ; add bx, 2 ; push bx ; iret
+        code = bytes([0x5B, 0x83, 0xC3, 0x02, 0x53, 0xCF])
+        cpu = self.machine_with_handler(0x37, 0x2000, 0x0100, code=code)
+        for _ in range(5):
+            cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 0x0004))
+
+    def test_a_handler_can_read_the_bytes_after_the_int_through_the_return_address(self):
+        # mov bp, sp ; les bx, [bp] ; mov al, es:[bx] ; iret   (the return address is at the top of the stack)
+        code = bytes([0x89, 0xE5, 0xC4, 0x5E, 0x00, 0x26, 0x8A, 0x07, 0xCF])
+        cpu = self.machine_with_handler(0x37, 0x2000, 0x0100, code=code)
+        cpu.mem[0x10002] = 0xE3  # the byte after the INT, as in "int 37h ; db E3h" (a coprocessor instruction)
+        for _ in range(5):
+            cpu.step()
+        self.assertEqual(cpu.get8(0), 0xE3)
+
+    def test_interrupts_inside_interrupts_come_back_one_by_one(self):
+        # the handler of 60h is: int 61h ; iret.  the handler of 61h is: inc bx ; iret
+        cpu = self.machine_with_handler(0x60, 0x2000, 0x0100, code=bytes([0xCD, 0x61, 0xCF]))
+        cpu.ww(0, 0x61 * 4, 0x0200)
+        cpu.ww(0, 0x61 * 4 + 2, 0x2000)
+        cpu.mem[0x20200:0x20202] = bytes([0x43, 0xCF])
+        cpu.r[CPU.BX] = 0
+        for _ in range(5):
+            cpu.step()
+        self.assertEqual((cpu.r[CPU.BX], cpu.s[CPU.CS], cpu.ip, cpu.r[CPU.SP]), (1, 0x1000, 2, 0x0200))
+
+    def test_the_vector_counts_as_set_when_either_half_is_not_zero(self):
+        for segment, offset in ((0x0000, 0x1234), (0x2000, 0x0000), (0x0001, 0x0001)):
+            cpu = self.machine_with_handler(0x60, segment, offset)
+            cpu.step()
+            self.assertEqual((cpu.s[CPU.CS], cpu.ip), (segment, offset))
+
+    def test_with_nothing_in_the_table_it_is_our_own_handler_or_an_error(self):
+        cpu = machine(bytes([0xCD, 0x60]), False)
+        calls = []
+        cpu.int_handlers[0x60] = lambda c: calls.append(c.ip)
+        cpu.step()
+        self.assertEqual((calls, cpu.s[CPU.CS], cpu.ip), ([2], 0x1000, 2))
+        cpu = machine(bytes([0xCD, 0x61]), False)
+        with self.assertRaises(NotImplementedError) as caught:
+            cpu.step()
+        self.assertIn("INT 61 at 1000:0000", str(caught.exception))
+
+    def test_the_program_wins_over_our_handler_when_it_has_set_the_vector(self):
+        cpu = self.machine_with_handler(0x60, 0x2000, 0x0100)
+        cpu.int_handlers[0x60] = lambda c: self.fail("our handler must not run")
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x2000, 0x0100))
+
+    def test_our_handler_does_not_push_anything(self):
+        cpu = machine(bytes([0xCD, 0x60]), False)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0200
+        cpu.int_handlers[0x60] = lambda c: None
+        cpu.flags = 0x0302
+        cpu.step()
+        self.assertEqual((cpu.r[CPU.SP], cpu.flags), (0x0200, 0x0302))
+
+    def test_the_stack_goes_round_the_segment(self):
+        cpu = self.machine_with_handler(0x60, 0x2000, 0x0100, stack=0x0002)
+        cpu.flags = 0x0246
+        cpu.step()
+        self.assertEqual(cpu.r[CPU.SP], 0xFFFC)  # 2 - 6 = -4
+        self.assertEqual([cpu.rw(0x4000, a) for a in (0xFFFC, 0xFFFE, 0x0000)], [0x0002, 0x1000, 0x0246])
+
+    def test_the_vectors_of_any_number_0_to_255_are_looked_up_at_four_bytes_each(self):
+        for vector in (0x00, 0x01, 0x08, 0x21, 0x7F, 0x80, 0xFE, 0xFF):
+            cpu = self.machine_with_handler(vector, 0x3000 + vector, 0x0010 + vector)
+            cpu.step()
+            self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x3000 + vector, 0x0010 + vector), vector)
+
+    def test_one_instruction_is_counted_for_the_int_and_the_handler_starts_at_the_next_step(self):
+        cpu = self.machine_with_handler(0x60, 0x2000, 0x0100, code=bytes([0x90]))
+        cpu.step()
+        self.assertEqual((cpu.instructions, cpu.start_ip), (1, 0))
+        cpu.step()
+        self.assertEqual((cpu.instructions, cpu.start_ip), (2, 0x0100))
+
+    def test_dos_sets_a_vector_and_int_goes_there(self):
+        from mydos import dos
+        # mov ax, 2560h ; mov dx, 0100h ; (DS = 2000h) ; int 21h ; int 60h
+        cpu = machine(bytes([0xB8, 0x60, 0x25, 0xBA, 0x00, 0x01, 0xCD, 0x21, 0xCD, 0x60]), False)
+        dos.install(cpu)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0200
+        for _ in range(4):
+            cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x2000, 0x0100))
+        self.assertEqual(cpu.rw(0x4000, 0x01FA), 0x000A)  # the place after the int 60h
+        cpu.s[CPU.DS] = 0x1234  # and the program can ask for the vector again
+        cpu.r[CPU.AX] = 0x3560
+        cpu.mem[0x20100:0x20102] = bytes([0xCD, 0x21])
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.ES], cpu.r[CPU.BX]), (0x2000, 0x0100))
+
+
 class TestEnter(unittest.TestCase):
     """C8 ENTER size, level (80186 and later): push bp ; mov bp, sp ; sub sp, size, and for nested levels a display."""
 
