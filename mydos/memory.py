@@ -12,6 +12,7 @@ class Blocks:
     def __init__(self, top, first_segment, first_size):
         self.top = top  # the segment where the memory ends: nothing above it can be given
         self.blocks = {first_segment: first_size}  # segment -> size; the first block is the program's
+        self.owners = {first_segment: first_segment}  # segment -> the PSP segment of the program that asked for it
 
     def _end_of_gap_after(self, segment):
         """Where the free space that follows the block at `segment` ends: at the next block, or at the top."""
@@ -30,8 +31,10 @@ class Blocks:
         """The biggest block that AH=48h could give now."""
         return max((size for _, size in self._gaps()), default=0)
 
-    def allocate(self, size):
-        """Take the first gap that holds `size` paragraphs. Returns its segment, or None if there is none.
+    def allocate(self, size, owner=0):
+        """Take the first gap that holds `size` paragraphs for the program whose PSP is at `owner`.
+
+        Returns the segment of the block, or None if there is no gap that big.
 
         A block of 0 paragraphs is given one: two blocks at the same segment could not be told apart.
         """
@@ -39,12 +42,23 @@ class Blocks:
         for segment, room in self._gaps():
             if room >= size:
                 self.blocks[segment] = size
+                self.owners[segment] = owner
                 return segment
         return None
 
     def free(self, segment):
         """Give a block back. False if no block starts at `segment`."""
+        self.owners.pop(segment, None)
         return self.blocks.pop(segment, None) is not None
+
+    def own(self, segment, owner):
+        """Say that the block at `segment` belongs to the program whose PSP is at `owner`."""
+        self.owners[segment] = owner
+
+    def free_owned(self, owner):
+        """Give back every block of a program: what DOS does when it ends."""
+        for segment in [segment for segment, who in self.owners.items() if who == owner]:
+            self.free(segment)
 
     def room_for(self, segment):
         """How many paragraphs the block at `segment` could have: its own, and the free space after it."""

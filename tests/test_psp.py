@@ -103,5 +103,20 @@ class TestAProgramSeesIt(unittest.TestCase):
         self.assertEqual(self.exit_code(bytes([0xA0, 0x18, 0x00, 0xB4, 0x4C, 0xCD, 0x21])), 1)
 
 
+    def test_the_parent_is_0_unless_it_is_told(self):
+        cpu = CPU()
+        psp.build(cpu, 0x1000, 0x0FF0, 0xA000, "C:\\X.COM")
+        self.assertEqual(word(cpu, 0x1000, 0x16), 0)
+        psp.build(cpu, 0x2000, 0x1FF0, 0xA000, "C:\\X.COM", parent_seg=0x1000)
+        self.assertEqual(word(cpu, 0x2000, 0x16), 0x1000)
+
+    def test_the_strings_of_the_environment_can_be_given(self):
+        cpu = CPU()
+        psp.build(cpu, 0x2000, 0x1FF0, 0xA000, "C:\\X.COM", strings=[b"A=1", b"B=2"])
+        self.assertEqual(bytes(cpu.mem[0x1FF00:0x1FF00 + 20]), b"A=1\0B=2\0\0\x01\0C:\\X.COM\0")
+
+    def test_no_strings_at_all_are_just_the_two_zeros_before_the_name(self):
+        self.assertEqual(psp.environment("c:\\x.com", []), b"\0\0\x01\0C:\\X.COM\0")
+
 if __name__ == "__main__":
     unittest.main()

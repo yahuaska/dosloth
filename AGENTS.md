@@ -27,6 +27,10 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/search.py` - the file search of INT 21h AH=4Eh/4Fh: DOS wildcard masks, the attributes a program asks for,
   the 43-byte record in the DTA, and the list of searches that are going on
 - `mydos/memory.py` - the memory blocks of INT 21h AH=48h/49h/4Ah: a list of blocks and the first gap that fits
+- `mydos/loader.py` - a .COM or .EXE put in memory at a PSP segment (the first program and the children of EXEC),
+  and how much memory it asks for
+- `mydos/process.py` - INT 21h AH=4Bh (EXEC): the parent put aside, the child loaded; the end of a program
+  (AH=4Ch, INT 20h) gives the machine back to the parent
 - `mydos/fcb.py` - a file name taken apart into the drive, name and extension of an FCB (INT 21h AH=29h)
 - `mydos/handles.py` - the table of 20 open handles (the JFT): 0-4 are the console, stderr, AUX and PRN, files
   take the lowest free slot

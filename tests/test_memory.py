@@ -191,5 +191,39 @@ class TestPspSegment(unittest.TestCase):
             self.assertEqual(bool(cpu.get_flag(flags.CF)), carry)
 
 
+class TestOwners(unittest.TestCase):
+    def test_the_first_block_is_its_own_owners(self):
+        self.assertEqual(blocks().owners, {0x1000: 0x1000})
+
+    def test_a_block_is_owned_by_who_asked_for_it_and_nobody_by_default(self):
+        memory = blocks()
+        memory.resize(0x1000, 0x100)
+        a, b = memory.allocate(0x10, 0x1000), memory.allocate(0x10)
+        self.assertEqual((memory.owners[a], memory.owners[b]), (0x1000, 0))
+
+    def test_own_changes_the_owner(self):
+        memory = blocks()
+        memory.resize(0x1000, 0x100)
+        a = memory.allocate(0x10, 0x1000)
+        memory.own(a, 0x1100)
+        self.assertEqual(memory.owners[a], 0x1100)
+
+    def test_free_owned_gives_back_everything_of_one_owner_and_nothing_else(self):
+        memory = blocks()
+        memory.resize(0x1000, 0x100)
+        a, b, c = memory.allocate(0x10, 0x1100), memory.allocate(0x10, 0x1000), memory.allocate(0x10, 0x1100)
+        memory.free_owned(0x1100)
+        self.assertEqual(sorted(memory.blocks), [0x1000, b])
+        self.assertEqual(sorted(memory.owners), [0x1000, b])
+        self.assertEqual(memory.allocate(0x10), a)
+
+    def test_a_freed_block_has_no_owner_any_more(self):
+        memory = blocks()
+        memory.resize(0x1000, 0x100)
+        a = memory.allocate(0x10, 0x1000)
+        memory.free(a)
+        self.assertNotIn(a, memory.owners)
+
+
 if __name__ == "__main__":
     unittest.main()

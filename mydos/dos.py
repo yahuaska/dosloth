@@ -5,11 +5,12 @@ from pathlib import Path
 
 from . import fcb, flags
 from .config import default as default_config
-from .cpu import CPU, Exit, signed
+from .cpu import CPU, signed
 from .filesystem import (ACCESS_DENIED, ATTR_DIRECTORY, ATTR_READONLY, ATTR_VOLUME, DRIVE_NOT_READY, FILE_NOT_FOUND,
                          INVALID_DRIVE, PATH_NOT_FOUND, FsError)
 from .handles import Console, HandleTable, NullDevice, OpenFile
 from .memory import Blocks
+from . import process
 from . import sysvars
 from .psp import DTA_OFFSET, PSP_SEG
 from .search import Searches, find, record
@@ -131,6 +132,9 @@ class DosState:
         self.dta = (PSP_SEG, DTA_OFFSET)  # where the disk transfer area is, as segment and offset: see AH=1Ah
         self.searches = Searches()  # the file searches that AH=4Eh began and AH=4Fh goes on with
         self.memory = Blocks(MEMORY_TOP_SEG, PSP_SEG, MEMORY_TOP_SEG - PSP_SEG)  # the blocks AH=48h-4Ah deal in
+        self.psp_seg = PSP_SEG  # the PSP of the program that runs: the one of the last program started by EXEC
+        self.parents = []  # the programs that wait for a child to end, the last one first to come back
+        self.exit_status = 0  # how the last child ended, for AH=4Dh
         self.pending_scan = None  # the scan code of a key with no character, to be given by the next read of a key
 
 
@@ -404,7 +408,7 @@ def int21(cpu, state):
     elif ah == 0x52:  # get the List of Lists, the inner variables of DOS (see sysvars.py), into ES:BX
         cpu.s[CPU.ES], cpu.r[CPU.BX] = sysvars.SEGMENT, sysvars.LIST_OFFSET
     elif ah in (0x51, 0x62):  # BX = the segment of the PSP of the running program (51h is the old name of 62h)
-        cpu.r[CPU.BX] = PSP_SEG
+        cpu.r[CPU.BX] = state.psp_seg
     elif ah == 0x47:  # get the current directory of drive DL (0 is the current one, 1 is A:) into the buffer at DS:SI
         drive = cpu.get8(2)
         drive = state.volumes.current_drive if drive == 0 else drive - 1
@@ -420,7 +424,7 @@ def int21(cpu, state):
             cpu.set_flag(flags.CF, False)
             cpu.r[CPU.AX] = 0x0100  # what DOS leaves there, which some programs take for granted
     elif ah == 0x48:  # allocate BX paragraphs; AX = the segment of the block
-        segment = state.memory.allocate(cpu.r[CPU.BX])
+        segment = state.memory.allocate(cpu.r[CPU.BX], state.psp_seg)
         if segment is None:  # error 08: not enough memory; BX says how big a block there could be
             cpu.set_flag(flags.CF, True)
             cpu.r[CPU.AX] = 8
@@ -445,9 +449,20 @@ def int21(cpu, state):
             cpu.set_flag(flags.CF, True)
             cpu.r[CPU.AX] = 8
             cpu.r[CPU.BX] = state.memory.room_for(cpu.s[CPU.ES])
+    elif ah == 0x4B:  # start the program named at DS:DX, with the parameter block at ES:BX; AL = 0 to wait for it
+        if cpu.get8(0) != 0:  # 1 loads without starting, 3 loads an overlay: nothing asks for them yet
+            raise NotImplementedError(f"INT 21h AH=4B AL={cpu.get8(0):02X}")
+        try:
+            where = state.volumes.resolve(read_path(cpu))
+            with where.filesystem.open(where.parts) as program:
+                data = program.read()
+            process.execute(cpu, state, data, where.dos_path(), (cpu.s[CPU.ES], cpu.r[CPU.BX]))
+        except FsError as error:
+            fail(cpu, error)
     elif ah == 0x4C:  # exit with code in AL
-        state.handles.close_all()  # a file left open is closed, and what was written to it is kept
-        raise Exit(cpu.get8(0))
+        process.terminate(cpu, state, cpu.get8(0))
+    elif ah == 0x4D:  # AX = how the last child program ended: AL is its exit code. The call forgets it
+        cpu.r[CPU.AX], state.exit_status = state.exit_status, 0
     else:
         raise NotImplementedError(f"INT 21h AH={ah:02X}")
 
@@ -491,6 +506,7 @@ def install(cpu, volumes=None):
     """
     state = DosState(volumes if volumes is not None else Volumes(default_config(Path.cwd())))
     sysvars.write(cpu, state.config, MEMORY_TOP_SEG)  # the tables of DOS, which a program finds with AH=52h
+    cpu.int_handlers[0x20] = lambda cpu: process.terminate(cpu, state, 0)
     cpu.int_handlers[0x21] = lambda cpu: int21(cpu, state)
     cpu.int_handlers[0x2F] = lambda cpu: int2f(cpu, state)
     return state  # for whoever wants to look at what DOS holds, the tests in particular

@@ -122,5 +122,64 @@ class TestClosing(unittest.TestCase):
         self.assertIsNone(other.get(5))
 
 
+class TestSharingWithAChild(unittest.TestCase):
+    def test_a_copy_holds_the_same_things_in_the_same_slots(self):
+        table = HandleTable()
+        entry = OpenFile(SpyFile(), "C:\\A")
+        table.allocate(entry)
+        child = table.copy()
+        self.assertIsNot(child, table)
+        self.assertIs(child.get(5), entry)
+        self.assertEqual(child.slots[:5], table.slots[:5])
+
+    def test_what_the_copy_closes_or_opens_is_its_own_business(self):
+        table = HandleTable()
+        child = table.copy()
+        child.allocate(OpenFile(SpyFile(), "C:\\B"))
+        self.assertIsNone(table.get(5))
+        entry = OpenFile(SpyFile(), "C:\\A")
+        table.allocate(entry)
+        self.assertIsNone(child.get(6))
+
+    def test_a_file_the_parent_and_the_child_hold_is_closed_when_the_last_lets_go(self):
+        table = HandleTable()
+        file = SpyFile()
+        table.allocate(OpenFile(file, "C:\\A"))
+        child = table.copy()
+        self.assertTrue(child.close(5))
+        self.assertFalse(file.closed)
+        self.assertTrue(table.close(5))
+        self.assertTrue(file.closed)
+
+    def test_it_does_not_matter_who_lets_go_first(self):
+        table = HandleTable()
+        file = SpyFile()
+        table.allocate(OpenFile(file, "C:\\A"))
+        child = table.copy()
+        table.close(5)
+        self.assertFalse(file.closed)
+        child.close_all()
+        self.assertTrue(file.closed)
+
+    def test_three_levels_need_three_closes(self):
+        table = HandleTable()
+        file = SpyFile()
+        table.allocate(OpenFile(file, "C:\\A"))
+        child = table.copy()
+        grandchild = child.copy()
+        for each in (grandchild, table):
+            each.close(5)
+            self.assertFalse(file.closed)
+        child.close(5)
+        self.assertTrue(file.closed)
+
+    def test_a_file_put_straight_into_a_slot_is_closed_by_the_first_close(self):
+        table = HandleTable()
+        file = SpyFile()
+        table.slots[7] = OpenFile(file, "C:\\A")
+        table.close(7)
+        self.assertTrue(file.closed)
+
+
 if __name__ == "__main__":
     unittest.main()

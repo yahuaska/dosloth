@@ -40,6 +40,19 @@ class HandleTable:
         self.slots = [None] * TABLE_SIZE
         console, error = Console("stdout"), Console("stderr")
         self.slots[0:5] = [console, console, error, NullDevice("AUX"), NullDevice("PRN")]
+        # how many slots hold each open file (by id), in this table and in the tables of the programs it started:
+        # a file is closed when the last one lets go of it
+        self.users = {}
+
+    def copy(self):
+        """A table of a child program: the same things behind the same numbers. A file is shared, not opened again."""
+        table = HandleTable()
+        table.slots = list(self.slots)
+        table.users = self.users
+        for entry in self.slots:
+            if isinstance(entry, OpenFile):
+                self.users[id(entry)] = self.users.get(id(entry), 1) + 1
+        return table
 
     def get(self, handle):
         """What the handle stands for, or None if it is not open (never was, was closed, or is out of range)."""
@@ -53,17 +66,23 @@ class HandleTable:
         for handle, slot in enumerate(self.slots):
             if slot is None:
                 self.slots[handle] = entry
+                if isinstance(entry, OpenFile):
+                    self.users[id(entry)] = self.users.get(id(entry), 0) + 1
                 return handle
         return None
 
     def close(self, handle):
-        """Free the slot, closing the file if it holds one. Returns False if the handle was not open."""
+        """Free the slot, closing the file if it holds one and no other table does. False if the handle was not open."""
         entry = self.get(handle)
         if entry is None:
             return False
         self.slots[handle] = None
         if isinstance(entry, OpenFile):
-            entry.file.close()
+            remaining = self.users.pop(id(entry), 1) - 1
+            if remaining > 0:
+                self.users[id(entry)] = remaining
+            else:
+                entry.file.close()
         return True
 
     def close_all(self):
