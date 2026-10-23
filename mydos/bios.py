@@ -6,7 +6,7 @@ back into them.
 import time
 from collections import deque
 
-from . import flags, text
+from . import flags, text, vesa
 from .cpu import CPU
 from .text import BDA_COLUMNS, BDA_PAGE, BDA_VIDEO_MODE, BLANK_CELL, GRAPHICS_MODE, TEXT_BASE, TEXT_MODE
 
@@ -125,8 +125,8 @@ def int12(cpu):
 
 def int10(cpu):
     """INT 10h: the BIOS video services, selected by AH. So far 00h (modes 03h and 12h only), the cursor and the
-    characters at it (01h, 02h, 03h, 08h, 09h, 0Ah), 0Fh, 10h (the colors, but not their page or gray sums), 12h BL=10h
-    and 1Ah AL=00h."""
+    characters at it (01h, 02h, 03h, 08h, 09h, 0Ah), 0Fh, 10h (the colors, but not their page or gray sums), 12h BL=10h,
+    1Ah AL=00h and the VESA question 4Fh AL=00h."""
     ah, al = cpu.get8(4), cpu.get8(0)
     if ah == 0x10:
         palette_function(cpu, al)
@@ -159,6 +159,10 @@ def int10(cpu):
         cpu.set8(0, cpu.mem[BDA_VIDEO_MODE])
         cpu.set8(4, cpu.mem[BDA_COLUMNS])
         cpu.set8(7, cpu.mem[BDA_PAGE])
+    elif ah == 0x4F:  # the VESA extensions, picked by AL; only AL=00h so far (see vesa.py)
+        if al != 0x00:
+            raise NotImplementedError(f"INT 10h AH=4F AL={al:02X}")
+        cpu.r[CPU.AX] = vesa.controller_information(cpu, cpu.s[CPU.ES], cpu.r[CPU.DI])
     elif ah == 0x12:  # the alternate functions of the EGA and VGA, picked by BL; only 10h so far
         if cpu.get8(3) != 0x10:
             raise NotImplementedError(f"INT 10h AH=12 BL={cpu.get8(3):02X}")
@@ -228,6 +232,7 @@ def install(cpu, config=None):
     cpu.keyboard = keyboard  # for DOS, which reads keys from the same buffer as the BIOS
     cpu.mem[BDA_EQUIPMENT:BDA_EQUIPMENT + 2] = equipment_word(config).to_bytes(2, "little")
     cpu.mem[BDA_MEMORY_KB:BDA_MEMORY_KB + 2] = CONVENTIONAL_MEMORY_KB.to_bytes(2, "little")
+    vesa.install(cpu)
     text.set_up(cpu, TEXT_MODE)  # the machine starts in text mode, as it is at the DOS prompt, with a clean screen
     cpu.mem[TEXT_BASE:TEXT_BASE + TEXT_CLEARED] = BLANK_CELL * (TEXT_CLEARED // 2)
     cpu.int_handlers[0x10] = int10
