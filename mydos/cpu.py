@@ -92,6 +92,8 @@ class CPU:
         self.ops = {
             Op.NOP: self.nop,
             Op.WAIT: self.nop,
+            Op.AAM: self.aam,
+            Op.AAD: self.aad,
             Op.LEA: self.lea,
             Op.POP_RM16: self.pop_rm16,
             Op.CALL_FAR: self.call_far_imm,
@@ -714,6 +716,40 @@ class CPU:
         if m.is_reg:
             raise NotImplementedError(f"LEA with a register at {self.s[self.CS]:04X}:{self.start_ip:04X}")
         self.r[m.reg] = m.off
+
+    def aam(self, op):
+        """Split AL into two digits (opcode D4 + the base, which is 10 in every program that wants decimal digits).
+
+        "ASCII adjust AX after multiply": AH gets AL divided by the base, AL what is left over, so that AL = 47
+        becomes AH = 4, AL = 7. The sign, zero and parity flags are those of the new AL; the carry, auxiliary carry
+        and overflow flags are cleared (real processors leave them undefined, and clear them). A base of 0 divides
+        by zero, as DIV does.
+        """
+        base = self.fetch8()
+        if base == 0:
+            raise DivideError(f"divide by zero at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        al = self.get8(0)
+        self.set8(4, al // base)
+        self.set8(0, al % base)
+        self.logic_flags(al % base)
+
+    def aad(self, op):
+        """Put two digits back together in AL (opcode D5 + the base): AL = AH * base + AL, and AH = 0.
+
+        The other way round from AAM, and the step before a DIV by a number made of digits. The result is cut to a
+        byte. The flags are as AAM leaves them.
+        """
+        base = self.fetch8()
+        result = self.get8(4) * base + self.get8(0)  # what does not fit in a byte is lost when it is stored
+        self.set8(0, result)
+        self.set8(4, 0)
+        self.logic_flags(result)
+
+    def logic_flags(self, result):
+        """The flags after an operation on a byte that only looks at it: sign, zero and parity from `result`, and
+        the carry, auxiliary carry and overflow flags cleared."""
+        self.set_szp(result, 8)
+        self.flags &= ~(flags.CF | flags.AF | flags.OF)
 
     def esc(self, op):
         """An instruction of the coprocessor (opcodes D8-DF + ModRM), which this machine does not have.

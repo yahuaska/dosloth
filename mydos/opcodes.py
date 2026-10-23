@@ -80,6 +80,8 @@ class Op(IntEnum):
     MOV_RM_IMM = 0xC6    # C6 (byte) and C7 (word) + ModRM (reg field 0) + the constant: r/m <- imm
     IRET = 0xCF          # return from an interrupt: pops IP, CS and the flags
     INT = 0xCD           # followed by the interrupt number
+    AAM = 0xD4           # followed by the base (10 in practice): AH = AL // base, AL = AL % base
+    AAD = 0xD5           # followed by the base: AL = AH * base + AL, AH = 0
     SHIFT_RM = 0xD0      # D0..D3 + ModRM: shift or rotate r/m by 1 or by CL, the 'reg' field picks how (CPU.shift_rm)
     ESC = 0xD8           # D8..DF + ModRM: an instruction of the coprocessor (8087), which we do not have
     LOOPNE = 0xE0        # followed by a signed 8-bit displacement

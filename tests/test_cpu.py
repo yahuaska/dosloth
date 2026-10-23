@@ -2178,3 +2178,83 @@ class TestWaitAndTheCoprocessor(unittest.TestCase):
         cpu = machine(bytes([0x2E, 0xD9, 0x46, 0x02, 0xF4]), False)
         cpu.step()
         self.assertEqual(cpu.ip, 4)
+
+
+class TestAamAad(unittest.TestCase):
+    """D4 AAM and D5 AAD, with the base that follows them: AL split into two digits, and two digits put together."""
+
+    def run_one(self, cpu, code, ax):
+        cpu.mem[0x10000:0x10000 + len(code)] = code
+        cpu.ip = 0
+        cpu.r[CPU.AX] = ax
+        cpu.flags = 0x0002 | flags.DF | flags.IF | flags.CF | flags.AF | flags.OF  # these three must be cleared
+        cpu.step()
+
+    def expected_flags(self, result):
+        """What the sign, zero and parity flags say about the byte, and the carry flags nothing."""
+        return {"S": bool(result & 0x80), "Z": result == 0, "P": bin(result).count("1") % 2 == 0,
+                "C": False, "A": False, "O": False}
+
+    def flags_of(self, cpu):
+        return {"S": cpu.get_flag(flags.SF), "Z": cpu.get_flag(flags.ZF), "P": cpu.get_flag(flags.PF),
+                "C": cpu.get_flag(flags.CF), "A": cpu.get_flag(flags.AF), "O": cpu.get_flag(flags.OF)}
+
+    def test_aam_splits_every_value_of_al_into_tens_and_ones(self):
+        cpu = machine(b"", False)
+        for al in range(256):
+            self.run_one(cpu, bytes([0xD4, 10]), 0xAB00 | al)
+            quotient, remainder = divmod(al, 10)
+            self.assertEqual(cpu.r[CPU.AX], quotient << 8 | remainder, al)
+            self.assertEqual(cpu.ip, 2)
+            self.assertEqual(self.flags_of(cpu), self.expected_flags(remainder), al)
+
+    def test_aam_takes_the_base_from_the_next_byte(self):
+        cpu = machine(b"", False)
+        for base in (1, 2, 8, 10, 16, 100, 255):
+            for al in (0, 1, 7, 8, 9, 100, 200, 255):
+                self.run_one(cpu, bytes([0xD4, base]), 0x1200 | al)
+                self.assertEqual(cpu.r[CPU.AX], (al // base) << 8 | al % base, (base, al))
+                self.assertEqual(self.flags_of(cpu), self.expected_flags(al % base), (base, al))
+
+    def test_aam_ignores_what_ah_held(self):
+        cpu = machine(b"", False)
+        for ah in (0, 1, 0x80, 0xFF):
+            self.run_one(cpu, bytes([0xD4, 10]), ah << 8 | 47)
+            self.assertEqual(cpu.r[CPU.AX], 0x0407)
+
+    def test_aam_with_base_0_is_a_division_by_zero_and_changes_nothing(self):
+        cpu = machine(b"", False)
+        with self.assertRaisesRegex(DivideError, "divide by zero at 1000:0000"):
+            self.run_one(cpu, bytes([0xD4, 0]), 0x1234)
+        self.assertEqual(cpu.r[CPU.AX], 0x1234)
+
+    def test_aad_puts_every_pair_of_digits_together(self):
+        cpu = machine(b"", False)
+        for ah in range(256):
+            for al in range(0, 256, 5):
+                self.run_one(cpu, bytes([0xD5, 10]), ah << 8 | al)
+                result = (ah * 10 + al) & 0xFF
+                self.assertEqual(cpu.r[CPU.AX], result, (ah, al))
+                self.assertEqual(self.flags_of(cpu), self.expected_flags(result), (ah, al))
+
+    def test_aad_undoes_aam(self):
+        cpu = machine(b"", False)
+        for al in range(100):
+            self.run_one(cpu, bytes([0xD4, 10]), al)
+            self.run_one(cpu, bytes([0xD5, 10]), cpu.r[CPU.AX])
+            self.assertEqual(cpu.r[CPU.AX], al)
+
+    def test_aad_takes_the_base_from_the_next_byte_and_a_base_of_0_just_clears_ah(self):
+        cpu = machine(b"", False)
+        self.run_one(cpu, bytes([0xD5, 16]), 0x0305)
+        self.assertEqual(cpu.r[CPU.AX], 0x0035)
+        self.run_one(cpu, bytes([0xD5, 0]), 0x0305)
+        self.assertEqual(cpu.r[CPU.AX], 0x0005)
+
+    def test_the_other_registers_and_flags_stay(self):
+        for code in (bytes([0xD4, 10]), bytes([0xD5, 10])):
+            cpu = machine(b"", False)
+            cpu.r[1:] = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777]
+            self.run_one(cpu, code, 0x0529)
+            self.assertEqual(cpu.r[1:], [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777])
+            self.assertTrue(cpu.get_flag(flags.DF) and cpu.get_flag(flags.IF))

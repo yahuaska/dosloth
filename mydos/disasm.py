@@ -170,6 +170,9 @@ def _decode_opcode(r, op, seg_override):
         return f"{Alu(reg).name.lower()} {size}{rm}, {imm}"
     if Op.XCHG_AX_R16 < op < Op.XCHG_AX_R16 + 8:
         return f"xchg ax, {REG16[op - Op.XCHG_AX_R16]}"
+    if op in (Op.AAM, Op.AAD):
+        base = r.u8()
+        return f"{'aam' if op == Op.AAM else 'aad'}{'' if base == 10 else f' {base:02X}'}"
     if Op.ESC <= op < Op.ESC + 8:
         reg, rm, _ = _modrm(r, seg_override, 16)
         return f"esc {(op & 7) << 3 | reg:02X}, {rm}"  # the six bits that say which instruction of the 8087 it is
