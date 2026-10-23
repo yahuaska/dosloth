@@ -47,6 +47,7 @@ class Op(IntEnum):
     CBW = 0x98           # AL -> AX, the sign copied into AH
     CWD = 0x99           # AX -> DX:AX, the sign copied into DX
     CALL_FAR = 0x9A      # followed by offset and segment (two words): a call to another segment
+    WAIT = 0x9B          # wait for the coprocessor to be done; there is none, so it does nothing
     PUSHF = 0x9C         # flags -> stack
     POPF = 0x9D          # stack -> flags
     SAHF = 0x9E          # AH -> SF ZF AF PF CF
@@ -80,6 +81,7 @@ class Op(IntEnum):
     IRET = 0xCF          # return from an interrupt: pops IP, CS and the flags
     INT = 0xCD           # followed by the interrupt number
     SHIFT_RM = 0xD0      # D0..D3 + ModRM: shift or rotate r/m by 1 or by CL, the 'reg' field picks how (CPU.shift_rm)
+    ESC = 0xD8           # D8..DF + ModRM: an instruction of the coprocessor (8087), which we do not have
     LOOPNE = 0xE0        # followed by a signed 8-bit displacement
     LOOPE = 0xE1         # followed by a signed 8-bit displacement
     LOOP = 0xE2          # followed by a signed 8-bit displacement

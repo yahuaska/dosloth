@@ -81,6 +81,10 @@ class TestText(unittest.TestCase):
             (b"\x86\x07", "xchg al, [bx]"),
             (b"\x87\x4F\x02", "xchg cx, [bx+2]"),
             (b"\x99", "cwd"),
+            (b"\x9B", "wait"),
+            (b"\xDB\xE3", "esc 1C, bx"),   # fninit, from install.exe
+            (b"\xDD\x7E\x00", "esc 2F, [bp]"),   # fnstsw [bp]
+            (b"\xD9\x06\x34\x12", "esc 08, [1234]"),
             (b"\x60", "pusha"),   # from esetup.exe
             (b"\x6A\x02", "push 2"),   # from esetup.exe
             (b"\x6A\xFE", "push -2"),

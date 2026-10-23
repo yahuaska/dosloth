@@ -18,7 +18,7 @@ SEG_PREFIXES = {Op.ES_PREFIX: "es", Op.CS_PREFIX: "cs", Op.SS_PREFIX: "ss", Op.D
 JCC = ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"]
 # instructions that are a single byte with no operands
 PLAIN = {
-    Op.NOP: "nop", Op.CBW: "cbw", Op.CWD: "cwd", Op.HLT: "hlt",
+    Op.NOP: "nop", Op.WAIT: "wait", Op.CBW: "cbw", Op.CWD: "cwd", Op.HLT: "hlt",
     Op.PUSHF: "pushf", Op.POPF: "popf", Op.SAHF: "sahf", Op.LAHF: "lahf", Op.PUSHA: "pusha", Op.POPA: "popa",
     Op.RET_NEAR: "ret", Op.RETF: "retf", Op.IRET: "iret", Op.LEAVE: "leave",
     Op.CMC: "cmc", Op.CLC: "clc", Op.STC: "stc", Op.CLI: "cli", Op.STI: "sti", Op.CLD: "cld", Op.STD: "std",
@@ -170,6 +170,9 @@ def _decode_opcode(r, op, seg_override):
         return f"{Alu(reg).name.lower()} {size}{rm}, {imm}"
     if Op.XCHG_AX_R16 < op < Op.XCHG_AX_R16 + 8:
         return f"xchg ax, {REG16[op - Op.XCHG_AX_R16]}"
+    if Op.ESC <= op < Op.ESC + 8:
+        reg, rm, _ = _modrm(r, seg_override, 16)
+        return f"esc {(op & 7) << 3 | reg:02X}, {rm}"  # the six bits that say which instruction of the 8087 it is
     if op == Op.LEA:
         reg, rm, is_mem = _modrm(r, None, 16)  # a segment prefix does nothing to LEA, so it is not shown
         return f"lea {REG16[reg]}, {rm}" if is_mem else None

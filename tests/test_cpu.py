@@ -2136,3 +2136,45 @@ class TestLeave(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWaitAndTheCoprocessor(unittest.TestCase):
+    """9B WAIT, and D8-DF + ModRM, the instructions of the 8087: with no coprocessor they only take their bytes."""
+
+    def state(self, cpu):
+        return (list(cpu.r), list(cpu.s), cpu.flags, bytes(cpu.mem))
+
+    def test_wait_does_nothing(self):
+        cpu = machine(bytes([0x9B, 0xF4]), True)
+        before = self.state(cpu)
+        cpu.step()
+        self.assertEqual((cpu.ip, self.state(cpu)), (1, before))
+
+    def test_every_esc_opcode_takes_its_modrm_byte_and_changes_nothing(self):
+        for op in range(0xD8, 0xE0):
+            for modrm_byte in (0xE3, 0xC1, 0xF8, 0x07, 0x1F):
+                cpu = machine(bytes([op, modrm_byte, 0xF4]), True)
+                before = self.state(cpu)
+                cpu.step()
+                self.assertEqual(cpu.ip, 2, f"{op:02X} {modrm_byte:02X}")
+                self.assertEqual(self.state(cpu), before, f"{op:02X} {modrm_byte:02X}")
+
+    def test_the_displacement_and_the_direct_address_are_taken_too(self):
+        for modrm_byte, length in ((0x47, 3), (0x87, 4), (0x06, 4), (0x46, 3), (0x80, 4), (0x00, 2), (0xC0, 2)):
+            cpu = machine(bytes([0xDB, modrm_byte, 0x11, 0x22, 0xF4]), False)
+            cpu.step()
+            self.assertEqual(cpu.ip, length, f"{modrm_byte:02X}")
+
+    def test_the_test_for_a_coprocessor_finds_none(self):
+        # wait ; fninit ; sub sp,2 ; mov bp,sp ; mov word [bp],5A5Ah ; fnstsw [bp] ; mov ax,[bp]
+        code = bytes([0x9B, 0xDB, 0xE3, 0x83, 0xEC, 0x02, 0x8B, 0xEC, 0xC7, 0x46, 0x00, 0x5A, 0x5A,
+                      0xDD, 0x7E, 0x00, 0x8B, 0x46, 0x00, 0xF4])
+        cpu = machine(code, False)
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x4000, 0x0100
+        cpu.run()
+        self.assertEqual(cpu.r[CPU.AX], 0x5A5A)  # the status word was never written: no coprocessor
+
+    def test_a_segment_prefix_before_esc_does_not_upset_it(self):
+        cpu = machine(bytes([0x2E, 0xD9, 0x46, 0x02, 0xF4]), False)
+        cpu.step()
+        self.assertEqual(cpu.ip, 4)

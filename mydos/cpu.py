@@ -91,6 +91,7 @@ class CPU:
         # opcode byte -> handler(op). Groups get one entry per opcode value.
         self.ops = {
             Op.NOP: self.nop,
+            Op.WAIT: self.nop,
             Op.LEA: self.lea,
             Op.POP_RM16: self.pop_rm16,
             Op.CALL_FAR: self.call_far_imm,
@@ -191,6 +192,8 @@ class CPU:
             self.ops[Op.MOV_RM_IMM + size] = self.mov_rm_imm
         for form in range(4):
             self.ops[Op.SHIFT_RM + form] = self.shift_rm
+        for form in range(8):
+            self.ops[Op.ESC + form] = self.esc
         for size in range(2):
             self.ops[Op.GROUP3_RM + size] = self.group3_rm
         for form in range(4):
@@ -711,6 +714,16 @@ class CPU:
         if m.is_reg:
             raise NotImplementedError(f"LEA with a register at {self.s[self.CS]:04X}:{self.start_ip:04X}")
         self.r[m.reg] = m.off
+
+    def esc(self, op):
+        """An instruction of the coprocessor (opcodes D8-DF + ModRM), which this machine does not have.
+
+        With no 8087 in the socket the processor still reads the ModRM byte and the displacement, as for any
+        instruction with an operand, and the bus answers nothing: no register changes, no flag, and memory is not
+        written. A program tests for the chip by this (`fninit`, then `fnstsw` into a word it has filled, and a
+        word that is still full says there is none) and goes on without it, or with its own routines.
+        """
+        modrm.decode(self, self.seg_override)
 
     def pop_rm16(self, op):
         """Take a word off the stack into a register or into memory (opcode 8F + ModRM).
