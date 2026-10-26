@@ -488,8 +488,9 @@ def int2f(cpu, state):
     """INT 2Fh: the multiplex interrupt. Programs ask here what is installed besides DOS; AH picks the service.
 
     So far the questions to MSCDEX, the CD-ROM extension of DOS: 1500h, how many CD-ROM drives there are. It is
-    there when the machine has a CD-ROM drive, and then it also answers 150Bh and 150Ch, and reads sectors (1508h)
-    if the disc in the drive is an image. Without a drive there is no MSCDEX, and the count is 0.
+    there when the machine has a CD-ROM drive, and then it also answers 150Bh, 150Ch and 150Dh (the letters of the
+    drives), and reads sectors (1508h) if the disc in the drive is an image. Without a drive there is no MSCDEX, and
+    the count is 0.
 
     And 1600h, "is Windows running in the enhanced mode?" Not here: AL stays 00h, which is what a machine with no
     Windows answers, because nothing answers.
@@ -522,6 +523,9 @@ def int2f(cpu, state):
                 for i, byte in enumerate(data):
                     cpu.wb(cpu.s[CPU.ES], (cpu.r[CPU.BX] + i) & 0xFFFF, byte)  # round the end of the segment
                 cpu.set_flag(flags.CF, False)
+    elif cdroms and ax == 0x150D:  # the numbers of the CD-ROM drives, a byte each, to ES:BX (0 is A:, lowest first)
+        for i, drive in enumerate(cdroms):
+            cpu.wb(cpu.s[CPU.ES], (cpu.r[CPU.BX] + i) & 0xFFFF, drive)
     elif cdroms and ax == 0x150C:  # the version of MSCDEX in BX: the major number in BH, the minor in BL
         cpu.r[CPU.BX] = MSCDEX_VERSION
     elif ax == 0x1600:  # nothing of Windows is installed to answer, so AX is as the program left it

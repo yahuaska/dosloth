@@ -1151,9 +1151,52 @@ class TestMultiplex(unittest.TestCase):
         self.call(0x150C, bx=0)
         self.assertEqual(self.cpu.r[CPU.BX], 0x020A)
 
-    def test_150b_and_150c_are_not_answered_where_there_is_no_mscdex(self):
+    def drive_letters(self, buffer=0x0200, fill=0xAA, size=8, es=0x3000):
+        cpu = self.cpu
+        for i in range(size):
+            cpu.wb(es, (buffer + i) & 0xFFFF, fill)
+        cpu.s[CPU.ES] = es
+        self.call(0x150D, bx=buffer)
+        return bytes(cpu.rb(es, (buffer + i) & 0xFFFF) for i in range(size))
+
+    def test_150d_gives_the_number_of_each_cd_rom_drive_and_nothing_more(self):
+        self.machine()
+        self.assertEqual(self.drive_letters(), bytes([3]) + bytes([0xAA]) * 7)  # D:
+
+    def test_150d_lists_the_drives_from_the_lowest_though_e_is_written_before_d(self):
+        self.machine(self.TWO_CDROMS)
+        self.assertEqual(self.drive_letters(), bytes([3, 4]) + bytes([0xAA]) * 6)
+
+    def test_150d_agrees_with_what_1500_counts(self):
+        self.machine(self.TWO_CDROMS)
+        self.call(0x1500)
+        count = self.cpu.r[CPU.BX]
+        letters = self.drive_letters()
+        self.assertEqual(count, 2)
+        self.assertEqual(letters[count:], bytes([0xAA]) * (8 - count))
+
+    def test_150d_leaves_the_registers_and_the_flags_alone(self):
+        self.machine(self.TWO_CDROMS)
+        cpu = self.cpu
+        cpu.set_flag(flags.CF, True)
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x4444, 0x5555
+        self.drive_letters()
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (0x150D, 0x0200, 0x2222, 0x3333))
+        self.assertEqual((cpu.r[CPU.SI], cpu.r[CPU.DI], cpu.s[CPU.ES]), (0x4444, 0x5555, 0x3000))
+        self.assertTrue(cpu.get_flag(flags.CF))
+
+    def test_150d_may_go_round_the_end_of_the_segment(self):
+        self.machine(self.TWO_CDROMS)
+        self.assertEqual(self.drive_letters(buffer=0xFFFF, size=3), bytes([3, 4, 0xAA]))
+        self.assertEqual(self.cpu.rb(0x3000, 0), 4)
+
+    def test_150d_with_a_disc_or_without_is_the_same(self):
+        self.machine("[disks.C]\ntype = 'hdd'\n[mounts]\nC = { type = 'tmpfs' }\n[disks.D]\ntype = 'cdrom'\n")
+        self.assertEqual(self.drive_letters()[:2], bytes([3, 0xAA]))
+
+    def test_150b_150c_and_150d_are_not_answered_where_there_is_no_mscdex(self):
         self.machine(self.FLOPPIES_ONLY)
-        for ax in (0x150B, 0x150C):
+        for ax in (0x150B, 0x150C, 0x150D):
             with self.assertRaises(NotImplementedError):
                 self.call(ax)
 
