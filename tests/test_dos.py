@@ -68,6 +68,56 @@ class TestIoctlGetDeviceInfo(unittest.TestCase):
                 int21(0x4400 | al, bx=1)
 
 
+class TestAbsoluteDiskRead(unittest.TestCase):
+    """INT 25h: sectors of a disk. This machine has none to give, so it is an error, and the flags stay on the stack."""
+
+    def ask(self, drive, cx=1, dx=0, flags_before=0x0246, buffer=0x0300):
+        cpu = CPU()
+        dos.install(cpu)
+        cpu.s[CPU.CS], cpu.s[CPU.DS], cpu.s[CPU.SS] = 0x1000, 0x2000, 0x4000
+        cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x25])
+        for i in range(16):
+            cpu.wb(0x2000, buffer + i, 0xAA)
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = 0xCD00 | drive, buffer, cx, dx
+        cpu.r[CPU.SI], cpu.r[CPU.DI], cpu.r[CPU.BP], cpu.r[CPU.SP] = 0x4444, 0x5555, 0x6666, 0x0200
+        cpu.flags = flags_before
+        cpu.step()
+        return cpu
+
+    def test_it_is_an_error_a_general_failure_with_the_carry_set(self):
+        for drive in (0, 1, 2, 3):  # A:, B:, C:, D:
+            cpu = self.ask(drive)
+            self.assertTrue(cpu.get_flag(flags.CF), drive)
+            self.assertEqual(cpu.r[CPU.AX], 0x000C, drive)
+
+    def test_a_drive_that_is_not_there_is_an_unknown_unit(self):
+        for drive in (4, 25, 0xFF):
+            cpu = self.ask(drive)
+            self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX]), (True, 0x0001), drive)
+
+    def test_the_flags_the_int_pushed_are_left_on_the_stack_and_the_program_takes_them_off(self):
+        for before in (0x0246, 0x0247, 0x0002, 0x0A03):
+            cpu = self.ask(2, flags_before=before)
+            self.assertEqual(cpu.r[CPU.SP], 0x01FE)
+            self.assertEqual(cpu.rw(0x4000, 0x01FE), before)  # as they were, with the carry before the call
+            self.assertTrue(cpu.get_flag(flags.CF))
+
+    def test_the_buffer_and_the_registers_other_than_ax_are_left_alone(self):
+        cpu = self.ask(2, cx=3, dx=7)
+        self.assertEqual(bytes(cpu.rb(0x2000, 0x0300 + i) for i in range(16)), bytes([0xAA]) * 16)
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.r[CPU.SI], cpu.r[CPU.DI], cpu.r[CPU.BP]),
+                         (0x0300, 3, 7, 0x4444, 0x5555, 0x6666))
+        self.assertEqual((cpu.s[CPU.DS], cpu.s[CPU.CS], cpu.ip), (0x2000, 0x1000, 2))
+
+    def test_the_form_for_big_disks_with_cx_ffff_is_the_same_error(self):
+        cpu = self.ask(2, cx=0xFFFF)
+        self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX]), (True, 0x000C))
+
+    def test_other_flags_stay_as_they_are(self):
+        cpu = self.ask(2, flags_before=0x0246 | flags.DF)
+        self.assertTrue(cpu.get_flag(flags.DF) and cpu.get_flag(flags.ZF) and cpu.get_flag(flags.IF))
+
+
 class TestIoctlControlData(unittest.TestCase):
     """INT 21h AH=44h AL=04h and 05h: control data to and from the driver of a block device. BL counts from 1."""
 

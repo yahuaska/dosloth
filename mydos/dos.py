@@ -575,6 +575,20 @@ def int2f(cpu, state):
         raise NotImplementedError(f"INT 2Fh AX={ax:04X}")
 
 
+def int25(cpu, state):
+    """INT 25h: read sectors of a disk, by number (AL = the drive, 0 is A:; CX sectors from DX, to DS:BX; or CX =
+    0FFFFh and a packet at DS:BX, for a big disk). Not here: the disks of this machine are directories and images,
+    with files and no sectors to give. So the answer is an error, with CF set and AL the DOS code: 0Ch, a general
+    failure, or 01h for a drive that is not there. Nothing is written to the buffer.
+
+    Whatever the drive, DOS leaves the flags that the INT pushed on the stack, and the program has to take them off
+    (it is the only call like this): they are pushed here, before the carry flag is set.
+    """
+    cpu.push16(cpu.flags)
+    cpu.r[CPU.AX] = 0x0001 if cpu.get8(0) not in state.config.disks else 0x000C
+    cpu.set_flag(flags.CF, True)
+
+
 def install(cpu, volumes=None):
     """Hook DOS interrupt handlers into the CPU, for the drives in `volumes` (see volumes.py).
 
@@ -585,5 +599,6 @@ def install(cpu, volumes=None):
     sysvars.write(cpu, state.config, MEMORY_TOP_SEG)  # the tables of DOS, which a program finds with AH=52h
     cpu.int_handlers[0x20] = lambda cpu: process.terminate(cpu, state, 0)
     cpu.int_handlers[0x21] = lambda cpu: int21(cpu, state)
+    cpu.int_handlers[0x25] = lambda cpu: int25(cpu, state)
     cpu.int_handlers[0x2F] = lambda cpu: int2f(cpu, state)
     return state  # for whoever wants to look at what DOS holds, the tests in particular
