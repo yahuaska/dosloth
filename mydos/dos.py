@@ -350,6 +350,13 @@ def int21(cpu, state):
                 stream.flush()
             cpu.r[CPU.AX] = count
             cpu.set_flag(flags.CF, False)
+    elif ah == 0x41:  # delete the file named at DS:DX: no wildcards, and not a directory or a read-only file
+        try:
+            where = state.volumes.resolve(read_path(cpu))
+            where.filesystem.remove(where.parts)
+            cpu.set_flag(flags.CF, False)
+        except FsError as error:
+            fail(cpu, error)
     elif ah == 0x42:  # move the position in the file of handle BX; DX:AX = the new position
         # AL = from where: 0 the start of the file, 1 where it is now, 2 the end of the file. CX:DX = how far, a
         # signed number of 32 bits. A position past the end is all right: a read finds nothing there, and a write

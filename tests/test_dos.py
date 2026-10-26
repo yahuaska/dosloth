@@ -2539,6 +2539,91 @@ class TestDiskSpace(FileFunctionsTest):
         self.assertTrue(cpu.get_flag(flags.CF))
 
 
+class TestDeleteFile(FileFunctionsTest):
+    """INT 21h AH=41h: delete a file."""
+
+    def delete(self, name, **registers):
+        self.call(0x4100, name, **registers)
+        return self.failed()
+
+    def test_a_file_is_gone_from_the_host_and_the_carry_is_clear(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.assertIsNone(self.delete("NOTES.TXT"))
+        self.assertFalse(self.cpu.get_flag(flags.CF))
+        self.assertFalse((self.base / "NOTES.TXT").exists())
+        self.assertTrue((self.base / "GAMES").is_dir())  # and nothing else
+
+    def test_a_file_in_a_directory_and_a_name_in_other_case_and_with_the_drive(self):
+        (self.base / "GAMES" / "SAVE.DAT").write_bytes(b"x")
+        self.assertIsNone(self.delete("games\\save.dat"))
+        self.assertEqual(os.listdir(self.base / "GAMES"), [])
+        self.assertIsNone(self.delete("c:\\notes.txt"))
+        self.assertFalse((self.base / "NOTES.TXT").exists())
+
+    def test_the_file_a_program_just_made_can_be_deleted_after_it_is_closed(self):
+        self.call(0x3C00, "XXYXZ.$%!")
+        handle = self.cpu.r[CPU.AX]
+        self.call(0x3E00, bx=handle)
+        self.assertTrue((self.base / "XXYXZ.$%!").exists())
+        self.assertIsNone(self.delete("XXYXZ.$%!"))
+        self.assertFalse((self.base / "XXYXZ.$%!").exists())
+
+    def test_a_file_that_is_not_there_is_error_2_and_a_path_that_is_not_there_is_error_3(self):
+        self.assertEqual(self.delete("NOTHING.TXT"), 2)
+        self.assertEqual(self.delete("GAMES\\NOTHING.TXT"), 2)
+        self.assertEqual(self.delete("NOTHING\\NOTES.TXT"), 3)
+        self.assertEqual(self.delete("NOTES.TXT\\X"), 3)
+        self.assertTrue((self.base / "NOTES.TXT").exists())
+
+    def test_a_directory_is_error_5_and_stays(self):
+        self.assertEqual(self.delete("GAMES"), 5)
+        self.assertEqual(self.delete("\\"), 5)  # the root has no name to delete
+        self.assertTrue((self.base / "GAMES").is_dir())
+
+    def test_a_read_only_file_is_error_5_and_stays_until_it_is_made_writable(self):
+        self.skip_if_root()
+        (self.base / "NOTES.TXT").chmod(0o444)
+        self.assertEqual(self.delete("NOTES.TXT"), 5)
+        self.assertTrue((self.base / "NOTES.TXT").exists())
+        self.call(0x4301, "NOTES.TXT", cx=0)
+        self.assertIsNone(self.delete("NOTES.TXT"))
+        self.assertFalse((self.base / "NOTES.TXT").exists())
+
+    def test_a_wildcard_is_not_expanded_and_deletes_nothing(self):
+        for name in ("*.TXT", "NOTES.*", "N?TES.TXT"):
+            self.assertIn(self.delete(name), (2, 3), name)
+        self.assertTrue((self.base / "NOTES.TXT").exists())
+
+    def test_a_file_in_a_memory_disk_is_deleted_there(self):
+        self.call(0x3C00, "D:\\TEMP.DAT")
+        self.call(0x3E00, bx=self.cpu.r[CPU.AX])
+        self.assertEqual([entry.name for entry in self.volumes.filesystems[3].listdir([])], ["TEMP.DAT"])
+        self.assertIsNone(self.delete("D:\\TEMP.DAT"))
+        self.assertEqual(self.volumes.filesystems[3].listdir([]), [])
+
+    def test_a_drive_that_is_not_there_or_has_nothing_in_it_is_an_error_of_the_drive(self):
+        self.assertEqual(self.delete("A:\\X.TXT"), 21)
+        self.assertEqual(self.delete("Z:\\X.TXT"), 15)
+
+    def test_a_disc_cannot_be_written_to(self):
+        from tests.iso_builder import build
+        (self.base / "disc.iso").write_bytes(build({"A.TXT": b"abc"}))
+        from mydos.iso import IsoFs, IsoImage
+        self.volumes.filesystems[3] = IsoFs(IsoImage(self.base / "disc.iso"))
+        self.assertEqual(self.delete("D:\\A.TXT"), 5)
+
+    def test_the_registers_other_than_ax_and_the_flags_are_left_alone(self):
+        self.cpu.r[CPU.SI], self.cpu.r[CPU.DI] = 0x4444, 0x5555
+        self.assertIsNone(self.delete("NOTES.TXT", bx=0x1111, cx=0x2222))
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.r[CPU.SI], cpu.r[CPU.DI]),
+                         (0x1111, 0x2222, 0x0100, 0x4444, 0x5555))
+
+    def test_the_name_is_read_from_ds_dx_round_the_end_of_the_segment(self):
+        self.assertIsNone(self.delete("NOTES.TXT", dx=0xFFFA))
+        self.assertFalse((self.base / "NOTES.TXT").exists())
+
+
 class TestGetCurrentDirectory(FileFunctionsTest):
     """INT 21h AH=47h: the current directory of a drive, written at DS:SI without the drive and the first backslash."""
 
