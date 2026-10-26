@@ -425,6 +425,20 @@ def int21(cpu, state):
             else:  # error 0Fh: invalid drive
                 cpu.set_flag(flags.CF, True)
                 cpu.r[CPU.AX] = 0x0F
+        elif al in (0x04, 0x05):
+            # Subfunctions 4 and 5: read control data from the driver of the drive in BL, or write it (CX bytes at
+            # DS:DX; BL counts from 1 as in subfunction 8). Only a driver that says in its attributes that it takes
+            # control strings answers; the drivers of disks do not, and DOS says "invalid function" for them. A program
+            # asks so, to know whether a cache or a disk compressor is there, and takes the error as "no".
+            number = cpu.get8(3)
+            drive = state.volumes.current_drive if number == 0 else number - 1
+            if drive not in state.config.disks:
+                fail(cpu, FsError(INVALID_DRIVE, f"there is no drive {chr(ord('A') + drive)}:"))
+            elif state.config.disks[drive].type == "cdrom":
+                raise NotImplementedError(f"INT 21h AH=44 AL={al:02X} for a CD-ROM drive: its driver takes control "
+                                          "data")
+            else:
+                fail(cpu, FsError(INVALID_FUNCTION, "the driver of this disk takes no control data"))
         else:
             raise NotImplementedError(f"INT 21h AH=44 AL={al:02X}")
     elif ah == 0x63:  # the table of lead bytes of two-byte characters, for the Chinese, Japanese and Korean pages

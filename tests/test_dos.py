@@ -68,6 +68,64 @@ class TestIoctlGetDeviceInfo(unittest.TestCase):
                 int21(0x4400 | al, bx=1)
 
 
+class TestIoctlControlData(unittest.TestCase):
+    """INT 21h AH=44h AL=04h and 05h: control data to and from the driver of a block device. BL counts from 1."""
+
+    def ask(self, al, bl, current=None, buffer=0x0200):
+        cpu = CPU()
+        dos.install(cpu)
+        if current is not None:
+            cpu.s[CPU.CS] = 0x1000
+            cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+            cpu.r[CPU.AX], cpu.r[CPU.DX] = 0x0E00, current
+            cpu.step()
+        cpu.s[CPU.CS], cpu.s[CPU.DS] = 0x1000, 0x2000
+        cpu.mem[0x10100:0x10102] = bytes([0xCD, 0x21])
+        for i in range(16):
+            cpu.wb(0x2000, buffer + i, 0xAA)
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = 0x4400 | al, 0x1100 | bl, 13, buffer
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x4444, 0x5555
+        cpu.set_flag(flags.CF, False)
+        cpu.ip = 0x0100
+        cpu.step()
+        return cpu
+
+    def test_the_disks_have_no_control_data_and_it_is_error_1_for_both_directions(self):
+        for al in (4, 5):
+            for bl, name in ((1, "A:"), (2, "B:"), (3, "C:")):
+                cpu = self.ask(al, bl)
+                self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX]), (True, 1), f"AL={al} {name}")
+
+    def test_bl_0_is_the_current_drive(self):
+        self.assertEqual(self.ask(5, 0).r[CPU.AX], 1)  # C:, where a program starts
+        self.assertEqual(self.ask(5, 0, current=0).r[CPU.AX], 1)  # A:
+        with self.assertRaisesRegex(NotImplementedError, "CD-ROM"):
+            self.ask(5, 0, current=3)  # D:
+
+    def test_a_drive_that_is_not_there_is_error_0fh(self):
+        for al in (4, 5):
+            for bl in (5, 27, 0xFF):
+                cpu = self.ask(al, bl)
+                self.assertEqual((cpu.get_flag(flags.CF), cpu.r[CPU.AX]), (True, 0x0F), f"AL={al} BL={bl}")
+
+    def test_a_cd_rom_drive_stops_the_emulator_with_a_message_that_names_it(self):
+        for al in (4, 5):
+            with self.assertRaisesRegex(NotImplementedError, f"AH=44 AL={al:02X} for a CD-ROM drive"):
+                self.ask(al, 4)
+
+    def test_the_buffer_is_not_touched_and_the_registers_stay(self):
+        cpu = self.ask(5, 3)
+        self.assertEqual(bytes(cpu.rb(0x2000, 0x0200 + i) for i in range(16)), bytes([0xAA]) * 16)
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.r[CPU.SI], cpu.r[CPU.DI]),
+                         (0x1103, 13, 0x0200, 0x4444, 0x5555))
+        self.assertEqual((cpu.s[CPU.DS], cpu.ip), (0x2000, 0x0102))
+
+    def test_the_other_subfunctions_are_still_not_done(self):
+        for al in (0x02, 0x03, 0x06, 0x07, 0x09, 0x0D):
+            with self.assertRaisesRegex(NotImplementedError, f"AH=44 AL={al:02X}"):
+                self.ask(al, 3)
+
+
 class TestWriteToHandle(unittest.TestCase):
     """INT 21h AH=40h: write CX bytes from DS:DX to the handle in BX."""
 
