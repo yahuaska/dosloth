@@ -41,6 +41,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/calllog.py` - `-t LOGFILE`: every call of the program to DOS (INT 21h, 2Fh, 25h, 20h) with its names and
   the answer; a run of the same call is folded into one; the last line of the log is the call that was being made
   when something went wrong
+- `mydos/command.py` - a pocket COMMAND.COM: when a program starts one that is not on the disk (`/c md C:\X`), the
+  command is done in Python; only what a program has been seen to call for (MD so far), the rest stops loudly
 - `mydos/fcb.py` - a file name taken apart into the drive, name and extension of an FCB (INT 21h AH=29h)
 - `mydos/handles.py` - the table of 20 open handles (the JFT): 0-4 are the console, stderr, AUX and PRN, files
   take the lowest free slot

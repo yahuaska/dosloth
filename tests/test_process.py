@@ -1,7 +1,7 @@
 import struct
 import unittest
 
-from mydos import dos, flags, psp
+from mydos import command, dos, flags, psp
 from mydos.cpu import CPU
 from mydos.handles import OpenFile
 from tests import test_dos
@@ -410,6 +410,124 @@ class TestWhenItCannotBeStarted(ProcessTest):
         for al in (1, 3, 5):
             with self.assertRaisesRegex(NotImplementedError, f"AH=4B AL={al:02X}"):
                 self.call(0x4B00 | al, "C:\\X.COM", bx=self.parameters())
+
+
+class TestThePocketCommandCom(ProcessTest):
+    """A COMMAND.COM that is not on the disk is the pocket one: it does the command of the tail, and goes back."""
+
+    def shell(self, tail, name="C:\\COMMAND.COM"):
+        """AH=4Bh for `name`, with `tail` for the command line (what comes after the program's name)."""
+        data = tail.encode("cp437")
+        self.cpu.wb(0x2000, 0x0600, len(data))
+        for i, byte in enumerate(data + b"\r"):
+            self.cpu.wb(0x2000, 0x0601 + i, byte)
+        block = self.parameters(tail=0x2000 << 16 | 0x0600)
+        self.call(0x4B00, name, bx=block, dx=0x0100)
+
+    def test_md_makes_the_directory_and_the_program_goes_on_as_after_a_child_that_ended_well(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.shell("/c md C:\\XCOMA\\tacexe")
+        cpu = self.cpu
+        self.assertFalse(cpu.get_flag(flags.CF))
+        self.assertEqual(cpu.r[CPU.AX], 0)
+        self.assertTrue((self.base / "XCOMA" / "TACEXE").is_dir())
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x0800, 2))  # the instruction after the INT 21h
+        self.call(0x4D00)
+        self.assertEqual(cpu.r[CPU.AX], 0)  # the exit code of the child
+
+    def test_no_program_is_started_and_the_memory_is_as_it_was(self):
+        blocks = dict(self.state.memory.blocks)
+        self.shell("/c md C:\\XCOMA")
+        self.assertEqual(self.state.parents, [])
+        self.assertEqual(self.state.psp_seg, PARENT)
+        self.assertEqual(self.state.memory.blocks, blocks)
+        self.assertEqual(self.state.dta, (PARENT, 0x80))
+
+    def test_what_the_command_says_goes_to_the_console(self):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.shell("/c md C:\\GAMES")
+        self.assertEqual(out.getvalue(), "A subdirectory or file C:\\GAMES already exists\r\n")
+        self.assertIsNone(self.failed())
+
+    def test_the_name_may_be_in_any_case_and_in_any_directory(self):
+        for name in ("c:\\command.com", "C:\\DOS\\COMMAND.COM", "COMMAND.COM"):
+            self.shell("/c md X" + str(len(name)), name=name)
+            self.assertIsNone(self.failed(), name)
+        self.assertEqual(len([entry for entry in self.base.iterdir() if entry.name.startswith("X")]), 3)
+
+    def test_a_command_that_is_not_known_stops_the_emulator(self):
+        with self.assertRaisesRegex(NotImplementedError, "the command XCOPY is not done"):
+            self.shell("/c xcopy a b")
+
+    def test_a_program_that_is_not_there_and_is_not_a_command_com_is_still_error_2(self):
+        self.shell("/c md X", name="C:\\NOTCOMMAND.COM")
+        self.assertEqual(self.failed(), 2)
+        self.assertFalse((self.base / "X").exists())
+
+    def test_a_real_command_com_on_the_disk_is_the_one_that_runs(self):
+        self.program("COMMAND.COM", com(EXIT(7)))
+        self.shell("/c md C:\\NEVERMADE")
+        child = self.state.psp_seg
+        self.assertNotEqual(child, PARENT)  # a program was started
+        self.run_child()
+        self.call(0x4D00)
+        self.assertEqual(self.cpu.r[CPU.AX], 7)
+        self.assertFalse((self.base / "NEVERMADE").exists())
+
+    def test_the_tail_is_read_from_the_far_pointer_of_the_parameter_block_wherever_it_is(self):
+        cpu = self.cpu
+        line = b"/c md C:\\WRAPPED"
+        for i, byte in enumerate(bytes([len(line)]) + line + b"\r"):
+            cpu.wb(0x3000, 0x0F00 + i, byte)
+        block = self.parameters(tail=0x3000 << 16 | 0x0F00)
+        self.call(0x4B00, "C:\\COMMAND.COM", bx=block, dx=0x0100)
+        self.assertTrue((self.base / "WRAPPED").is_dir())
+
+    def test_a_tail_that_goes_round_the_end_of_the_segment_is_read_whole(self):
+        cpu = self.cpu
+        line = b"/c md C:\\X"
+        for i, byte in enumerate(bytes([len(line)]) + line):
+            cpu.wb(0x3000, (0xFFFC + i) & 0xFFFF, byte)
+        block = self.parameters(tail=0x3000 << 16 | 0xFFFC)
+        self.call(0x4B00, "C:\\COMMAND.COM", bx=block, dx=0x0100)
+        self.assertTrue((self.base / "X").is_dir())
+
+    def test_the_exit_code_of_the_shell_is_what_ah_4dh_gives_afterwards(self):
+        from unittest import mock
+        with mock.patch.object(command.Shell, "run", return_value=5):
+            self.shell("/c md C:\\XCOMA")
+        self.call(0x4D00)
+        self.assertEqual(self.cpu.r[CPU.AX], 5)
+
+    def test_a_parameter_block_that_begins_2_bytes_before_the_end_of_a_segment_is_read_whole(self):
+        cpu = self.cpu
+        line = b"/c md C:\\BLOCKWRP"
+        for i, byte in enumerate(bytes([len(line)]) + line):
+            cpu.wb(0x3000, 0x0300 + i, byte)
+        for i, word in enumerate((0, 0x0300, 0x3000, 0, 0, 0, 0)):  # the pointers are on both sides of the end
+            cpu.wb(0x3000, (0xFFFE + 2 * i) & 0xFFFF, word & 0xFF)
+            cpu.wb(0x3000, (0xFFFE + 2 * i + 1) & 0xFFFF, word >> 8)
+        cpu.s[CPU.ES] = 0x3000
+        self.call(0x4B00, "C:\\COMMAND.COM", bx=0xFFFE, dx=0x0100)
+        self.assertTrue((self.base / "BLOCKWRP").is_dir())
+
+    def test_a_tail_whose_length_byte_is_the_last_byte_of_a_segment_has_its_text_at_the_start_of_it(self):
+        cpu = self.cpu
+        line = b"/c md C:\\TAILWRAP"
+        for i, byte in enumerate(bytes([len(line)]) + line):
+            cpu.wb(0x3000, (0xFFFF + i) & 0xFFFF, byte)
+        block = self.parameters(tail=0x3000 << 16 | 0xFFFF)
+        self.call(0x4B00, "C:\\COMMAND.COM", bx=block, dx=0x0100)
+        self.assertTrue((self.base / "TAILWRAP").is_dir())
+
+    def test_the_registers_other_than_ax_are_left_alone(self):
+        cpu = self.cpu
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x4444, 0x5555
+        self.shell("/c md C:\\XCOMA")
+        self.assertEqual((cpu.r[CPU.SI], cpu.r[CPU.DI], cpu.s[CPU.DS], cpu.s[CPU.ES]), (0x4444, 0x5555, 0x2000, 0x3000))
 
 
 class TestWithoutAParent(unittest.TestCase):

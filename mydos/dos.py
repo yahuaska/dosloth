@@ -528,9 +528,7 @@ def int21(cpu, state):
             raise NotImplementedError(f"INT 21h AH=4B AL={cpu.get8(0):02X}")
         try:
             where = state.volumes.resolve(read_path(cpu))
-            with where.filesystem.open(where.parts) as program:
-                data = program.read()
-            process.execute(cpu, state, data, where.dos_path(), (cpu.s[CPU.ES], cpu.r[CPU.BX]))
+            process.start(cpu, state, where, (cpu.s[CPU.ES], cpu.r[CPU.BX]))
         except FsError as error:
             fail(cpu, error)
     elif ah == 0x4C:  # exit with code in AL

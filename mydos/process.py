@@ -6,9 +6,9 @@ child ends (AH=4Ch, INT 20h), the registers of the parent come back and it goes 
 """
 from dataclasses import dataclass
 
-from . import flags, loader, psp
+from . import command, flags, loader, psp
 from .cpu import CPU, Exit
-from .filesystem import FsError
+from .filesystem import FILE_NOT_FOUND, PATH_NOT_FOUND, FsError
 from .handles import HandleTable
 
 INSUFFICIENT_MEMORY = 8
@@ -52,6 +52,34 @@ def read_pointer(cpu, segment, offset):
 def read_bytes(cpu, segment, offset, count):
     """`count` bytes from segment:offset, going round at the end of the segment as an offset does."""
     return bytes(cpu.rb(segment, (offset + i) & 0xFFFF) for i in range(count))
+
+
+def read_tail(cpu, block):
+    """The command line that the parameter block at `block` (segment, offset) gives to the program: the far pointer
+    at its 2nd byte leads to a length byte and that many characters, as text."""
+    segment, offset = block
+    tail_offset = cpu.rw(segment, (offset + 2) & 0xFFFF)
+    tail_segment = cpu.rw(segment, (offset + 4) & 0xFFFF)
+    length = cpu.rb(tail_segment, tail_offset)
+    return read_bytes(cpu, tail_segment, tail_offset + 1, length).decode("cp437")
+
+
+def start(cpu, state, where, block):
+    """AH=4Bh, AL=00h for the file at `where` (a volumes.Location). The file is read and started; but a COMMAND.COM
+    that is not there (nor its directory: a program may look for it wherever its COMSPEC says) is the pocket one, see
+    command.py: it does the command of the tail itself, and the program that asked goes on, with no carry and AX = 0,
+    as after any child that ended well."""
+    try:
+        with where.filesystem.open(where.parts) as program:
+            data = program.read()
+    except FsError as error:
+        if error.code not in (FILE_NOT_FOUND, PATH_NOT_FOUND) or not command.is_command_com(where.parts):
+            raise
+        state.exit_status = command.Shell(state.volumes).run(read_tail(cpu, block))
+        cpu.r[CPU.AX] = 0
+        cpu.set_flag(flags.CF, False)
+        return
+    execute(cpu, state, data, where.dos_path(), block)
 
 
 def execute(cpu, state, data, dos_path, block):

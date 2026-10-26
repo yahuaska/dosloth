@@ -290,18 +290,18 @@ class TestWhatAProgramIsAskedToDo(LoggedTest):
         self.call(0x4B00 | al, name, bx=at)
 
     def test_the_line_has_the_name_and_the_command_tail(self):
-        self.exec("C:\\COMMAND.COM", "/C md C:\\XCOMA\\tacexe")
-        self.assertTrue(self.lines()[0].endswith(' "C:\\COMMAND.COM" tail "/C md C:\\XCOMA\\tacexe"'), self.lines()[0])
+        self.exec("C:\\TOOL.COM", "/C md C:\\XCOMA\\tacexe")
+        self.assertTrue(self.lines()[0].endswith(' "C:\\TOOL.COM" tail "/C md C:\\XCOMA\\tacexe"'), self.lines()[0])
         self.assertIn("CF=1 AX=0002", self.lines()[1])  # there is no such program, and DOS says so
 
     def test_an_empty_tail_is_shown_as_empty(self):
-        self.exec("C:\\COMMAND.COM", "")
+        self.exec("C:\\TOOL.COM", "")
         self.assertTrue(self.lines()[0].endswith(' tail ""'))
 
     def test_a_long_tail_is_cut_and_the_carriage_return_is_not_in_it(self):
-        self.exec("C:\\COMMAND.COM", "x" * 120)
+        self.exec("C:\\TOOL.COM", "x" * 120)
         self.assertTrue(self.lines()[0].endswith(' tail "' + "x" * calllog.MAX_TEXT + '..."'))
-        self.exec("C:\\COMMAND.COM", "abc")
+        self.exec("C:\\TOOL.COM", "abc")
         self.assertTrue(self.lines()[2].endswith(' tail "abc"'))
 
     def test_the_other_ways_to_exec_have_no_tail_shown(self):
@@ -309,13 +309,13 @@ class TestWhatAProgramIsAskedToDo(LoggedTest):
             self.out.truncate(0)
             self.out.seek(0)
             try:
-                self.exec("C:\\COMMAND.COM", "abc", al=al)
+                self.exec("C:\\TOOL.COM", "abc", al=al)
             except NotImplementedError:
                 pass
             self.assertNotIn("tail", self.lines()[0], al)
 
     def test_the_tail_of_a_parameter_block_that_goes_round_the_end_of_a_segment_is_read_whole(self):
-        self.exec("C:\\COMMAND.COM", "wrapped", at=0xFFF6)
+        self.exec("C:\\TOOL.COM", "wrapped", at=0xFFF6)
         self.assertTrue(self.lines()[0].endswith(' tail "wrapped"'), self.lines()[0])
 
     def test_the_pointer_to_the_tail_may_go_round_the_end_of_the_segment_too(self):
@@ -327,7 +327,7 @@ class TestWhatAProgramIsAskedToDo(LoggedTest):
             cpu.wb(0x3000, (0xFFFE + 2 * i) & 0xFFFF, word & 0xFF)
             cpu.wb(0x3000, (0xFFFE + 2 * i + 1) & 0xFFFF, word >> 8)
         cpu.s[CPU.ES] = 0x3000
-        self.call(0x4B00, "C:\\COMMAND.COM", bx=0xFFFE)
+        self.call(0x4B00, "C:\\TOOL.COM", bx=0xFFFE)
         self.assertTrue(self.lines()[0].endswith(' tail "wrapp"'), self.lines()[0])
 
     def test_ah_29h_shows_the_text_it_takes_apart_up_to_the_end_of_the_line(self):
