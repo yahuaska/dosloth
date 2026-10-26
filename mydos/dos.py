@@ -532,6 +532,9 @@ def int2f(cpu, state):
 
     And 1600h, "is Windows running in the enhanced mode?" Not here: AL stays 00h, which is what a machine with no
     Windows answers, because nothing answers.
+
+    And 4A11h, the questions to DoubleSpace and DriveSpace, the disk compression of MS-DOS 6 (BX = 0 asks if it is
+    there; if it were, AX would come back 0). It is not there: nothing answers.
     """
     ax = cpu.r[CPU.AX]
     cdroms = cdrom_drives(state.config)
@@ -566,8 +569,8 @@ def int2f(cpu, state):
             cpu.wb(cpu.s[CPU.ES], (cpu.r[CPU.BX] + i) & 0xFFFF, drive)
     elif cdroms and ax == 0x150C:  # the version of MSCDEX in BX: the major number in BH, the minor in BL
         cpu.r[CPU.BX] = MSCDEX_VERSION
-    elif ax == 0x1600:  # nothing of Windows is installed to answer, so AX is as the program left it
-        pass
+    elif ax in (0x1600, 0x4A11):  # Windows, and DoubleSpace (disk compression): nothing is installed to answer, so AX
+        pass  # is as the program left it, and a program that looks for the answer 0 finds that there is none
     else:
         raise NotImplementedError(f"INT 2Fh AX={ax:04X}")
 

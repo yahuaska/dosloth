@@ -1198,6 +1198,37 @@ class TestMultiplex(unittest.TestCase):
             self.assertTrue(cpu.get_flag(flags.CF))
             self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 2))
 
+    def test_4a11_says_there_is_no_disk_compression_with_or_without_a_cd_rom_drive(self):
+        for text in (None, self.FLOPPIES_ONLY, self.TWO_CDROMS):
+            self.machine(text)
+            cpu = self.cpu
+            cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x4444, 0x5555
+            cpu.set_flag(flags.CF, True)
+            self.call(0x4A11, bx=0)
+            self.assertEqual(cpu.r[CPU.AX], 0x4A11)  # a driver would have made it 0
+            self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (0, 0x2222, 0x3333))
+            self.assertEqual((cpu.r[CPU.SI], cpu.r[CPU.DI]), (0x4444, 0x5555))
+            self.assertTrue(cpu.get_flag(flags.CF))
+            self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 2))
+
+    def test_4a11_with_the_carry_clear_stays_clear(self):
+        self.machine()
+        self.cpu.set_flag(flags.CF, False)
+        self.call(0x4A11, bx=0)
+        self.assertFalse(self.cpu.get_flag(flags.CF))
+
+    def test_the_other_functions_of_the_disk_compression_get_no_answer_either(self):
+        self.machine()
+        for bx in (1, 2, 0x10, 0xFFFF):
+            self.call(0x4A11, bx=bx)
+            self.assertEqual((self.cpu.r[CPU.AX], self.cpu.r[CPU.BX]), (0x4A11, bx))
+
+    def test_the_questions_next_to_4a11_are_still_not_known(self):
+        self.machine()
+        for ax in (0x4A10, 0x4A12, 0x4A13, 0x4A14, 0x4A15):
+            with self.assertRaises(NotImplementedError, msg=hex(ax)):
+                self.call(ax)
+
     def test_1600_is_the_only_one_of_the_windows_questions_that_is_answered(self):
         self.machine()
         for ax in (0x1601, 0x1605, 0x1606, 0x1607, 0x160A, 0x1680, 0x1681, 0x1683, 0x4680, 0x4A33):
