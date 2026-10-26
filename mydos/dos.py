@@ -29,6 +29,11 @@ INVALID_HANDLE = 6
 MSCDEX_MAGIC = 0xADAD  # what MSCDEX puts in BX to say that it is there
 MSCDEX_VERSION = 0x020A  # MSCDEX 2.10, the one of Windows 95
 MAX_PATH = 260  # how long a path from a program may be, with its ending zero
+# what AH=36h says of every disk: sectors of a PC, 64 to a cluster as on a big FAT16 disk, and at most as many clusters
+# as a 16-bit count holds, so that a disk is shown as 2 GB at the most, which old programs can read
+BYTES_PER_SECTOR = 512
+SECTORS_PER_CLUSTER = 64
+MAX_CLUSTERS = 0xFFFF
 MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands out nothing above it
 
 
@@ -242,6 +247,18 @@ def int21(cpu, state):
                     cpu.wb(cpu.s[CPU.DS], (cpu.r[CPU.DX] + i) & 0xFFFF, byte)
                 cpu.r[CPU.BX] = country.COUNTRY_CODE
             cpu.set_flag(flags.CF, False)
+    elif ah == 0x36:  # the space of drive DL (0 is the current one, 1 is A:): AX = sectors to a cluster, BX = free
+        # clusters, CX = bytes to a sector, DX = clusters in all. AX = 0FFFFh and the rest as it was: no such drive.
+        drive = cpu.get8(2)
+        filesystem = state.volumes.filesystems.get(state.volumes.current_drive if drive == 0 else drive - 1)
+        if filesystem is None:  # a drive that is not there, or has nothing in it
+            cpu.r[CPU.AX] = 0xFFFF
+        else:
+            size, free = filesystem.free_space()
+            cluster = BYTES_PER_SECTOR * SECTORS_PER_CLUSTER
+            total = min(size // cluster, MAX_CLUSTERS)
+            cpu.r[CPU.AX], cpu.r[CPU.CX], cpu.r[CPU.DX] = SECTORS_PER_CLUSTER, BYTES_PER_SECTOR, total
+            cpu.r[CPU.BX] = min(free // cluster, total)
     elif ah == 0x3C:  # create (or empty) the file named at DS:DX, with attributes CX; AX = its handle
         try:
             if cpu.r[CPU.CX] & (ATTR_DIRECTORY | ATTR_VOLUME):

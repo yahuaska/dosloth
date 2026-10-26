@@ -2447,6 +2447,98 @@ class TestReadSectorsOfTheDisc(unittest.TestCase):
         self.assertEqual((cpu.r[CPU.AX], bytes(cpu.rb(0x2000, 0x200 + i) for i in range(3))), (3, b"abc"))
 
 
+class Disk:
+    """A file system that says how big it is, and nothing else."""
+
+    def __init__(self, size, free):
+        self.sizes = (size, free)
+
+    def free_space(self):
+        return self.sizes
+
+
+class TestDiskSpace(FileFunctionsTest):
+    """INT 21h AH=36h: sectors to a cluster, free clusters, bytes to a sector, clusters in all."""
+
+    CLUSTER = 512 * 64
+
+    def ask(self, drive, bx=0x1111, cx=0x2222, dx=None):
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX] = 0x3600, bx, cx
+        cpu.r[CPU.DX] = 0x3300 | drive if dx is None else dx
+        cpu.ip = 0
+        cpu.step()
+        return tuple(cpu.r[i] for i in (CPU.AX, CPU.BX, CPU.CX, CPU.DX))
+
+    def disk(self, drive, size, free):
+        self.volumes.filesystems[drive] = Disk(size, free)
+
+    def test_a_disk_is_sectors_of_512_bytes_and_clusters_of_64_of_them(self):
+        self.disk(2, 100 * self.CLUSTER, 40 * self.CLUSTER)
+        self.assertEqual(self.ask(3), (64, 40, 512, 100))  # C:
+
+    def test_what_does_not_fill_a_cluster_is_not_counted(self):
+        self.disk(2, 100 * self.CLUSTER + self.CLUSTER - 1, 40 * self.CLUSTER + self.CLUSTER - 1)
+        self.assertEqual(self.ask(3)[1::2], (40, 100))
+        self.disk(2, self.CLUSTER - 1, self.CLUSTER - 1)
+        self.assertEqual(self.ask(3), (64, 0, 512, 0))
+
+    def test_a_big_disk_is_shown_as_just_under_2_gb_and_the_free_space_is_cut_with_it(self):
+        self.disk(2, 232 * 2 ** 30, 41 * 2 ** 30)
+        ax, bx, cx, dx = self.ask(3)
+        self.assertEqual((dx, bx), (65535, 65535))
+        self.assertEqual(dx * ax * cx, 2 ** 31 - 2 ** 15)  # 2 GB less a cluster
+
+    def test_the_free_space_never_passes_the_whole(self):
+        self.disk(2, 10 * self.CLUSTER, 20 * self.CLUSTER)
+        self.assertEqual(self.ask(3)[1::2], (10, 10))
+
+    def test_a_disk_that_is_just_at_the_limit(self):
+        self.disk(2, 65535 * self.CLUSTER, 65535 * self.CLUSTER)
+        self.assertEqual(self.ask(3)[1::2], (65535, 65535))
+        self.disk(2, 65536 * self.CLUSTER, 65536 * self.CLUSTER)
+        self.assertEqual(self.ask(3)[1::2], (65535, 65535))
+        self.disk(2, 65534 * self.CLUSTER, 65534 * self.CLUSTER)
+        self.assertEqual(self.ask(3)[1::2], (65534, 65534))
+
+    def test_drive_0_is_the_current_drive_and_a_number_is_that_drive_whatever_is_current(self):
+        self.disk(2, 100 * self.CLUSTER, 10 * self.CLUSTER)
+        self.disk(3, 50 * self.CLUSTER, 5 * self.CLUSTER)
+        self.volumes.current_drive = 3
+        self.assertEqual(self.ask(0)[1::2], (5, 50))  # D:
+        self.assertEqual(self.ask(3)[1::2], (10, 100))  # C:
+        self.volumes.current_drive = 2
+        self.assertEqual(self.ask(0)[1::2], (10, 100))
+        self.assertEqual(self.ask(4)[1::2], (5, 50))
+
+    def test_a_drive_that_is_not_there_or_has_nothing_in_it_is_ffff_and_the_rest_is_left(self):
+        for drive in (1, 10, 27):  # A: has no disk in it, J: and Z: are not drives
+            self.assertEqual(self.ask(drive), (0xFFFF, 0x1111, 0x2222, 0x3300 | drive), drive)
+
+    def test_a_directory_of_the_host_gives_what_the_host_says(self):
+        import shutil
+        real = shutil.disk_usage(self.base)
+        ax, bx, cx, dx = self.ask(3)
+        self.assertEqual((ax, cx), (64, 512))
+        self.assertEqual(dx, min(real.total // self.CLUSTER, 65535))
+        self.assertLessEqual(bx, dx)
+
+    def test_a_memory_disk_is_32_megabytes_and_the_files_in_it_take_space(self):
+        self.assertEqual(self.ask(4), (64, 1024, 512, 1024))  # D: is a tmpfs
+        with self.volumes.filesystems[3].create(["F.DAT"]) as file:
+            file.write(bytes(3 * self.CLUSTER))
+        self.assertEqual(self.ask(4)[1::2], (1024 - 3, 1024))
+
+    def test_the_registers_other_than_the_four_and_the_flags_are_left_alone(self):
+        self.disk(2, 100 * self.CLUSTER, 40 * self.CLUSTER)
+        cpu = self.cpu
+        cpu.r[CPU.SI], cpu.r[CPU.DI], cpu.s[CPU.ES] = 0x4444, 0x5555, 0x3000
+        cpu.set_flag(flags.CF, True)
+        self.ask(3)
+        self.assertEqual((cpu.r[CPU.SI], cpu.r[CPU.DI], cpu.s[CPU.DS], cpu.s[CPU.ES]), (0x4444, 0x5555, 0x2000, 0x3000))
+        self.assertTrue(cpu.get_flag(flags.CF))
+
+
 class TestGetCurrentDirectory(FileFunctionsTest):
     """INT 21h AH=47h: the current directory of a drive, written at DS:SI without the drive and the first backslash."""
 
