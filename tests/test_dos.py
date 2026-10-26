@@ -1346,6 +1346,43 @@ class TestMultiplex(unittest.TestCase):
                 self.call(ax)
 
 
+class TestSwitchCharacter(unittest.TestCase):
+    """INT 21h AH=37h: the sign that begins an option on a command line."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        dos.install(self.cpu)
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+
+    def call(self, al, bx=0x3333, cx=0x2222, dx=0x1111):
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = 0x3700 | al, bx, cx, dx
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x4444, 0x5555
+        cpu.ip = 0
+        cpu.step()
+
+    def test_al_0_gives_the_slash_in_dl_and_nothing_else_changes(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.call(0)
+        cpu = self.cpu
+        self.assertEqual(cpu.r[CPU.DX], 0x112F)  # DL is "/", DH as it was
+        self.assertEqual(cpu.r[CPU.AX], 0x3700)  # AL = 0: all went well
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.SI], cpu.r[CPU.DI]), (0x3333, 0x2222, 0x4444, 0x5555))
+        self.assertTrue(cpu.get_flag(flags.CF))
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 2))
+
+    def test_the_answer_does_not_depend_on_what_dl_held(self):
+        for dl in (0x00, 0x2D, 0x2F, 0xFF):
+            self.call(0, dx=0x5500 | dl)
+            self.assertEqual(self.cpu.get8(2), 0x2F, dl)
+
+    def test_the_other_subfunctions_stop_the_emulator_with_their_number(self):
+        for al in (1, 2, 3, 0xFF):
+            with self.assertRaisesRegex(NotImplementedError, f"AH=37 AL={al:02X}"):
+                self.call(al)
+
+
 class TestGetDate(unittest.TestCase):
     """INT 21h AH=2Ah: the date, from the clock of the host."""
 

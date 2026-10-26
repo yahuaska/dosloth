@@ -265,6 +265,11 @@ def int21(cpu, state):
             total = min(size // cluster, MAX_CLUSTERS)
             cpu.r[CPU.AX], cpu.r[CPU.CX], cpu.r[CPU.DX] = SECTORS_PER_CLUSTER, BYTES_PER_SECTOR, total
             cpu.r[CPU.BX] = min(free // cluster, total)
+    elif ah == 0x37:  # the switch character: the sign that begins an option on a command line
+        al = cpu.get8(0)
+        if al != 0x00:  # 1 sets it, 2 and 3 are about the prefix \\DEV\\ of devices: nothing asks for them yet
+            raise NotImplementedError(f"INT 21h AH=37 AL={al:02X}")
+        cpu.set8(2, ord("/"))  # AL=0 gets it, into DL. DOS 5 and later have only this one, and so do we
     elif ah == 0x39:  # make the directory named at DS:DX: its parent has to be there, and the name free
         try:
             where = state.volumes.resolve(read_path(cpu))
