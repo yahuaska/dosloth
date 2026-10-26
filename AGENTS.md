@@ -38,6 +38,9 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/process.py` - INT 21h AH=4Bh (EXEC): the parent put aside, the child loaded; the end of a program
   (AH=4Ch, INT 20h) gives the machine back to the parent
 - `mydos/country.py` - the country of INT 21h AH=38h: the United States, with the table of formats
+- `mydos/calllog.py` - `-t LOGFILE`: every call of the program to DOS (INT 21h, 2Fh, 25h, 20h) with its names and
+  the answer; a run of the same call is folded into one; the last line of the log is the call that was being made
+  when something went wrong
 - `mydos/fcb.py` - a file name taken apart into the drive, name and extension of an FCB (INT 21h AH=29h)
 - `mydos/handles.py` - the table of 20 open handles (the JFT): 0-4 are the console, stderr, AUX and PRN, files
   take the lowest free slot
@@ -62,6 +65,7 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/__main__.py` - loads a .COM/.EXE and runs it: `python -m mydos tests/hello.com`;
   `-d LOGFILE` writes every executed instruction to LOGFILE, e.g. `1773:0880  8B C3  mov ax, bx`;
   `-s PNGFILE` keeps the screen in a PNG file, written again when the picture changes and at the end;
+  `-t LOGFILE` writes the calls of the program to DOS (see calllog.py);
   `-w` shows the screen in a window and takes the keys typed in it (closing the window stops the program; F12 saves
   the state as PROGRAM.state); `-r STATE` goes on from a saved state (a crash leaves PROGRAM.crash.state)
 - `tests/`        - tiny test programs (`make_hello.py` builds `hello.com`)

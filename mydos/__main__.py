@@ -2,7 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import config, disasm, dos, dump, loader, machine, psp, screen, snapshot
+from . import calllog, config, disasm, dos, dump, loader, machine, psp, screen, snapshot
 from .cpu import CPU
 from .display import PngFile
 from .window import TkWindow, WindowError
@@ -42,6 +42,9 @@ def main():
     parser.add_argument("-c", metavar="FILE", help="the configuration (TOML): drives, mounts, starting directory; "
                         "without it the current directory is the hard disk C:")
     parser.add_argument("-d", metavar="LOGFILE", help="write every executed instruction to LOGFILE")
+    parser.add_argument("-t", metavar="LOGFILE", help="write every call of the program to DOS (INT 21h, 2Fh, 25h, 20h) "
+                        "to LOGFILE: what it asked, the names, and what DOS answered; to see what a program does "
+                        "when it fails")
     parser.add_argument("-s", metavar="PNGFILE", help="show the screen in this PNG file: written again whenever the "
                         "picture has changed, and at the end, also after a crash")
     parser.add_argument("-w", action="store_true", help="show the screen in a window; the keys typed in it go to "
@@ -106,6 +109,14 @@ def main():
     log = open(args.d, "w") if args.d else None
     if log:
         cpu.trace = make_trace(log)
+    dos_log = call_log = None
+    if args.t:
+        try:
+            dos_log = open(args.t, "w", buffering=1)  # a line at a time: a crash leaves the log whole
+        except OSError as error:
+            parser.error(f"cannot write {args.t}: {error.strerror or error}")
+    if dos_log:
+        call_log = calllog.install(cpu, dos_log)
     try:
         code = cpu.run(TICK_EVERY, monitor.tick) if monitor else cpu.run()
     except Exception as e:
@@ -118,6 +129,9 @@ def main():
             monitor.close()
         if log:
             log.close()
+        if dos_log:
+            call_log.finish()
+            dos_log.close()
     sys.exit(code)
 
 

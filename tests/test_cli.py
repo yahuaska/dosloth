@@ -493,3 +493,76 @@ class TestGoingOnFromAState(CommandLineTest):
         result = self.run_emulator("-r", "t.state")
         self.assertEqual(result.returncode, 2)
         self.assertIn("cannot open C:\\DATA.TXT again", result.stderr)
+
+
+class TestTheLogOfDosCalls(CommandLineTest):
+    """-t LOGFILE: every call of the program to DOS, and what it was answered."""
+
+    # mov ah,30h ; int 21h ; mov ah,4Ch ; mov al,7 ; int 21h
+    VERSION_AND_EXIT = bytes([0xB4, 0x30, 0xCD, 0x21, 0xB4, 0x4C, 0xB0, 0x07, 0xCD, 0x21])
+
+    def test_the_calls_are_in_the_file_with_their_answers_and_the_exit(self):
+        self.program(self.VERSION_AND_EXIT)
+        result = self.run_emulator("-t", "calls.log", "t.com")
+        self.assertEqual((result.returncode, result.stderr), (7, ""))
+        lines = (self.dir / "calls.log").read_text().splitlines()
+        self.assertEqual(len(lines), 4)
+        self.assertIn("INT 21h AX=3000", lines[0])
+        self.assertIn("-> CF=0 AX=0107 ", lines[1])  # DOS 7.1: AL = 7, AH = 1
+        self.assertIn("INT 21h AX=4C07", lines[2])
+        self.assertTrue(lines[3].endswith("-> exit 7"))
+
+    def test_without_the_switch_there_is_no_log(self):
+        self.program(self.VERSION_AND_EXIT)
+        self.run_emulator("t.com")
+        self.assertEqual(os.listdir(self.dir), ["t.com"])
+
+    def test_after_a_crash_the_log_ends_with_the_last_call_that_was_made(self):
+        # mov ah,30h ; int 21h ; and an opcode that is not there
+        self.program(bytes([0xB4, 0x30, 0xCD, 0x21]) + CRASH)
+        result = self.run_emulator("-t", "calls.log", "t.com")
+        self.assertEqual(result.returncode, 1)
+        lines = (self.dir / "calls.log").read_text().splitlines()
+        self.assertEqual(len(lines), 2)  # the call and its answer: nothing was lost with the crash
+
+    def test_a_call_that_stops_the_emulator_is_the_last_line_of_the_log(self):
+        self.program(bytes([0xB4, 0xFF, 0xCD, 0x21]))  # AH=FFh: not done
+        result = self.run_emulator("-t", "calls.log", "t.com")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("NotImplementedError: INT 21h AH=FF", result.stderr)
+        lines = (self.dir / "calls.log").read_text().splitlines()
+        self.assertTrue(lines[-1].endswith("NOT IMPLEMENTED"))
+
+    def test_a_program_that_makes_the_same_call_a_thousand_times_has_it_in_the_log_once(self):
+        # mov bp,1000 ; again: mov ax,0E00h ; mov dl,2 ; int 21h ; dec bp ; jne again ; mov ah,4Ch ; int 21h
+        # (the count is in BP, which the log does not show: with CX or SI no two calls would be the same)
+        self.program(bytes([0xBD, 0xE8, 0x03, 0xB8, 0x00, 0x0E, 0xB2, 0x02, 0xCD, 0x21, 0x4D, 0x75, 0xF6,
+                            0xB4, 0x4C, 0xCD, 0x21]))
+        result = self.run_emulator("-t", "calls.log", "t.com")
+        self.assertEqual((result.returncode, result.stderr), (4, ""))  # the exit code is AL: the drives, 4 of them
+        lines = (self.dir / "calls.log").read_text().splitlines()
+        self.assertEqual(len(lines), 5)
+        self.assertEqual(lines[2].strip(), "... the same call 999 more times")
+        self.assertTrue(lines[4].endswith("-> exit 4"))
+
+    def test_the_log_of_a_program_that_ends_while_in_a_run_still_says_how_long_it_was(self):
+        # mov bp,3 ; again: mov ax,0E00h ; mov dl,2 ; int 21h ; dec bp ; jne again ; hlt (the end with no call)
+        self.program(bytes([0xBD, 0x03, 0x00, 0xB8, 0x00, 0x0E, 0xB2, 0x02, 0xCD, 0x21, 0x4D, 0x75, 0xF6, 0xF4]))
+        result = self.run_emulator("-t", "calls.log", "t.com")
+        self.assertEqual(result.returncode, 0)
+        lines = (self.dir / "calls.log").read_text().splitlines()
+        self.assertEqual(lines[-1].strip(), "... the same call 2 more times")
+
+    def test_a_file_that_cannot_be_written_is_said_before_anything_runs(self):
+        self.program(self.VERSION_AND_EXIT)
+        result = self.run_emulator("-t", self.dir / "missing" / "calls.log", "t.com")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("cannot write", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_the_log_can_be_had_with_the_trace_of_the_instructions_together(self):
+        self.program(self.VERSION_AND_EXIT)
+        result = self.run_emulator("-t", "calls.log", "-d", "trace.log", "t.com")
+        self.assertEqual(result.returncode, 7)
+        self.assertTrue((self.dir / "calls.log").read_text())
+        self.assertTrue((self.dir / "trace.log").read_text())
