@@ -2678,6 +2678,101 @@ class TestDiskSpace(FileFunctionsTest):
         self.assertTrue(cpu.get_flag(flags.CF))
 
 
+class TestChangeDirectory(FileFunctionsTest):
+    """INT 21h AH=3Bh: make a directory the current one."""
+
+    def setUp(self):
+        super().setUp()
+        (self.base / "GAMES" / "ARCADE").mkdir()
+        (self.base / "GAMES" / "ARCADE" / "PONG.COM").write_bytes(b"pong")
+
+    def cd(self, name):
+        self.call(0x3B00, name)
+        return self.failed()
+
+    def current(self, drive=None):
+        """The current directory, as the file system layer has it, as DOS writes it."""
+        return self.volumes.current_directory(drive)
+
+    def test_a_directory_becomes_the_current_one_and_the_carry_is_clear(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.assertIsNone(self.cd("GAMES"))
+        self.assertFalse(self.cpu.get_flag(flags.CF))
+        self.assertEqual(self.current(), "GAMES")
+
+    def test_what_the_program_reads_back_with_47h_is_what_it_set(self):
+        self.cd("games\\arcade")
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.DX], cpu.r[CPU.SI] = 0x4700, 0, 0x0300  # the current drive, a buffer at DS:SI
+        cpu.ip = 0
+        cpu.step()
+        text = bytes(cpu.rb(0x2000, 0x0300 + i) for i in range(14))
+        self.assertEqual(text.split(b"\0")[0], b"GAMES\\ARCADE")
+
+    def test_the_names_are_stored_in_capitals_whatever_was_written(self):
+        self.cd("Games\\Arcade")
+        self.assertEqual(self.current(), "GAMES\\ARCADE")
+
+    def test_a_relative_path_goes_from_the_current_directory_and_dot_dot_goes_up(self):
+        self.cd("GAMES")
+        self.assertIsNone(self.cd("ARCADE"))
+        self.assertEqual(self.current(), "GAMES\\ARCADE")
+        self.assertIsNone(self.cd(".."))
+        self.assertEqual(self.current(), "GAMES")
+        self.assertIsNone(self.cd(".\\ARCADE\\.."))
+        self.assertEqual(self.current(), "GAMES")
+
+    def test_a_path_from_the_root_does_not_depend_on_where_it_is(self):
+        self.cd("GAMES\\ARCADE")
+        self.assertIsNone(self.cd("\\GAMES"))
+        self.assertEqual(self.current(), "GAMES")
+        self.assertIsNone(self.cd("\\"))
+        self.assertEqual(self.current(), "")
+
+    def test_a_path_with_the_drive_changes_the_directory_of_that_drive_and_not_the_current_drive(self):
+        self.volumes.current_drive = 3  # D:
+        self.assertIsNone(self.cd("C:\\GAMES"))
+        self.assertEqual(self.volumes.current_drive, 3)
+        self.assertEqual(self.current(2), "GAMES")
+        self.assertEqual(self.current(3), "")
+
+    def test_what_is_not_there_is_error_3_and_the_directory_stays(self):
+        self.cd("GAMES")
+        for name in ("NOTHING", "GAMES\\NOTHING", "NOTHING\\ARCADE"):
+            self.assertEqual(self.cd(name), 3, name)
+        self.assertEqual(self.current(), "GAMES")
+
+    def test_a_file_is_not_a_directory_and_is_error_3(self):
+        self.assertEqual(self.cd("NOTES.TXT"), 3)
+        self.assertEqual(self.cd("GAMES\\ARCADE\\PONG.COM"), 3)
+        self.assertEqual(self.current(), "")
+
+    def test_an_empty_name_and_a_path_above_the_root_are_error_3(self):
+        self.assertEqual(self.cd(""), 3)
+        self.assertEqual(self.cd(".."), 3)
+        self.assertEqual(self.cd("\\.."), 3)
+
+    def test_a_drive_that_is_not_there_or_has_nothing_in_it_is_an_error_of_the_drive(self):
+        self.assertEqual(self.cd("A:\\X"), 21)
+        self.assertEqual(self.cd("Z:\\X"), 15)
+
+    def test_a_memory_disk_directory_can_be_made_current_too(self):
+        self.volumes.filesystems[3].mkdir(["TEMP"])
+        self.assertIsNone(self.cd("D:\\TEMP"))
+        self.assertEqual(self.current(3), "TEMP")
+
+    def test_the_registers_other_than_ax_are_left_alone(self):
+        self.cpu.r[CPU.SI], self.cpu.r[CPU.DI] = 0x4444, 0x5555
+        self.call(0x3B00, "GAMES", bx=0x1111, cx=0x2222)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.r[CPU.SI], cpu.r[CPU.DI]),
+                         (0x1111, 0x2222, 0x0100, 0x4444, 0x5555))
+
+    def test_the_name_is_read_from_ds_dx_round_the_end_of_the_segment(self):
+        self.call(0x3B00, "GAMES", dx=0xFFFA)
+        self.assertEqual(self.current(), "GAMES")
+
+
 class TestDeleteFile(FileFunctionsTest):
     """INT 21h AH=41h: delete a file."""
 
