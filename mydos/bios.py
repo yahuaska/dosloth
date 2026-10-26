@@ -28,13 +28,20 @@ def _seconds_since_midnight():
 
 
 def int1a(cpu):
-    """INT 1Ah: BIOS time of day, selected by AH. Only 00h so far."""
+    """INT 1Ah: BIOS time of day, selected by AH. So far 00h, the clock.
+
+    And AX=B001h, which a program sends with the letters STAC in CX:DX to find out if Stacker, a disk compressor, is
+    there. A BIOS has no such function, and what has no driver behind it changes nothing: AX stays B001h, where a
+    Stacker would answer with a word of its own.
+    """
     ah = cpu.get8(4)
     if ah == 0x00:  # read the clock: CX:DX = timer ticks since midnight, AL = "midnight passed" flag
         ticks = int(_seconds_since_midnight() * TICKS_PER_DAY / 86400) % TICKS_PER_DAY
         cpu.r[CPU.CX] = ticks >> 16
         cpu.r[CPU.DX] = ticks & 0xFFFF
         cpu.set8(0, 0)  # the real BIOS says 1 if midnight went by since the last read; nobody checks
+    elif cpu.r[CPU.AX] == 0xB001:  # is Stacker there? No
+        pass
     else:
         raise NotImplementedError(f"INT 1Ah AH={ah:02X}")
 

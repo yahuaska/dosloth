@@ -821,5 +821,63 @@ class TestTextScreen(unittest.TestCase):
         self.assertEqual((self.cpu.get8(6), self.cpu.get8(2)), (10, 20))
 
 
+class TestTimeOfDay(unittest.TestCase):
+    """INT 1Ah: AH=00h reads the clock; AX=B001h asks for Stacker, which is not there."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        bios.install(self.cpu)
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x1A])
+
+    def call(self, ax, bx=0x3333, cx=0x2222, dx=0x1111, carry=False):
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = ax, bx, cx, dx
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x4444, 0x5555
+        cpu.set_flag(flags.CF, carry)
+        cpu.ip = 0
+        cpu.step()
+
+    def ticks_at(self, seconds):
+        from unittest import mock
+        with mock.patch("mydos.bios._seconds_since_midnight", return_value=seconds):
+            self.call(0x0000)
+        return self.cpu.r[CPU.CX] << 16 | self.cpu.r[CPU.DX]
+
+    def test_the_clock_counts_18_2_ticks_a_second_in_cx_dx(self):
+        self.assertEqual(self.ticks_at(0), 0)
+        self.assertEqual(self.ticks_at(1), 18)  # 1.0 s is 18.2 ticks
+        self.assertEqual(self.ticks_at(3600), 65543)  # an hour: CX = 1, DX = 7
+        self.assertEqual((self.cpu.r[CPU.CX], self.cpu.r[CPU.DX]), (1, 7))
+        self.assertEqual(self.ticks_at(86399.99), 1573039)  # the last moment of the day, just under 1,573,040 ticks
+
+    def test_a_big_count_has_its_high_bits_in_dx_and_the_next_day_starts_again_from_0(self):
+        self.assertEqual(self.ticks_at(10000), 182064)  # 18.2065 a second
+        self.assertEqual((self.cpu.r[CPU.CX], self.cpu.r[CPU.DX]), (2, 0xC730))
+        self.assertEqual(self.ticks_at(86400), 0)  # not 1,573,040: the day is over
+        self.assertEqual(self.ticks_at(86400.5), 9)
+
+    def test_al_says_that_midnight_did_not_pass_and_the_other_registers_stay(self):
+        self.call(0x0000, bx=0x3333)
+        cpu = self.cpu
+        self.assertEqual((cpu.get8(0), cpu.get8(4)), (0, 0))
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.SI], cpu.r[CPU.DI]), (0x3333, 0x4444, 0x5555))
+
+    def test_b001_changes_nothing_so_that_a_program_waiting_for_stacker_finds_none(self):
+        for carry in (False, True):
+            self.call(0xB001, cx=0x5354, dx=0x4143, carry=carry)
+            cpu = self.cpu
+            self.assertEqual(cpu.r[CPU.AX], 0xB001)  # a Stacker would have made it another word
+            self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (0x3333, 0x5354, 0x4143))
+            self.assertEqual((cpu.r[CPU.SI], cpu.r[CPU.DI]), (0x4444, 0x5555))
+            self.assertEqual(cpu.get_flag(flags.CF), carry)
+            self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 2))
+
+    def test_the_other_functions_are_still_not_known_and_say_which(self):
+        for ax in (0x0100, 0x0200, 0x0400, 0xB101, 0xB000, 0xB002, 0xB0FF, 0xB100):
+            with self.assertRaisesRegex(NotImplementedError, f"INT 1Ah AH={ax >> 8:02X}"):
+                self.call(ax)
+
+
 if __name__ == "__main__":
     unittest.main()
