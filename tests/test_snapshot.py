@@ -313,6 +313,29 @@ class TestAMachineThatGoesOn(SnapshotTest):
         self.assertEqual((b.timer.counters[0].reload, b.timer.counters[2].latched), (1234, [1, 2]))
         self.assertEqual(list(b.keyboard.buffer), [0x1E61, 0x3062])
 
+    def test_what_the_program_wrote_to_port_61h_comes_back(self):
+        a = self.make()
+        a.sysport.value = 0x0B
+        path = str(self.out / "x.state")
+        snapshot.save(path, a)
+        b = self.make()
+        snapshot.load(path, b)
+        self.assertEqual(b.sysport.value, 0x0B)
+
+    def test_a_snapshot_of_a_machine_without_port_61h_leaves_it_as_built(self):
+        a = self.make()
+        packed, blobs = self.tampered_without(a, "sysport")
+        b = self.make()
+        b.sysport.value = 0x05
+        snapshot.restore(b, packed, blobs)
+        self.assertEqual(b.sysport.value, 0x05)
+
+    def tampered_without(self, computer, part):
+        data = snapshot.unpack(*snapshot.capture(computer))
+        del data[part]
+        blobs = []
+        return snapshot.pack(data, blobs), blobs
+
     def test_the_planes_are_the_same_lists_as_before_so_that_the_card_still_uses_them(self):
         b = self.make()
         planes = b.card.planes
@@ -699,6 +722,8 @@ class TestBuild(SnapshotTest):
         self.assertIs(a.config, a.volumes.config)
         self.assertEqual(len(a.timer.counters), 3)
         self.assertIsNone(a.program)
+        self.assertIs(a.sysport.timer, a.timer)  # port 61h runs on the clock of the timer
+        self.assertEqual(a.cpu.port_readers[0x61], a.sysport.read)
 
     def test_two_machines_share_nothing(self):
         a, b = self.make(), self.make()

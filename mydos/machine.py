@@ -5,7 +5,7 @@ snapshot.py), so the code that does it is here, once.
 """
 from dataclasses import dataclass
 
-from . import bios, country, dos, mouse, timer, vesa, vga
+from . import bios, country, dos, mouse, sysport, timer, vesa, vga
 from .cpu import CPU
 
 
@@ -18,6 +18,7 @@ class Machine:
     timer: object
     card: object
     mouse: object
+    sysport: object  # port 61h
     volumes: object
     program: str | None = None  # where the program is on the host, which is what a dump of a crash is named after
 
@@ -34,7 +35,8 @@ def build(volumes):
     clock = timer.install(cpu)
     card = vga.install(cpu)
     pointer = mouse.install(cpu)
-    return Machine(cpu, keyboard, state, clock, card, pointer, volumes)
+    port = sysport.install(cpu, clock)
+    return Machine(cpu, keyboard, state, clock, card, pointer, port, volumes)
 
 
 def install_rom(cpu):

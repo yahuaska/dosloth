@@ -175,6 +175,7 @@ def capture(machine, rewind=False):
         "timer": [dict(vars(counter)) for counter in machine.timer.counters],
         "keyboard": machine.keyboard.buffer,
         "mouse": dict(vars(machine.mouse)),
+        "sysport": {"value": machine.sysport.value},
         "dos": dos_state(machine.state, files),
         "volumes": {"current_drive": volumes.current_drive, "directories": volumes.directories,
                     "memory_disks": {number: fs.dump() for number, fs in volumes.filesystems.items()
@@ -234,6 +235,7 @@ def restore(machine, packed, blobs):
     if "keyboard" in data:
         machine.keyboard.buffer = data["keyboard"]
     set_attributes(machine.mouse, data.get("mouse", {}))
+    set_attributes(machine.sysport, data.get("sysport", {}))
 
     saved_volumes = data.get("volumes", {})
     volumes.current_drive = saved_volumes.get("current_drive", volumes.current_drive)
