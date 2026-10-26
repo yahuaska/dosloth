@@ -207,6 +207,12 @@ def int21(cpu, state):
             cpu.wb(cpu.s[CPU.ES], (cpu.r[CPU.DI] + i) & 0xFFFF, byte)
         cpu.r[CPU.SI] = (cpu.r[CPU.SI] + used) & 0xFFFF
         cpu.set8(0, code)
+    elif ah == 0x2A:  # get the date: CX = year, DH = month, DL = day, AL = the day of the week (0 is Sunday)
+        local = time.localtime(now())
+        cpu.r[CPU.CX] = local.tm_year
+        cpu.set8(6, local.tm_mon)
+        cpu.set8(2, local.tm_mday)
+        cpu.set8(0, (local.tm_wday + 1) % 7)  # Python counts from Monday as 0
     elif ah == 0x2C:  # get the time: CH = hour, CL = minute, DH = second, DL = hundredths of a second
         moment = now()
         local = time.localtime(moment)

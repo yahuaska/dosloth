@@ -1346,6 +1346,89 @@ class TestMultiplex(unittest.TestCase):
                 self.call(ax)
 
 
+class TestGetDate(unittest.TestCase):
+    """INT 21h AH=2Ah: the date, from the clock of the host."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        dos.install(self.cpu)
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        self.real_now = dos.now
+        self.addCleanup(setattr, dos, "now", self.real_now)
+
+    def on(self, year, month, day, hour=12, minute=0, second=0):
+        """Make the clock of the host show this local date."""
+        dos.now = lambda: time.mktime((year, month, day, hour, minute, second, 0, 0, -1))
+
+    def call(self, ax=0x2A00, bx=0x3333, cx=0x2222, dx=0x1111):
+        cpu = self.cpu
+        cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = ax, bx, cx, dx
+        cpu.ip = 0
+        cpu.step()
+        return cpu.r[CPU.CX], cpu.get8(6), cpu.get8(2), cpu.get8(0)  # year, month, day, day of the week
+
+    def test_the_year_month_day_and_day_of_the_week_come_in_cx_dh_dl_al(self):
+        self.on(2026, 10, 22)  # a Thursday
+        self.assertEqual(self.call(), (2026, 10, 22, 4))
+
+    def test_every_day_of_the_week_has_its_number_with_sunday_0(self):
+        for day, number in zip(range(18, 25), range(7)):  # 2026-10-18 is a Sunday
+            self.on(2026, 10, day)
+            self.assertEqual(self.call()[3], number, day)
+
+    def test_the_first_and_the_last_day_of_a_year(self):
+        self.on(2026, 1, 1)
+        self.assertEqual(self.call(), (2026, 1, 1, 4))
+        self.on(2026, 12, 31)
+        self.assertEqual(self.call(), (2026, 12, 31, 4))
+
+    def test_the_29th_of_february_of_a_leap_year(self):
+        self.on(2024, 2, 29)
+        self.assertEqual(self.call(), (2024, 2, 29, 4))
+
+    def test_the_first_and_the_last_day_dos_has(self):
+        self.on(1980, 1, 1)
+        self.assertEqual(self.call(), (1980, 1, 1, 2))  # a Tuesday
+        self.on(2099, 12, 31)
+        self.assertEqual(self.call(), (2099, 12, 31, 4))
+
+    def test_the_time_of_the_day_does_not_matter_to_the_date(self):
+        for hour, minute, second in ((0, 0, 0), (12, 30, 15), (23, 59, 59)):
+            self.on(2026, 10, 22, hour, minute, second)
+            self.assertEqual(self.call(), (2026, 10, 22, 4), (hour, minute, second))
+
+    def test_ah_and_the_other_registers_stay(self):
+        self.on(2026, 10, 22)
+        cpu = self.cpu
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x4444, 0x5555
+        cpu.set_flag(flags.CF, True)
+        self.call(bx=0x3333)
+        self.assertEqual(cpu.get8(4), 0x2A)  # AH
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.SI], cpu.r[CPU.DI]), (0x3333, 0x4444, 0x5555))
+        self.assertTrue(cpu.get_flag(flags.CF))
+        self.assertEqual(cpu.r[CPU.CX], 2026)  # a whole word, not a byte
+
+    def test_it_is_the_local_date_not_the_utc_date(self):
+        if not hasattr(time, "tzset"):
+            self.skipTest("this system cannot change its time zone")
+        old = os.environ.get("TZ")
+
+        def restore():
+            if old is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old
+            time.tzset()
+        self.addCleanup(restore)
+        os.environ["TZ"] = "Pacific/Auckland"  # twelve hours ahead of Greenwich or more: another day than UTC's
+        time.tzset()
+        dos.now = lambda: 1761091200.0  # 2025-10-22 00:00:00 UTC, which is the 22nd, 13:00 at Auckland: the same day
+        self.assertEqual(self.call()[:3], (2025, 10, 22))
+        dos.now = lambda: 1761091200.0 + 12 * 3600  # 12:00 UTC on the 22nd is the 23rd, 01:00 at Auckland
+        self.assertEqual(self.call()[:3], (2025, 10, 23))
+
+
 class TestGetTime(unittest.TestCase):
     """INT 21h AH=2Ch: the time of day, from the clock of the host."""
 
