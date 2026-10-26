@@ -259,6 +259,13 @@ def int21(cpu, state):
             total = min(size // cluster, MAX_CLUSTERS)
             cpu.r[CPU.AX], cpu.r[CPU.CX], cpu.r[CPU.DX] = SECTORS_PER_CLUSTER, BYTES_PER_SECTOR, total
             cpu.r[CPU.BX] = min(free // cluster, total)
+    elif ah == 0x39:  # make the directory named at DS:DX: its parent has to be there, and the name free
+        try:
+            where = state.volumes.resolve(read_path(cpu))
+            where.filesystem.mkdir(where.parts)
+            cpu.set_flag(flags.CF, False)
+        except FsError as error:
+            fail(cpu, error)
     elif ah == 0x3B:  # make the directory named at DS:DX the current one of its drive; the current drive stays
         try:
             state.volumes.chdir(read_path(cpu))

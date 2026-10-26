@@ -2678,6 +2678,86 @@ class TestDiskSpace(FileFunctionsTest):
         self.assertTrue(cpu.get_flag(flags.CF))
 
 
+class TestMakeDirectory(FileFunctionsTest):
+    """INT 21h AH=39h: make a directory."""
+
+    def mkdir(self, name, **registers):
+        self.call(0x3900, name, **registers)
+        return self.failed()
+
+    def test_a_directory_is_made_on_the_host_in_capitals_and_the_carry_is_clear(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.assertIsNone(self.mkdir("xcoma"))
+        self.assertFalse(self.cpu.get_flag(flags.CF))
+        self.assertTrue((self.base / "XCOMA").is_dir())
+        self.assertEqual(sorted(os.listdir(self.base)), ["GAMES", "NOTES.TXT", "XCOMA"])
+
+    def test_it_is_empty_and_the_program_can_go_into_it(self):
+        self.mkdir("XCOMA")
+        self.assertEqual(os.listdir(self.base / "XCOMA"), [])
+        self.call(0x3B00, "XCOMA")
+        self.assertIsNone(self.failed())
+        self.assertEqual(self.volumes.current_directory(), "XCOMA")
+
+    def test_a_relative_path_is_from_the_current_directory_and_an_absolute_one_from_the_root(self):
+        self.call(0x3B00, "GAMES")
+        self.assertIsNone(self.mkdir("ARCADE"))
+        self.assertTrue((self.base / "GAMES" / "ARCADE").is_dir())
+        self.assertIsNone(self.mkdir("\\TOP"))
+        self.assertTrue((self.base / "TOP").is_dir())
+        self.assertIsNone(self.mkdir("..\\SIBLING"))
+        self.assertTrue((self.base / "SIBLING").is_dir())
+
+    def test_a_path_with_the_drive_names_the_drive(self):
+        self.assertIsNone(self.mkdir("C:\\GAMES\\SAVES"))
+        self.assertTrue((self.base / "GAMES" / "SAVES").is_dir())
+        self.assertIsNone(self.mkdir("d:\\TEMP"))
+        self.assertEqual([entry.name for entry in self.volumes.filesystems[3].listdir([])], ["TEMP"])
+
+    def test_a_directory_that_is_there_and_a_file_of_that_name_are_error_5(self):
+        self.assertEqual(self.mkdir("GAMES"), 5)
+        self.assertEqual(self.mkdir("games"), 5)
+        self.assertEqual(self.mkdir("NOTES.TXT"), 5)
+        self.assertEqual(sorted(os.listdir(self.base)), ["GAMES", "NOTES.TXT"])
+
+    def test_a_parent_that_is_not_there_is_error_3_and_nothing_is_made(self):
+        self.assertEqual(self.mkdir("NOTHING\\SUB"), 3)
+        self.assertEqual(self.mkdir("NOTES.TXT\\SUB"), 3)  # the parent is a file
+        self.assertEqual(self.mkdir("..\\X"), 3)  # above the root
+        self.assertEqual(sorted(os.listdir(self.base)), ["GAMES", "NOTES.TXT"])
+
+    def test_a_name_dos_cannot_have_is_error_3(self):
+        for name in ("TOOLONGNAME", "A*B", "A?B", "NAME.LONG", "A B"):
+            self.assertEqual(self.mkdir(name), 3, name)
+        self.assertEqual(sorted(os.listdir(self.base)), ["GAMES", "NOTES.TXT"])
+
+    def test_the_root_and_an_empty_name_cannot_be_made(self):
+        self.assertEqual(self.mkdir("\\"), 5)
+        self.assertEqual(self.mkdir(""), 3)
+
+    def test_a_drive_that_is_not_there_or_has_nothing_in_it_is_an_error_of_the_drive(self):
+        self.assertEqual(self.mkdir("A:\\X"), 21)
+        self.assertEqual(self.mkdir("Z:\\X"), 15)
+
+    def test_a_disc_cannot_be_written_to(self):
+        from mydos.iso import IsoFs, IsoImage
+        from tests.iso_builder import build
+        (self.base / "disc.iso").write_bytes(build({"A.TXT": b"abc"}))
+        self.volumes.filesystems[3] = IsoFs(IsoImage(self.base / "disc.iso"))
+        self.assertEqual(self.mkdir("D:\\NEW"), 5)
+
+    def test_the_registers_other_than_ax_are_left_alone(self):
+        self.cpu.r[CPU.SI], self.cpu.r[CPU.DI] = 0x4444, 0x5555
+        self.assertIsNone(self.mkdir("NEWDIR", bx=0x1111, cx=0x2222))
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.r[CPU.SI], cpu.r[CPU.DI]),
+                         (0x1111, 0x2222, 0x0100, 0x4444, 0x5555))
+
+    def test_the_name_is_read_from_ds_dx_round_the_end_of_the_segment(self):
+        self.assertIsNone(self.mkdir("WRAPPED", dx=0xFFF8))
+        self.assertTrue((self.base / "WRAPPED").is_dir())
+
+
 class TestChangeDirectory(FileFunctionsTest):
     """INT 21h AH=3Bh: make a directory the current one."""
 
