@@ -412,6 +412,28 @@ class TestWhenItCannotBeStarted(ProcessTest):
                 self.call(0x4B00 | al, "C:\\X.COM", bx=self.parameters())
 
 
+class TestThe32BitRegistersOfAChild(ProcessTest):
+    def test_the_high_halves_of_the_registers_of_the_parent_are_back_when_the_child_ends(self):
+        # mov eax, DEAD0000h ; mov ebx, BEEF0000h ; mov ax, 4C00h ; int 21h
+        child = bytes([0x66, 0xB8, 0x00, 0x00, 0xAD, 0xDE, 0x66, 0xBB, 0x00, 0x00, 0xEF, 0xBE, 0xB8, 0x00, 0x4C,
+                       0xCD, 0x21])
+        self.program("CHILD.COM", com(child))
+        self.cpu.rh[:] = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888]
+        before = list(self.cpu.rh)
+        self.start("CHILD.COM")
+        self.assertEqual(self.cpu.rh, [0] * 8)  # the child starts with nothing in them
+        self.run_child()
+        self.assertEqual(self.cpu.rh, before)
+        self.assertEqual(self.cpu.get32(0), 0x11110000)  # EAX: the high half of the parent and the AX of the exec
+
+    def test_the_high_halves_are_those_the_child_made_while_it_runs(self):
+        child = bytes([0x66, 0xB8, 0x00, 0x00, 0xAD, 0xDE, 0xB8, 0x00, 0x4C, 0xCD, 0x21])
+        self.program("CHILD.COM", com(child))
+        self.start("CHILD.COM")
+        self.cpu.step()
+        self.assertEqual(self.cpu.get32(0), 0xDEAD0000)
+
+
 class TestThePocketCommandCom(ProcessTest):
     """A COMMAND.COM that is not on the disk is the pocket one: it does the command of the tail, and goes back."""
 

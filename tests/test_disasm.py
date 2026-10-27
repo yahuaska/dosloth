@@ -82,6 +82,43 @@ class TestText(unittest.TestCase):
             (b"\x87\x4F\x02", "xchg cx, [bx+2]"),
             (b"\x99", "cwd"),
             (b"\x9B", "wait"),
+            (b"\x66\x9C", "pushfd"),   # from install.exe: the test of the processor
+            (b"\x66\x9D", "popfd"),
+            (b"\x66\x58", "pop eax"),
+            (b"\x66\x50", "push eax"),
+            (b"\x66\x8B\xC8", "mov ecx, eax"),
+            (b"\x66\x35\x00\x00\x04\x00", "xor eax, 00040000"),
+            (b"\x66\x33\xC1", "xor eax, ecx"),
+            (b"\x66\xB8\x01\x00\x00\x00", "mov eax, 00000001"),
+            (b"\x66\xB9\x78\x56\x34\x12", "mov ecx, 12345678"),
+            (b"\x66\x83\xF9\x00", "cmp ecx, 0"),
+            (b"\x66\x83\xC1\xFF", "add ecx, -1"),
+            (b"\x66\x81\xC3\x00\x00\x00\x80", "add ebx, 80000000"),
+            (b"\x66\x81\x07\x01\x00\x00\x00", "add dword [bx], 00000001"),
+            (b"\x66\xA1\x1B\x00", "mov eax, [001B]"),
+            (b"\x66\xA3\x1B\x00", "mov [001B], eax"),
+            (b"\x66\x89\x16\x06\x00", "mov [0006], edx"),
+            (b"\x66\x8B\x40\x10", "mov eax, [bx+si+10]"),
+            (b"\x66\x89\xC8", "mov eax, ecx"),
+            (b"\x66\x01\xD8", "add eax, ebx"),
+            (b"\x66\x03\x07", "add eax, [bx]"),
+            (b"\x66\x05\x01\x00\x00\x00", "add eax, 00000001"),
+            (b"\x66\x3D\xFF\xFF\xFF\xFF", "cmp eax, FFFFFFFF"),
+            (b"\x66\xC7\x06\x34\x12\x78\x56\x00\x00", "mov dword [1234], 00005678"),
+            (b"\x66\xC7\xC1\x01\x00\x00\x00", "mov ecx, 00000001"),
+            (b"\x66\x8D\x40\x10", "lea eax, [bx+si+10]"),
+            (b"\x66\x40", "inc eax"),
+            (b"\x66\x4F", "dec edi"),
+            (b"\x66\x55", "push ebp"),
+            (b"\x66\x5D", "pop ebp"),
+            (b"\x66\x87\xCB", "xchg ecx, ebx"),  # the register of the 'reg' field first, as for 16 bits
+            (b"\x66\x93", "xchg eax, ebx"),
+            (b"\x66\x85\xC0", "test eax, eax"),
+            (b"\x66\xA9\x01\x00\x00\x80", "test eax, 80000001"),
+            (b"\x66\x98", "cwde"),
+            (b"\x66\x99", "cdq"),
+            (b"\x66\x90", "nop"),
+            (b"\x66\x04\x05", "add al, 05"),
             (b"\xD4\x0A", "aam"),   # from install.exe
             (b"\xD4\x08", "aam 08"),
             (b"\xD5\x0A", "aad"),
@@ -167,6 +204,39 @@ class TestText(unittest.TestCase):
 
     def test_unknown_opcode_is_one_byte(self):
         self.assertEqual(dis(b"\x0F\x00"), (1, "db 0F"))
+
+
+class TestAgreesWithCpu32(unittest.TestCase):
+    def test_every_opcode_that_has_a_32_bit_form_has_the_same_length_here(self):
+        """If you teach the CPU a 32-bit instruction and forget disasm.py, this fails."""
+        for op in CPU().ops32:
+            with self.subTest(op=f"66 {op:02X}"):
+                code = bytes([0x66, op, MODRM_FOR.get(op, 0xD8), 0, 0, 0, 0, 0, 0])
+                cpu = machine(code)
+                cpu.ip = 0x100
+                fetched = []
+                real_fetch8 = cpu.fetch8
+                cpu.fetch8 = lambda: fetched.append(1) or real_fetch8()
+                try:
+                    cpu.step()
+                except Exception:
+                    pass
+                length, text = disasm(machine(code), 0x1000, 0x100)
+                self.assertFalse(text.startswith("db"), text)
+                self.assertEqual(length, len(fetched) + 1, text)  # step() reads the first byte, the prefix, itself
+
+    def test_an_opcode_with_the_prefix_that_the_cpu_does_not_know_is_a_db_of_the_prefix(self):
+        self.assertEqual(dis(b"\x66\x0F\x84\x00\x00"), (1, "db 66"))
+
+    def test_the_opcodes_that_the_cpu_takes_with_the_prefix_are_the_ones_that_are_written_with_it(self):
+        """Both ways: nothing that the CPU stops at is written as an instruction, and nothing it takes as a db."""
+        taken = set(CPU().ops32)
+        for op in range(256):
+            if op in (0x26, 0x2E, 0x36, 0x3E, 0x66, 0xF2, 0xF3):  # the prefixes: another prefix is read after 66
+                continue
+            code = bytes([0x66, op, MODRM_FOR.get(op, 0xD8), 0, 0, 0, 0, 0, 0])
+            length, text = disasm(machine(code), 0x1000, 0x100)
+            self.assertEqual(not text.startswith("db"), op in taken, f"66 {op:02X}: {text}")
 
 
 class TestAgreesWithCpu(unittest.TestCase):

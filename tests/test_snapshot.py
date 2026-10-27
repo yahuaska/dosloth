@@ -313,6 +313,26 @@ class TestAMachineThatGoesOn(SnapshotTest):
         self.assertEqual((b.timer.counters[0].reload, b.timer.counters[2].latched), (1234, [1, 2]))
         self.assertEqual(list(b.keyboard.buffer), [0x1E61, 0x3062])
 
+    def test_the_high_halves_of_the_registers_and_the_alignment_check_flag_come_back(self):
+        a = self.make()
+        a.cpu.rh[:] = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888]
+        a.cpu.eflags_high = 0x4
+        path = str(self.out / "x.state")
+        snapshot.save(path, a)
+        b = self.make()
+        snapshot.load(path, b)
+        self.assertEqual((b.cpu.rh, b.cpu.eflags_high), (a.cpu.rh, 0x4))
+
+    def test_the_high_halves_of_the_parent_come_back_too(self):
+        a = self.make()
+        self.busy(a)
+        a.state.parents[0].high = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888]
+        path = str(self.out / "x.state")
+        snapshot.save(path, a)
+        b = self.make()
+        snapshot.load(path, b)
+        self.assertEqual(b.state.parents[0].high, a.state.parents[0].high)
+
     def test_what_the_program_wrote_to_port_61h_comes_back(self):
         a = self.make()
         a.sysport.value = 0x0B
@@ -431,6 +451,15 @@ class TestWhatIsPutBack(SnapshotTest):
         snapshot.load(path, b)
         self.assertEqual(b.cpu.mem[0xF0000], 0xCB)
         self.assertEqual(bytes(b.cpu.mem[0xC0100:0xC0109]), b"mydos VGA")
+
+    def test_a_snapshot_from_before_the_386_leaves_the_high_halves_as_built(self):
+        a = self.make()
+        packed, blobs = self.tampered(a, lambda data: [data["cpu"].pop(key) for key in ("rh", "eflags_high")])
+        b = self.make()
+        b.cpu.rh[:] = [9] * 8
+        b.cpu.eflags_high = 0x4
+        snapshot.restore(b, packed, blobs)
+        self.assertEqual((b.cpu.rh, b.cpu.eflags_high), ([9] * 8, 0x4))
 
     def test_the_ram_is_the_one_of_the_snapshot(self):
         a = self.make()

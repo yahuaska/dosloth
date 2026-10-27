@@ -142,6 +142,13 @@ class TestDescribe(DumpTest):
         self.assertEqual(info["stack"][:2], ["1234", "5678"])
         self.assertEqual((info["flags"], len(info["stack"])), ("0246", 8))
 
+    def test_the_high_halves_of_the_registers_are_said_only_when_a_program_has_put_something_in_them(self):
+        self.assertNotIn("high_halves", dump.describe(self.cpu, "x", self.error))
+        self.cpu.rh[0], self.cpu.rh[6] = 0xDEAD, 0x0001
+        info = dump.describe(self.cpu, "x", self.error)
+        self.assertEqual(info["high_halves"], {"EAX": "DEAD", "ECX": "0000", "EDX": "0000", "EBX": "0000",
+                                               "ESP": "0000", "EBP": "0000", "ESI": "0001", "EDI": "0000"})
+
     def test_the_error_names_its_kind(self):
         self.assertEqual(dump.describe(self.cpu, "x", ValueError("boom"))["error"], "ValueError: boom")
 

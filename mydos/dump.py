@@ -18,6 +18,8 @@ def describe(cpu, prog_path, exc):
         "program": prog_path,
         "error": f"{type(exc).__name__}: {exc}",
         "registers": {name: f"{cpu.r[i]:04X}" for i, name in enumerate(REG16)},
+        # the high halves of the 32-bit registers, said only when a program has put something in them
+        **({"high_halves": {f"E{name}": f"{cpu.rh[i]:04X}" for i, name in enumerate(REG16)}} if any(cpu.rh) else {}),
         "segments": {name: f"{cpu.s[i]:04X}" for i, name in enumerate(SEGS)},
         "ip": f"{cpu.ip:04X}",
         "start_ip": f"{cpu.start_ip:04X}",  # where the failed instruction began

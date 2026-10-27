@@ -27,6 +27,7 @@ class Parent:
     flags: int
     dta: tuple
     handles: HandleTable
+    high: list = None  # the high halves of its 32-bit registers (CPU.rh)
 
 
 def read_environment(cpu, segment):
@@ -140,7 +141,8 @@ def execute(cpu, state, data, dos_path, block=None, tail=b"", null_output=False)
         line = bytes([len(tail)]) + tail + b"\r"
         cpu.mem[child * 16 + 0x80:child * 16 + 0x80 + len(line)] = line
 
-    state.parents.append(Parent(parent_psp, list(cpu.r), list(cpu.s), cpu.ip, cpu.flags, state.dta, state.handles))
+    state.parents.append(Parent(parent_psp, list(cpu.r), list(cpu.s), cpu.ip, cpu.flags, state.dta, state.handles,
+                                list(cpu.rh)))
     state.psp_seg = child
     state.dta = (child, 0x80)
     state.handles = state.handles.copy()
@@ -168,5 +170,7 @@ def terminate(cpu, state, code):
     state.handles, state.dta, state.psp_seg = parent.handles, parent.dta, parent.psp_seg
     state.exit_status = code
     cpu.r[:], cpu.s[:], cpu.ip, cpu.flags = parent.registers, parent.segments, parent.ip, parent.flags
+    if parent.high is not None:
+        cpu.rh[:] = parent.high
     cpu.r[CPU.AX] = 0
     cpu.set_flag(flags.CF, False)

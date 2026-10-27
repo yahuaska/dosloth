@@ -1,4 +1,5 @@
 from . import flags, modrm
+from .ops32 import Ops32
 from .opcodes import Alu, Op
 
 
@@ -21,7 +22,8 @@ class DivideError(Exception):
 # for each byte: does it have an even number of bits set? That is what the parity flag says
 EVEN_PARITY = [bin(n).count("1") % 2 == 0 for n in range(256)]
 # the bytes that come before an opcode and change what it does, not instructions themselves
-PREFIXES = frozenset((Op.ES_PREFIX, Op.CS_PREFIX, Op.SS_PREFIX, Op.DS_PREFIX, Op.REP_PREFIX, Op.REPNE_PREFIX))
+PREFIXES = frozenset((Op.ES_PREFIX, Op.CS_PREFIX, Op.SS_PREFIX, Op.DS_PREFIX, Op.REP_PREFIX, Op.REPNE_PREFIX,
+                      Op.OPSIZE_PREFIX))
 
 
 # the flags that the conditions of the conditional jumps look at, and for each combination of them the 16 answers
@@ -53,7 +55,7 @@ def signed(value, bits):
     return value - (1 << bits) if value >> (bits - 1) else value
 
 
-class CPU:
+class CPU(Ops32):
     """A tiny 8086-style CPU running in real mode, with 1 MB of flat memory.
 
     Registers live in two lists: self.r (AX, CX, DX, BX, SP, BP, SI, DI) and self.s (ES, CS, SS, DS).
@@ -76,9 +78,12 @@ class CPU:
         self.keyboard = None  # the keys that were pressed, once the BIOS is installed (see bios.Keyboard)
         self.video_start = self.video_end = 0
         self.r = [0] * 8
+        self.rh = [0] * 8  # the high halves of the 32-bit registers of a 386: see ops32.py
         self.s = [0] * 4
         self.ip = 0
         self.flags = 0x0002
+        self.eflags_high = 0  # the bits of EFLAGS above the 16th that are kept, shifted down: only the alignment check
+        self.osize32 = False  # set by step(): the prefix 66h is in front of this instruction
         self.int_handlers = {}  # int number -> fn(cpu)
         self.instructions = 0  # how many instructions have been started: the emulated time
         self.port_readers = {}  # I/O port number -> fn(port): a byte read from the device behind that port
@@ -209,6 +214,7 @@ class CPU:
             self.ops[Op.POP_R16 + i] = self.pop_r16
             self.ops[Op.MOV_R8_IMM8 + i] = self.mov_r8_imm8
             self.ops[Op.MOV_R16_IMM16 + i] = self.mov_r16_imm16
+        self.ops32 = self.build_ops32()  # what the prefix 66h makes of them: see ops32.py
 
     # --- memory ---
     def addr(self, seg, off):
@@ -264,15 +270,20 @@ class CPU:
             self.r[i] = (self.r[i] & 0xFF00) | (val & 0xFF)
 
     def get_reg(self, n, bits):
-        """Read register number n as a 16-bit register (AX..DI) or as an 8-bit one (AL..BH)."""
-        return self.r[n] if bits == 16 else self.get8(n)
+        """Read register number n as a 16-bit register (AX..DI), an 8-bit one (AL..BH) or a 32-bit one (EAX..EDI)."""
+        if bits == 16:
+            return self.r[n]
+        return self.get8(n) if bits == 8 else self.rh[n] << 16 | self.r[n]
 
     def set_reg(self, n, bits, value):
-        """Write register number n, 16 or 8 bits wide (an 8-bit write leaves the other half alone)."""
+        """Write register number n, 16, 8 or 32 bits wide (an 8-bit write leaves the other half alone)."""
         if bits == 16:
             self.r[n] = value & 0xFFFF
-        else:
+        elif bits == 8:
             self.set8(n, value)
+        else:
+            self.r[n] = value & 0xFFFF
+            self.rh[n] = (value >> 16) & 0xFFFF
 
     # --- flags (masks are in flags.py) ---
     def get_flag(self, mask):
@@ -525,6 +536,7 @@ class CPU:
             self.trace(self)
         self.seg_override = None  # set by a prefix, applies to this instruction only
         self.rep = None  # same for the repeat prefix
+        self.osize32 = False  # and for the prefix of the operand size
         ip = self.start_ip = self.ip  # where this instruction began (for error messages)
         address = (self.s[self.CS] * 16 + ip) & 0xFFFFF  # the first byte is read here, as fetch8 does, with no call
         self.ip = (ip + 1) & 0xFFFF
@@ -535,14 +547,17 @@ class CPU:
         while op in PREFIXES:  # prefixes come before the opcode, in any order; the last of a kind counts
             if op in self.SEG_PREFIXES:
                 self.seg_override = self.SEG_PREFIXES[op]
+            elif op == Op.OPSIZE_PREFIX:
+                self.osize32 = True
             else:
                 self.rep = op
             op = self.fetch8()
-        handler = self.ops.get(op)
+        handler = (self.ops32 if self.osize32 else self.ops).get(op)
         if handler is None:
             raw = bytes(self.mem[self.addr(self.s[self.CS], self.start_ip):][:8]).hex(" ")
+            what = f"opcode 66 {op:02X}, the 32-bit form," if self.osize32 else f"opcode {op:02X}"
             raise NotImplementedError(
-                f"opcode {op:02X} at {self.s[self.CS]:04X}:{self.start_ip:04X}: {raw}")
+                f"{what} at {self.s[self.CS]:04X}:{self.start_ip:04X}: {raw}")
         handler(op)
 
     # --- instructions: each takes the opcode byte (groups use its low 3 bits) ---
@@ -800,7 +815,9 @@ class CPU:
         is a register or a memory address (the 'mod' and 'r/m' fields).
         """
         m = modrm.decode(self, self.seg_override)
-        return m, 16 if op & 1 else 8, bool(op & 2)
+        if op & 1:
+            return m, 32 if self.osize32 else 16, bool(op & 2)
+        return m, 8, bool(op & 2)
 
     def mov_rm_imm(self, op):
         """Put a constant into a register or into memory (opcodes C6 for a byte, C7 for a word).

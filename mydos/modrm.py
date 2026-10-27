@@ -70,22 +70,31 @@ class ModRM:
         """Read the two words that a far pointer in memory is made of: (offset, segment). Memory only."""
         return cpu.rw(self.seg, self.off), cpu.rw(self.seg, (self.off + 2) & 0xFFFF)
 
-    # The same, with the width (8 or 16) as an argument, for code that handles both sizes alike.
+    # The same, with the width (8, 16 or 32) as an argument, for code that handles the sizes alike.
     def read(self, cpu, bits):
         if self.is_reg:
-            return cpu.r[self.n] if bits == 16 else cpu.get8(self.n)
-        return cpu.rw(self.seg, self.off) if bits == 16 else cpu.rb(self.seg, self.off)
+            if bits == 16:
+                return cpu.r[self.n]
+            return cpu.get8(self.n) if bits == 8 else cpu.rh[self.n] << 16 | cpu.r[self.n]
+        if bits == 16:
+            return cpu.rw(self.seg, self.off)
+        return cpu.rb(self.seg, self.off) if bits == 8 else cpu.rd(self.seg, self.off)
 
     def write(self, cpu, bits, val):
         if self.is_reg:
             if bits == 16:
                 cpu.r[self.n] = val & 0xFFFF
-            else:
+            elif bits == 8:
                 cpu.set8(self.n, val)
+            else:
+                cpu.r[self.n] = val & 0xFFFF
+                cpu.rh[self.n] = (val >> 16) & 0xFFFF
         elif bits == 16:
             cpu.ww(self.seg, self.off, val)
-        else:
+        elif bits == 8:
             cpu.wb(self.seg, self.off, val)
+        else:
+            cpu.wd(self.seg, self.off, val)
 
 
 # What follows the ModRM byte, and how the operand is made of it.

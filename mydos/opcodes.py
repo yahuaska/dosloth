@@ -17,6 +17,7 @@ class Op(IntEnum):
     POP_DS = 0x1F
 
     # segment-override prefixes: modify the next instruction, not instructions themselves
+    OPSIZE_PREFIX = 0x66  # 386 and later: the next instruction works on 32 bits instead of 16
     ES_PREFIX = 0x26
     CS_PREFIX = 0x2E
     SS_PREFIX = 0x36

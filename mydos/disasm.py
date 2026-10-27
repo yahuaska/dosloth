@@ -11,6 +11,7 @@ from .opcodes import Alu, Op
 
 REG16 = ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"]
 REG8 = ["al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"]
+REG32 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"]
 SREG = ["es", "cs", "ss", "ds"]
 # registers added up into the address, by the r/m field of a ModRM byte (see modrm.py)
 BASES = ["bx+si", "bx+di", "bp+si", "bp+di", "si", "di", "bp", "bx"]
@@ -25,6 +26,14 @@ PLAIN = {
     Op.SCASB: "scasb", Op.SCASW: "scasw", Op.MOVSB: "movsb", Op.MOVSW: "movsw", Op.CMPSB: "cmpsb", Op.CMPSW: "cmpsw",
     Op.STOSB: "stosb", Op.STOSW: "stosw", Op.LODSB: "lodsb", Op.LODSW: "lodsw",
 }
+# the instructions that the prefix 66h means nothing to (those with no operand of a size that it changes): they are
+# written as they are with it. The same as the ones that CPU.build_ops32 takes from the 16-bit table, besides the
+# byte forms of the arithmetic block, which _decode_opcode32 sends there itself.
+UNCHANGED_BY_66 = frozenset((
+    Op.NOP, Op.CLC, Op.STC, Op.CLI, Op.STI, Op.CLD, Op.STD, Op.CMC, Op.HLT, Op.WAIT, Op.SAHF, Op.LAHF, Op.JMP_SHORT,
+    Op.INT, Op.ALU_RM8_IMM8, Op.MOV_RM_REG, Op.MOV_RM_REG + 2, Op.TEST_RM_REG, Op.XCHG_RM_REG, Op.MOV_AL_MOFFS8,
+    Op.MOV_MOFFS8_AL, Op.TEST_ACC_IMM, Op.MOV_RM_IMM, *range(Op.JCC, Op.JCC + 16),
+    *range(Op.MOV_R8_IMM8, Op.MOV_R8_IMM8 + 8)))
 COMPARING = (Op.CMPSB, Op.CMPSW, Op.SCASB, Op.SCASW)  # these look at ZF, so a prefix F3 reads "repe"
 SHIFTS = ["rol", "ror", "rcl", "rcr", "shl", "shr", "sal", "sar"]  # by the ModRM reg field
 LOOPS = {Op.LOOPNE: "loopne", Op.LOOPE: "loope", Op.LOOP: "loop", Op.JCXZ: "jcxz"}
@@ -45,6 +54,10 @@ class _Reader:
         lo = self.u8()
         return lo | self.u8() << 8
 
+    def u32(self):
+        lo = self.u16()
+        return lo | self.u16() << 16
+
     def s8(self):
         v = self.u8()
         return v - 256 if v & 0x80 else v
@@ -61,12 +74,12 @@ def _signed(v):
 def _modrm(r, seg_override, bits):
     """Read a ModRM byte (and its address bytes). Returns (reg field, r/m text, r/m is memory).
 
-    `bits` (8 or 16) only decides which register names an r/m that is a register gets.
+    `bits` (8, 16 or 32) only decides which register names an r/m that is a register gets.
     """
     b = r.u8()
     mod, reg, rm = b >> 6, (b >> 3) & 7, b & 7
     if mod == 3:
-        return reg, (REG8 if bits == 8 else REG16)[rm], False
+        return reg, {8: REG8, 16: REG16, 32: REG32}[bits][rm], False
     if mod == 0 and rm == 6:
         inner = f"{r.u16():04X}"  # a bare address
     else:
@@ -84,10 +97,10 @@ def _disp(d):
     return "" if d == 0 else (f"-{-d:X}" if d < 0 else f"+{d:X}")
 
 
-def _operands(r, op, seg_override):
+def _operands(r, op, seg_override, osize32=False):
     """The two operands, as (destination, source) text, of an opcode in the layout CPU.operands() describes."""
-    bits = 16 if op & 1 else 8
-    regs = REG16 if bits == 16 else REG8
+    bits = (32 if osize32 else 16) if op & 1 else 8
+    regs = {8: REG8, 16: REG16, 32: REG32}[bits]
     reg, rm, _ = _modrm(r, seg_override, bits)
     return (regs[reg], rm) if op & 2 else (rm, regs[reg])
 
@@ -100,17 +113,20 @@ def _direct(r, seg_override):
 def _decode(r):
     """Return the text of the instruction at the reader, or None if the opcode is not known."""
     seg_override = rep = None
+    osize32 = False
     op = r.u8()
     while True:  # prefixes, as in CPU.step
         if op in SEG_PREFIXES:
             seg_override = SEG_PREFIXES[op]
         elif op in (Op.REP_PREFIX, Op.REPNE_PREFIX):
             rep = op
+        elif op == Op.OPSIZE_PREFIX:
+            osize32 = True
         else:
             break
         op = r.u8()
 
-    text = _decode_opcode(r, op, seg_override)
+    text = _decode_opcode32(r, op, seg_override) if osize32 else _decode_opcode(r, op, seg_override)
     if text is None:
         return None
     if rep == Op.REPNE_PREFIX:
@@ -118,6 +134,66 @@ def _decode(r):
     if rep == Op.REP_PREFIX:
         return ("repe " if op in COMPARING else "rep ") + text
     return text
+
+
+def _decode_opcode32(r, op, seg_override):
+    """The text of an instruction that the prefix 66h is in front of, or None if it has no 32-bit form we know. The ones
+    that the prefix does not change are those of the 16-bit table."""
+    if op < 0x40 and op & 7 <= 5:  # the arithmetic/logic block: the forms with a register and r/m, and with EAX
+        form = op & 7
+        if form not in (1, 3, 5):
+            return _decode_opcode(r, op, seg_override)
+        name = Alu(op >> 3).name.lower()
+        if form == 5:
+            return f"{name} eax, {r.u32():08X}"
+        dst, src = _operands(r, op, seg_override, True)
+        return f"{name} {dst}, {src}"
+    if Op.INC_R16 <= op < Op.INC_R16 + 8:
+        return f"inc {REG32[op - Op.INC_R16]}"
+    if Op.DEC_R16 <= op < Op.DEC_R16 + 8:
+        return f"dec {REG32[op - Op.DEC_R16]}"
+    if Op.PUSH_R16 <= op < Op.PUSH_R16 + 8:
+        return f"push {REG32[op - Op.PUSH_R16]}"
+    if Op.POP_R16 <= op < Op.POP_R16 + 8:
+        return f"pop {REG32[op - Op.POP_R16]}"
+    if op in (Op.ALU_RM16_IMM16, Op.ALU_RM16_IMM8):
+        reg, rm, is_mem = _modrm(r, seg_override, 32)
+        imm = f"{r.u32():08X}" if op == Op.ALU_RM16_IMM16 else _signed(r.s8())
+        return f"{Alu(reg).name.lower()} {'dword ' if is_mem else ''}{rm}, {imm}"
+    if op in (Op.MOV_RM_REG + 1, Op.MOV_RM_REG + 3):
+        dst, src = _operands(r, op, seg_override, True)
+        return f"mov {dst}, {src}"
+    if op == Op.TEST_RM_REG + 1:
+        dst, src = _operands(r, op, seg_override, True)
+        return f"test {dst}, {src}"
+    if op == Op.XCHG_RM_REG + 1:
+        dst, src = _operands(r, op, seg_override, True)
+        return f"xchg {dst}, {src}"
+    if Op.XCHG_AX_R16 < op < Op.XCHG_AX_R16 + 8:
+        return f"xchg eax, {REG32[op - Op.XCHG_AX_R16]}"
+    if Op.MOV_R16_IMM16 <= op < Op.MOV_R16_IMM16 + 8:
+        return f"mov {REG32[op - Op.MOV_R16_IMM16]}, {r.u32():08X}"
+    if op == Op.MOV_AX_MOFFS16:
+        return f"mov eax, {_direct(r, seg_override)}"
+    if op == Op.MOV_MOFFS16_AX:
+        return f"mov {_direct(r, seg_override)}, eax"
+    if op == Op.MOV_RM_IMM + 1:
+        reg, rm, is_mem = _modrm(r, seg_override, 32)
+        if reg != 0:
+            return None
+        return f"mov {'dword ' if is_mem else ''}{rm}, {r.u32():08X}"
+    if op == Op.LEA:
+        reg, rm, is_mem = _modrm(r, None, 32)
+        return f"lea {REG32[reg]}, {rm}" if is_mem else None
+    if op == Op.TEST_ACC_IMM + 1:
+        return f"test eax, {r.u32():08X}"
+    if op in (Op.PUSHF, Op.POPF):
+        return "pushfd" if op == Op.PUSHF else "popfd"
+    if op in (Op.CBW, Op.CWD):
+        return "cwde" if op == Op.CBW else "cdq"
+    if op in UNCHANGED_BY_66:
+        return _decode_opcode(r, op, seg_override)
+    return None  # an instruction that has a 32-bit form that we do not know: the CPU stops at it as well
 
 
 def _decode_opcode(r, op, seg_override):

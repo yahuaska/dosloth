@@ -150,7 +150,7 @@ def dos_state(state, files):
                               for number, entries in state.searches.rest.items()}},
         "handles": table_state(state.handles, files),
         "parents": [{"psp_seg": parent.psp_seg, "registers": parent.registers, "segments": parent.segments,
-                     "ip": parent.ip, "flags": parent.flags, "dta": parent.dta,
+                     "ip": parent.ip, "flags": parent.flags, "dta": parent.dta, "high": parent.high,
                      "handles": table_state(parent.handles, files)} for parent in state.parents],
     }
 
@@ -169,8 +169,8 @@ def capture(machine, rewind=False):
         "version": VERSION,
         "program": machine.program,
         "disks": fingerprint(machine.config),
-        "cpu": {"mem": cpu.mem, "r": cpu.r, "s": cpu.s, "ip": cpu.start_ip if rewind else cpu.ip,
-                "flags": cpu.flags, "instructions": cpu.instructions - bool(rewind)},
+        "cpu": {"mem": cpu.mem, "r": cpu.r, "rh": cpu.rh, "s": cpu.s, "ip": cpu.start_ip if rewind else cpu.ip,
+                "flags": cpu.flags, "eflags_high": cpu.eflags_high, "instructions": cpu.instructions - bool(rewind)},
         "vga": dict(vars(machine.card)),
         "timer": [dict(vars(counter)) for counter in machine.timer.counters],
         "keyboard": machine.keyboard.buffer,
@@ -221,6 +221,8 @@ def restore(machine, packed, blobs):
         raise SnapshotError("the memory of the snapshot is not the size of the memory of this machine")
     cpu.mem[:] = saved["mem"]
     cpu.r[:], cpu.s[:] = saved["r"], saved["s"]
+    cpu.rh[:] = saved.get("rh", cpu.rh)  # a snapshot of before the 386 has no high halves: they stay 0
+    cpu.eflags_high = saved.get("eflags_high", cpu.eflags_high)
     cpu.ip, cpu.flags, cpu.instructions = saved["ip"], saved["flags"], saved["instructions"]
     cpu.start_ip = cpu.ip
     machine_module.install_rom(cpu)  # after the memory: what is ROM comes from the code, not from the snapshot
@@ -257,7 +259,7 @@ def restore(machine, packed, blobs):
     if "handles" in saved_dos:
         state.handles = make_table(saved_dos["handles"], files)
     state.parents = [Parent(parent["psp_seg"], parent["registers"], parent["segments"], parent["ip"], parent["flags"],
-                            parent["dta"], make_table(parent["handles"], files))
+                            parent["dta"], make_table(parent["handles"], files), parent.get("high"))
                      for parent in saved_dos.get("parents", [])]
     count_users([state.handles] + [parent.handles for parent in state.parents])
     machine.program = data.get("program")

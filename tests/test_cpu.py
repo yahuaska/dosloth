@@ -1092,8 +1092,17 @@ class TestFlagsRegisterInstructions(unittest.TestCase):
             cpu = self.machine_with_stack([0x9D])
             cpu.ww(0x4000, 0x0200, word)
             cpu.step()
-            self.assertEqual(cpu.flags, (word & 0x0FD5) | 0x0002, f"{word:04X}")  # nine flags, bit 1 always set
+            # the nine flags, IOPL and NT (what a 386 keeps in real mode), and bit 1 always set; bit 15 is never set
+            self.assertEqual(cpu.flags, (word & 0x7FD5) | 0x0002, f"{word:04X}")
             self.assertEqual(cpu.r[CPU.SP], 0x0202)
+
+    def test_popf_keeps_iopl_and_nt_which_is_how_a_386_is_told_from_a_286(self):
+        for word, kept in ((0x3000, 0x3000), (0x4000, 0x4000), (0x7000, 0x7000), (0x1000, 0x1000), (0x8000, 0)):
+            cpu = self.machine_with_stack([0x9D, 0x9C])  # popf ; pushf
+            cpu.ww(0x4000, 0x0200, word)
+            cpu.step()
+            cpu.step()
+            self.assertEqual(cpu.rw(0x4000, 0x0200) & 0xF000, kept, f"{word:04X}")
 
     def test_pushf_cli_popf_puts_the_interrupt_flag_back(self):
         """As in esetup.exe: save the flags, switch interrupts off, restore."""
@@ -1692,7 +1701,7 @@ class TestIret(unittest.TestCase):
         for word in (0x0000, 0xFFFF, 0x0FD7, 0xF000, 0x0200, 0x0100, 0xAAAA, 0x5555):
             cpu = self.machine_with_stack(0, 0x1000, word)
             cpu.step()
-            self.assertEqual(cpu.flags, (word & 0x0FD5) | 0x0002, f"{word:04X}")
+            self.assertEqual(cpu.flags, (word & 0x7FD5) | 0x0002, f"{word:04X}")  # IOPL and NT too, as for POPF
 
     def test_if_and_tf_are_what_the_stack_says_not_what_they_were(self):
         for old in (0x0002, 0x0202, 0x0302):
