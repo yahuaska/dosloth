@@ -231,6 +231,7 @@ class CPU(Ops32):
             self.ops[Op.MOV_R16_IMM16 + i] = self.mov_r16_imm16
         self.ops32 = self.build_ops32()  # what the prefix 66h makes of them: see ops32.py
         self.address_ops32 = self.build_address_ops32()  # and what the prefix 67h makes of some
+        self.ops0f = self.build_ops0f()  # the instructions of two bytes: the second one is the key
 
     # --- memory ---
     def code_bytes(self):
@@ -1336,18 +1337,17 @@ class CPU(Ops32):
     def two_byte(self, op):
         """The instructions of two bytes, which start with 0F (80386 and later). The second byte says which.
 
-        So far only 0F 80-8F: the conditional jumps that reach a place up to 32 KB away, a word after the opcode
-        for the distance. The 8086 and the 286 have only the short ones (70-7F, 127 bytes either way), and a long
-        jump had to be written as the opposite short jump over a JMP. The conditions are the same as for those.
+        What there is of them is in the table `ops0f`, see ops32.py: the long conditional jumps, SETcc, MOVZX and MOVSX,
+        IMUL with two operands, SHLD and SHRD, the bit instructions, BSF, BSR and BSWAP. The size of the operands
+        is the same as for the other instructions: 16 bits, or 32 with the prefix 66h. Any other second byte stops the
+        emulator.
         """
         second = self.fetch8()
-        if 0x80 <= second <= 0x8F:
-            target = self.fetch_rel16()
-            if self.condition(second & 0xF):
-                self.ip = target
-            return
-        raw = self.code_bytes().hex(" ")
-        raise NotImplementedError(f"opcode 0F {second:02X} at {self.s[self.CS]:04X}:{self.start_ip:04X}: {raw}")
+        handler = self.ops0f.get(second)
+        if handler is None:
+            raw = self.code_bytes().hex(" ")
+            raise NotImplementedError(f"opcode 0F {second:02X} at {self.s[self.CS]:04X}:{self.start_ip:04X}: {raw}")
+        handler(second)
 
     def jmp_near(self, op):
         """Jump anywhere in the code segment (opcode E9 + a signed 16-bit distance).

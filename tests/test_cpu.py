@@ -1971,18 +1971,18 @@ class TestNearConditionalJumps(unittest.TestCase):
             self.assertEqual((cpu.ip, cpu.start_ip), (0x15, 0), hex(prefix))
 
     def test_the_other_instructions_that_start_with_0f_stop_the_emulator_and_say_which(self):
-        for second in (0x00, 0x01, 0x0B, 0x20, 0x7F, 0x90, 0xA0, 0xAF, 0xB6, 0xBE, 0xFF, 0x7F):
+        for second in (0x00, 0x01, 0x0B, 0x20, 0x7F, 0xA0, 0xA2, 0xB0, 0xC0, 0xFF):
             cpu = machine(bytes([0x0F, second, 0x12, 0x34]), False)
             with self.assertRaises(NotImplementedError) as caught:
                 cpu.step()
             self.assertIn(f"opcode 0F {second:02X} at 1000:0000: 0f {second:02x} 12 34", str(caught.exception))
 
     def test_the_address_in_the_message_is_where_the_instruction_began_prefixes_and_all(self):
-        cpu = machine(bytes([0x90, 0x26, 0x0F, 0xB6]), False)
+        cpu = machine(bytes([0x90, 0x26, 0x0F, 0xA2]), False)
         cpu.ip = 1
         with self.assertRaises(NotImplementedError) as caught:
             cpu.step()
-        self.assertIn("opcode 0F B6 at 1000:0001", str(caught.exception))
+        self.assertIn("opcode 0F A2 at 1000:0001", str(caught.exception))
 
     def test_it_is_one_instruction_for_the_count_and_for_the_trace(self):
         cpu = machine(bytes([0x0F, 0x84, 0x00, 0x00]), False)

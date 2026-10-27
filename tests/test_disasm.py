@@ -324,6 +324,86 @@ class TestInstructions32(unittest.TestCase):
         self.assertEqual(dis32("F3 A5"), (2, "rep movsd"))
 
 
+class TestTwoByteInstructions(unittest.TestCase):
+    """The instructions that start with 0F."""
+
+    def check(self, cases):
+        for code, text in cases:
+            with self.subTest(code=code):
+                data = bytes.fromhex(code)
+                self.assertEqual(dis(data), (len(data), text))
+
+    def test_the_long_jumps(self):
+        self.check((("0F 84 10 00", "je 0114"), ("66 0F 85 10 00 00 00", "jne 0117"), ("0F 8F F0 FF", "jg 00F4"),
+                    ("0F 80 00 00", "jo 0104")))
+
+    def test_setcc(self):
+        self.check((("0F 94 C3", "sete bl"), ("0F 9F 06 00 01", "setg byte [0100]"), ("66 0F 92 C0", "setb al"),
+                    ("0F 90 C0", "seto al"), ("0F 9B C0", "setnp al")))
+
+    def test_movzx_and_movsx(self):
+        self.check((("66 0F B6 C3", "movzx eax, bl"), ("66 0F B7 C3", "movzx eax, bx"), ("0F B6 C3", "movzx ax, bl"),
+                    ("66 0F BE 06 00 01", "movsx eax, byte [0100]"), ("66 0F BF 06 00 01", "movsx eax, word [0100]"),
+                    ("66 0F B6 CF", "movzx ecx, bh")))
+
+    def test_imul(self):
+        self.check((("66 0F AF CB", "imul ecx, ebx"), ("0F AF CB", "imul cx, bx"),
+                    ("66 0F AF 0E 00 01", "imul ecx, [0100]")))
+
+    def test_the_double_shifts(self):
+        self.check((("66 0F A4 D3 04", "shld ebx, edx, 04"), ("66 0F A5 D3", "shld ebx, edx, cl"),
+                    ("0F AC D3 08", "shrd bx, dx, 08"), ("66 0F AD D3", "shrd ebx, edx, cl"),
+                    ("66 0F A4 0E 00 01 04", "shld [0100], ecx, 04")))
+
+    def test_the_bit_instructions(self):
+        self.check((("66 0F A3 CB", "bt ebx, ecx"), ("66 0F AB CB", "bts ebx, ecx"), ("0F B3 CB", "btr bx, cx"),
+                    ("66 0F BB 0E 00 01", "btc [0100], ecx"), ("66 0F BA E3 05", "bt ebx, 05"),
+                    ("66 0F BA 2E 00 01 1F", "bts dword [0100], 1F"), ("0F BA F3 03", "btr bx, 03"),
+                    ("0F BA 3E 00 01 02", "btc word [0100], 02")))
+
+    def test_bit_scans_and_bswap(self):
+        self.check((("66 0F BC CB", "bsf ecx, ebx"), ("0F BD CB", "bsr cx, bx"),
+                    ("66 0F BD 0E 00 01", "bsr ecx, [0100]"),
+                    ("0F C8", "bswap eax"), ("0F CF", "bswap edi")))
+
+    def test_a_second_byte_that_is_not_done_is_a_db_of_the_first(self):
+        for code in ("0F A2", "0F 31", "0F 00 C0", "0F BA C3 01", "0F BA DB 01", "66 0F A2"):
+            data = bytes.fromhex(code)
+            self.assertEqual(dis(data), (1, f"db {data[0]:02X}"), code)
+
+    def test_in_a_code_segment_of_32_bits(self):
+        cpu = machine(bytes.fromhex("0F B6 C3"))
+        cpu.code32 = True
+        self.assertEqual(disasm(cpu, 0x1000, 0x100), (3, "movzx eax, bl"))
+        cpu = machine(bytes.fromhex("0F 84 10 00 00 00"))
+        cpu.code32 = True
+        self.assertEqual(disasm(cpu, 0x1000, 0x100), (6, "je 0116"))
+
+
+class TestTwoByteAgreesWithCpu(unittest.TestCase):
+    def test_every_second_byte_is_known_to_both_or_to_neither_and_the_lengths_are_the_same(self):
+        for prefix in (b"", b"\x66", b"\x67"):
+            for second in range(256):
+                code = prefix + bytes([0x0F, second, 0xE0, 1, 0, 0, 0, 0, 0, 0])  # 0xE0: a register, 'reg' 4
+                cpu = machine(code)
+                cpu.ip = 0x100
+                fetched = []
+                real_fetch8 = cpu.fetch8
+                cpu.fetch8 = lambda: fetched.append(1) or real_fetch8()
+                done = True
+                try:
+                    cpu.step()
+                except NotImplementedError:
+                    done = False
+                except Exception:
+                    pass
+                length, text = disasm(machine(code), 0x1000, 0x100)
+                label = f"{prefix.hex()} 0F {second:02X}: {text}"
+                self.assertEqual(not text.startswith("db"), done, label)
+                if done:
+                    self.assertEqual(length, len(fetched) + 1, label)
+
+
 class TestAgreesWithCpu32(unittest.TestCase):
     def test_every_opcode_that_has_a_32_bit_form_has_the_same_length_here(self):
         """If you teach the CPU a 32-bit instruction and forget disasm.py, this fails."""
@@ -344,7 +424,7 @@ class TestAgreesWithCpu32(unittest.TestCase):
                 self.assertEqual(length, len(fetched) + 1, text)  # step() reads the first byte, the prefix, itself
 
     def test_an_opcode_with_the_prefix_that_the_cpu_does_not_know_is_a_db_of_the_prefix(self):
-        self.assertEqual(dis(b"\x66\x0F\x84\x00\x00"), (1, "db 66"))
+        self.assertEqual(dis(b"\x66\x8C\xD8"), (1, "db 66"))  # mov eax, ds: no 32-bit form yet
 
     def test_the_opcodes_that_the_cpu_takes_with_the_prefix_are_the_ones_that_are_written_with_it(self):
         """Both ways: nothing that the CPU stops at is written as an instruction, and nothing it takes as a db."""

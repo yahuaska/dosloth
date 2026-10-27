@@ -37,7 +37,7 @@ UNCHANGED_BY_66 = frozenset((
     *range(Op.MOV_R8_IMM8, Op.MOV_R8_IMM8 + 8), Op.ENTER, Op.LEAVE, Op.RET_NEAR, Op.RET_NEAR_POP, Op.XLAT,
     Op.GROUP3_RM, Op.GROUP3_RM + 1, Op.GROUP4_RM8, Op.GROUP5_RM16, Op.IMUL_RM_IMM16, Op.IMUL_RM_IMM8,
     Op.SHIFT_RM_IMM8, Op.SHIFT_RM_IMM8 + 1, *range(Op.SHIFT_RM, Op.SHIFT_RM + 4), Op.LOOPNE, Op.LOOPE, Op.LOOP,
-    Op.JCXZ, Op.MOVSB, Op.CMPSB, Op.STOSB, Op.LODSB, Op.SCASB))
+    Op.JCXZ, Op.TWO_BYTE, Op.MOVSB, Op.CMPSB, Op.STOSB, Op.LODSB, Op.SCASB))
 STRING_32 = {Op.MOVSW: "movsd", Op.CMPSW: "cmpsd", Op.STOSW: "stosd", Op.LODSW: "lodsd", Op.SCASW: "scasd"}
 COMPARING = (Op.CMPSB, Op.CMPSW, Op.SCASB, Op.SCASW)  # these look at ZF, so a prefix F3 reads "repe"
 SHIFTS = ["rol", "ror", "rcl", "rcr", "shl", "shr", "sal", "sar"]  # by the ModRM reg field
@@ -74,6 +74,7 @@ class _Reader:
 
 
 SIZE_NAMES = {8: "byte", 16: "word", 32: "dword"}
+BIT_NAMES = ["bt", "bts", "btr", "btc"]
 REGS_BY_BITS = {8: REG8, 16: REG16, 32: REG32}
 
 
@@ -266,6 +267,44 @@ def _decode_opcode32(r, op, seg_override):
     return None  # an instruction that has a 32-bit form that we do not know: the CPU stops at it as well
 
 
+def _decode_0f(r, seg_override):
+    """The text of an instruction that starts with 0F (the size is r.osize32), or None if it is not one that is done."""
+    second = r.u8()
+    bits = 32 if r.osize32 else 16
+    regs = REGS_BY_BITS[bits]
+    if 0x80 <= second <= 0x8F:  # the jumps that reach 32 KB away, or farther
+        d = r.u32() if r.osize32 else r.u16()
+        return f"{JCC[second - 0x80]} {(r.pos + d) & 0xFFFF:04X}"
+    if 0x90 <= second <= 0x9F:
+        reg, rm, is_mem = _modrm(r, seg_override, 8)
+        return f"set{JCC[second - 0x90][1:]} {'byte ' if is_mem else ''}{rm}"
+    if second in (0xB6, 0xB7, 0xBE, 0xBF):
+        source = 16 if second & 1 else 8
+        reg, rm, is_mem = _modrm(r, seg_override, source)
+        return f"{'movzx' if second < 0xBE else 'movsx'} {regs[reg]}, {SIZE_NAMES[source] + ' ' if is_mem else ''}{rm}"
+    if second == 0xAF:
+        reg, rm, _ = _modrm(r, seg_override, bits)
+        return f"imul {regs[reg]}, {rm}"
+    if second in (0xA4, 0xA5, 0xAC, 0xAD):
+        reg, rm, _ = _modrm(r, seg_override, bits)
+        count = f"{r.u8():02X}" if second in (0xA4, 0xAC) else "cl"
+        return f"{'shld' if second < 0xA6 else 'shrd'} {rm}, {regs[reg]}, {count}"
+    if second in (0xA3, 0xAB, 0xB3, 0xBB):
+        reg, rm, _ = _modrm(r, seg_override, bits)
+        return f"{BIT_NAMES[(second - 0xA3) >> 3]} {rm}, {regs[reg]}"
+    if second == 0xBA:
+        reg, rm, is_mem = _modrm(r, seg_override, bits)
+        if reg < 4:
+            return None
+        return f"{BIT_NAMES[reg - 4]} {SIZE_NAMES[bits] + ' ' if is_mem else ''}{rm}, {r.u8():02X}"
+    if second in (0xBC, 0xBD):
+        reg, rm, _ = _modrm(r, seg_override, bits)
+        return f"{'bsf' if second == 0xBC else 'bsr'} {regs[reg]}, {rm}"
+    if 0xC8 <= second <= 0xCF:
+        return f"bswap {REG32[second & 7]}"
+    return None
+
+
 def _decode_opcode(r, op, seg_override):
     if op < 0x40 and op & 7 <= 5:  # the arithmetic/logic block, see the Alu enum
         name = Alu(op >> 3).name.lower()
@@ -298,11 +337,7 @@ def _decode_opcode(r, op, seg_override):
         d = r.s8()
         return f"{JCC[op - Op.JCC]} {(r.pos + d) & 0xFFFF:04X}"
     if op == Op.TWO_BYTE:
-        second = r.u8()
-        if 0x80 <= second <= 0x8F:  # the jumps that reach 32 KB away
-            d = r.u16()
-            return f"{JCC[second - 0x80]} {(r.pos + d) & 0xFFFF:04X}"
-        return None
+        return _decode_0f(r, seg_override)
     if op in (Op.ALU_RM8_IMM8, Op.ALU_RM16_IMM16, Op.ALU_RM16_IMM8):
         bits = 8 if op == Op.ALU_RM8_IMM8 else 16
         reg, rm, is_mem = _modrm(r, seg_override, bits)

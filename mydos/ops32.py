@@ -16,7 +16,8 @@ SIB byte). In a code segment of 32 bits (`CPU.code32`) both sizes are 32 by defa
 What is here: the data moves and the arithmetic with registers, memory and constants, the stack (PUSH, POP, PUSHA,
 PUSHFD, ENTER, LEAVE), INC and DEC, XCHG, TEST, LEA, the sign extensions CWDE and CDQ, the shifts, NOT, NEG, MUL, DIV,
 the three-operand IMUL, the near jumps, calls and returns, and the string instructions, the loops and XLAT with the
-registers that 32-bit addresses call for. Not yet: the two-byte opcodes (0Fh) of the 386, the other registers
+registers that 32-bit addresses call for, and the two-byte opcodes (0Fh) that the programs use: the long conditional
+jumps, SETcc, MOVZX, MOVSX, two-operand IMUL, SHLD, SHRD, BT and its kin, BSF, BSR, BSWAP. Not yet: the other registers
 (FS and GS), and what the flat mode needs: the instruction pointer and the stack pointer are still of 16 bits, so a
 near jump is cut to 16 bits.
 """
@@ -361,6 +362,123 @@ class Ops32:
             off = (self.r[self.BX] + self.get8(0)) & 0xFFFF
         self.set8(0, self.rb(self.data_segment(), off))
 
+    # --- the instructions of two bytes (0F xx): `second` is the byte after the 0F ---
+    def jcc_near(self, second):
+        """Jump if a condition holds (0F 80-8F), by a distance of 16 bits, or of 32 bits with the size of 32 bits."""
+        target = self.fetch_rel32() if self.osize32 else self.fetch_rel16()
+        if self.condition(second & 0xF):
+            self.ip = target
+
+    def setcc(self, second):
+        """Put 1 in a byte (a register or memory) if a condition holds, and 0 if it does not (0F 90-9F)."""
+        m = modrm.decode(self, self.seg_override)
+        m.write(self, 8, 1 if self.condition(second & 0xF) else 0)
+
+    def movzx_movsx(self, second):
+        """Widen a byte or a word into a register: with zeros (MOVZX, 0F B6 and B7) or with the sign (MOVSX, BE and BF).
+
+        The odd opcodes take a word, the even ones a byte. The register is of 32 bits with the size of 32 bits, else of
+        16 (and then only the byte forms do something that MOV does not).
+        """
+        m = modrm.decode(self, self.seg_override)
+        source_bits = 16 if second & 1 else 8
+        value = m.read(self, source_bits)
+        if second >= 0xBE:
+            value = signed(value, source_bits)
+        self.set_reg(m.reg, 32 if self.osize32 else 16, value)
+
+    def imul_two(self, second):
+        """A register <- the register times the r/m operand, signed, cut to the size of the register (0F AF)."""
+        m = modrm.decode(self, self.seg_override)
+        bits = 32 if self.osize32 else 16
+        product = signed(self.get_reg(m.reg, bits), bits) * signed(m.read(self, bits), bits)
+        self.set_reg(m.reg, bits, product)
+        doesnt_fit = not -(1 << (bits - 1)) <= product < 1 << (bits - 1)
+        self.set_flag(flags.CF, doesnt_fit)
+        self.set_flag(flags.OF, doesnt_fit)
+
+    def double_shift(self, second):
+        """Shift the r/m operand and fill what comes free from a register: SHLD from its top, SHRD from its bottom.
+
+        0F A4 and AC (SHLD and SHRD) take the count from a byte after the ModRM bytes, A5 and AD from CL; the low 5 bits
+        count. With a count of 0 nothing changes. CF is the last bit that went out, SF, ZF and PF come from the result,
+        OF (for a count of 1) says that the sign changed.
+        """
+        m = modrm.decode(self, self.seg_override)
+        bits = 32 if self.osize32 else 16
+        count = (self.fetch8() if second in (0xA4, 0xAC) else self.get8(1)) & 0x1F
+        if count == 0:
+            return
+        value, fill, mask = m.read(self, bits), self.get_reg(m.reg, bits), (1 << bits) - 1
+        if second in (0xA4, 0xA5):
+            result = ((value << count) | (fill >> (bits - count))) & mask
+            carry = (value >> (bits - count)) & 1
+        else:
+            result = ((value >> count) | (fill << (bits - count))) & mask
+            carry = (value >> (count - 1)) & 1
+        m.write(self, bits, result)
+        self.set_flag(flags.CF, bool(carry))
+        self.set_flag(flags.OF, bool((value ^ result) >> (bits - 1) & 1))
+        self.set_szp(result, bits)
+
+    def bit_operation(self, second, kind=None, by_register=True, bit=0):
+        """BT, BTS, BTR and BTC: copy a bit of the r/m operand to CF, and (S) set it, (R) clear it or (C) flip it.
+
+        0F A3, AB, B3 and BB take the number of the bit from a register; 0F BA takes it from a byte after the ModRM
+        bytes, and its 'reg' field (4 to 7) says which of the four it is. For a register operand the number counts
+        modulo the size of the register. For a memory operand and a number from a register it is not limited: the
+        bit may be in the memory after the operand (or before it, for a negative number), and the address is moved
+        that many whole operands on. A number from a byte is taken modulo the size.
+        """
+        m = modrm.decode(self, self.seg_override)
+        bits = 32 if self.osize32 else 16
+        if second == 0xBA:
+            kind = m.reg - 4
+            if kind < 0:
+                raise NotImplementedError(f"opcode 0F BA /{m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+            number, by_register = self.fetch8(), False
+        else:
+            kind = (second - 0xA3) >> 3  # A3 bt, AB bts, B3 btr, BB btc: 0 to 3
+            number = signed(self.get_reg(m.reg, bits), bits)
+        if by_register and not m.is_reg:
+            m.off = (m.off + number // bits * (bits // 8)) & (0xFFFFFFFF if self.asize32 else 0xFFFF)
+        bit = 1 << (number % bits)
+        value = m.read(self, bits)
+        self.set_flag(flags.CF, bool(value & bit))
+        if kind == 1:
+            m.write(self, bits, value | bit)
+        elif kind == 2:
+            m.write(self, bits, value & ~bit)
+        elif kind == 3:
+            m.write(self, bits, value ^ bit)
+
+    def bit_scan(self, second):
+        """Find the lowest (BSF, 0F BC) or the highest (BSR, BD) bit that is set in the r/m operand and put its number
+        in the register. ZF is set if there is none (the register is then left alone), and clear if there is."""
+        m = modrm.decode(self, self.seg_override)
+        bits = 32 if self.osize32 else 16
+        value = m.read(self, bits)
+        self.set_flag(flags.ZF, value == 0)
+        if value:
+            self.set_reg(m.reg, bits, (value & -value).bit_length() - 1 if second == 0xBC else value.bit_length() - 1)
+
+    def bswap(self, second):
+        """Reverse the order of the four bytes of a 32-bit register (0F C8-CF; 486 and later)."""
+        reg = second & 7
+        self.set32(reg, int.from_bytes(self.get32(reg).to_bytes(4, "little"), "big"))
+
+    def build_ops0f(self):
+        """The instructions that start with 0F: {the second byte: handler}."""
+        table = {code: self.jcc_near for code in range(0x80, 0x90)}
+        table.update({code: self.setcc for code in range(0x90, 0xA0)})
+        table.update({code: self.movzx_movsx for code in (0xB6, 0xB7, 0xBE, 0xBF)})
+        table[0xAF] = self.imul_two
+        table.update({code: self.double_shift for code in (0xA4, 0xA5, 0xAC, 0xAD)})
+        table.update({code: self.bit_operation for code in (0xA3, 0xAB, 0xB3, 0xBB, 0xBA)})
+        table.update({0xBC: self.bit_scan, 0xBD: self.bit_scan})
+        table.update({code: self.bswap for code in range(0xC8, 0xD0)})
+        return table
+
     def build_ops32(self):
         """The table of the opcodes that have a 32-bit form, or that 66h means nothing to: {opcode: handler}."""
         ops, table = self.ops, {}
@@ -402,6 +520,7 @@ class Ops32:
              Op.GROUP3_RM + 1, Op.GROUP4_RM8, Op.IMUL_RM_IMM16, Op.IMUL_RM_IMM8, Op.XLAT,
              *range(Op.LOOPNE, Op.JCXZ + 1))
         table[Op.GROUP5_RM16] = self.group5_rm32
+        table[Op.TWO_BYTE] = ops[Op.TWO_BYTE]  # it finds the size itself
         table[Op.PUSH_IMM16] = table[Op.PUSH_IMM8] = self.push_imm32
         table[Op.PUSHA], table[Op.POPA] = self.pusha32, self.popa32
         table[Op.POP_RM16] = self.pop_rm32
