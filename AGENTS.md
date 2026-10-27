@@ -33,6 +33,9 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   and for a run that goes on from a state
 - `mydos/snapshot.py` - the state of the machine saved to a zip file and put back: F12 in the window, a crash, and
   `-r STATE`; drives must match, ROM data is written again from the code
+- `mydos/le.py` - programs in the LE format (the 32-bit programs of the DOS/4G games): the header, the objects, the
+  pages, the fixups, an image of the objects for given bases; and where the LE program is in a file bound to the
+  DOS/4G extender. The loader stops them with a message until the 32-bit mode is there
 - `mydos/loader.py` - a .COM or .EXE put in memory at a PSP segment (the first program and the children of EXEC),
   and how much memory it asks for
 - `mydos/process.py` - INT 21h AH=4Bh (EXEC): the parent put aside, the child loaded; the end of a program

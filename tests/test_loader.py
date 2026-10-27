@@ -37,6 +37,50 @@ class TestMemoryNeeded(unittest.TestCase):
         loader.memory_needed(b"MZ" + bytes(26))
 
 
+class TestAnLeProgramIsRefused(unittest.TestCase):
+    """A program in the LE format, bound to DOS/4G or not, is stopped, and the message says what it is."""
+
+    def programs(self):
+        from tests.le_builder import Obj, RW, RX, build_bound, build_program
+        objects = [Obj(b"\x90" * 5000, size=0x2100, flags=RX), Obj(b"data", size=0x1800, base=0x30000, flags=RW)]
+        plain = build_program(objects, entry=(1, 0x20))
+        return {"plain": plain, "bound": build_bound(plain)}
+
+    def test_memory_needed_stops_for_both_with_what_the_program_is(self):
+        for kind, data in self.programs().items():
+            with self.assertRaises(NotImplementedError) as caught:
+                loader.memory_needed(data)
+            message = str(caught.exception)
+            self.assertIn("LE program", message, kind)
+            self.assertIn("2 objects, 5 pages, entry in the object 1 at 0x20", message, kind)
+            self.assertIn("32-bit mode is not done yet", message, kind)
+
+    def test_the_message_says_whether_it_is_bound_to_the_extender(self):
+        programs = self.programs()
+        with self.assertRaisesRegex(NotImplementedError, "bound to the extender of DOS/4G"):
+            loader.memory_needed(programs["bound"])
+        with self.assertRaisesRegex(NotImplementedError, "plain"):
+            loader.memory_needed(programs["plain"])
+
+    def test_load_stops_too_and_puts_nothing_in_memory(self):
+        for data in self.programs().values():
+            cpu = CPU()
+            with self.assertRaises(NotImplementedError):
+                loader.load(cpu, data, 0x1000)
+            self.assertFalse(any(cpu.mem[0x10000:0x20000]))
+
+    def test_a_program_that_looks_like_one_but_cannot_be_loaded_is_said_to_be_one_that_cannot(self):
+        data = bytearray(self.programs()["plain"])
+        header = int.from_bytes(data[0x3C:0x40], "little")
+        data[header + 8:header + 10] = (1).to_bytes(2, "little")  # for the 286
+        with self.assertRaisesRegex(NotImplementedError, "one that cannot be loaded: the program is for the cpu 1"):
+            loader.memory_needed(bytes(data))
+
+    def test_the_other_programs_are_not_touched_by_it(self):
+        self.assertEqual(loader.memory_needed(b"\xB8\x00\x4C\xCD\x21"), (0x1000, 0xFFFF))
+        self.assertEqual(loader.memory_needed(exe(b"", minalloc=0x10, maxalloc=0x20)), (0x12 + 0x10, 0x12 + 0x20))
+
+
 class TestLoad(unittest.TestCase):
     def test_load_picks_the_loader_by_the_first_bytes_and_puts_the_program_at_the_given_segment(self):
         cpu = CPU()

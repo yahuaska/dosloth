@@ -495,6 +495,17 @@ class TestGoingOnFromAState(CommandLineTest):
         self.assertIn("cannot open C:\\DATA.TXT again", result.stderr)
 
 
+class TestAnLeProgram(CommandLineTest):
+    def test_a_program_for_dos_4g_is_said_to_be_one_and_not_run_as_its_extender(self):
+        from tests.le_builder import Obj, RW, RX, build_bound, build_program
+        objects = [Obj(b"\x90" * 100, size=0x1000, flags=RX), Obj(b"data", size=0x100, base=0x30000, flags=RW)]
+        (self.dir / "GAME.EXE").write_bytes(build_bound(build_program(objects)))
+        result = self.run_emulator("GAME.EXE")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("NotImplementedError: this is an LE program (bound to the extender of DOS/4G", result.stderr)
+        self.assertIn("the 32-bit mode is not done yet", result.stderr)
+
+
 class TestTheLogOfDosCalls(CommandLineTest):
     """-t LOGFILE: every call of the program to DOS, and what it was answered."""
 

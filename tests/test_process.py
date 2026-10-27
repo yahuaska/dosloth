@@ -648,6 +648,14 @@ class TestThePocketCommandCom(ProcessTest):
         self.state.handles.close(1)  # the last one to have it
         self.assertTrue(file.closed)
 
+    def test_a_program_for_dos_4g_that_the_command_runs_stops_the_emulator_as_when_it_is_started_straight(self):
+        from tests.le_builder import Obj, RW, RX, build_bound, build_program
+        objects = [Obj(b"\x90" * 100, size=0x1000, flags=RX), Obj(b"data", size=0x100, base=0x30000, flags=RW)]
+        self.program("GAME.EXE", build_bound(build_program(objects)))
+        with self.assertRaisesRegex(NotImplementedError, "LE program"):
+            self.shell("/c game.exe 0 GOFORIT SOUND")
+        self.assertEqual((self.state.parents, self.state.psp_seg), ([], PARENT))
+
     def test_the_exit_code_of_the_shell_is_what_ah_4dh_gives_afterwards(self):
         from unittest import mock
         with mock.patch.object(command.Shell, "run", return_value=5):
@@ -681,6 +689,29 @@ class TestThePocketCommandCom(ProcessTest):
         cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x4444, 0x5555
         self.shell("/c md C:\\XCOMA")
         self.assertEqual((cpu.r[CPU.SI], cpu.r[CPU.DI], cpu.s[CPU.DS], cpu.s[CPU.ES]), (0x4444, 0x5555, 0x2000, 0x3000))
+
+
+class TestAnLeProgram(ProcessTest):
+    """A program for DOS/4G is not started in the 16-bit mode, where its extender would say that it wants a 386."""
+
+    def le_program(self, bound=True):
+        from tests.le_builder import Obj, RW, RX, build_bound, build_program
+        objects = [Obj(b"\x90" * 100, size=0x1000, flags=RX), Obj(b"data", size=0x100, base=0x30000, flags=RW)]
+        plain = build_program(objects)
+        return build_bound(plain) if bound else plain
+
+    def test_it_stops_the_emulator_with_what_it_is_and_nothing_is_taken(self):
+        blocks = dict(self.state.memory.blocks)
+        self.program("GAME.EXE", self.le_program())
+        with self.assertRaisesRegex(NotImplementedError, "LE program .*bound to the extender of DOS/4G"):
+            self.start("GAME.EXE")
+        self.assertEqual(self.state.memory.blocks, blocks)
+        self.assertEqual((self.state.parents, self.state.psp_seg), ([], PARENT))
+
+    def test_a_plain_one_stops_it_as_well(self):
+        self.program("PLAIN.EXE", self.le_program(bound=False))
+        with self.assertRaisesRegex(NotImplementedError, "LE program"):
+            self.start("PLAIN.EXE")
 
 
 class TestWithoutAParent(unittest.TestCase):

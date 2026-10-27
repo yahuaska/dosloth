@@ -6,6 +6,7 @@ not written here (see psp.py). The registers are set the way DOS leaves them at 
 import struct
 from dataclasses import dataclass
 
+from . import le
 from .cpu import CPU
 
 PSP_PARAGRAPHS = 0x10  # the PSP is 256 bytes
@@ -55,12 +56,31 @@ def _image_paragraphs(data, header):
     return (len(data[header.header_size:header.file_size]) + 15) // 16
 
 
+def refuse_le_program(data):
+    """A program in the LE format, bound to the extender of DOS/4G or not, is for a 32-bit mode that is not done yet
+    (see PLAN.md). If `data` is one, stop with a message that says what it is, and does not let it run its DOS
+    stub: that would be the extender, which says it needs a 386."""
+    start = le.locate(data)
+    if start is None:
+        return
+    try:
+        image = le.LeImage(data, start)
+        what = (f"{len(image.objects)} objects, {image.page_count} pages, entry in the object {image.entry_object} "
+                f"at {image.entry_offset:#x}")
+    except le.LeError as error:
+        what = f"one that cannot be loaded: {error}"
+    kind = "bound to the extender of DOS/4G" if start else "plain"
+    raise NotImplementedError(f"this is an LE program ({kind}; {what}): the 32-bit mode is not done yet")
+
+
 def memory_needed(data):
     """How many paragraphs a program wants, as (the least it can run in, the most it asks for), the PSP counted.
 
     A .COM takes what there is, 64 KB at the least. A .EXE has its image and the `minalloc` and `maxalloc` of its header
-    on top of that. Raises ValueError for a .EXE whose header is not all there.
+    on top of that. Raises ValueError for a .EXE whose header is not all there, and NotImplementedError for an LE
+    program (see refuse_le_program).
     """
+    refuse_le_program(data)
     if not is_exe(data):
         return COM_PARAGRAPHS, MAX_PARAGRAPHS
     if len(data) < struct.calcsize("<2s13H"):
@@ -103,7 +123,8 @@ def load_exe(cpu, data, psp_seg):
 
 
 def load(cpu, data, psp_seg):
-    """Pick the loader by file content, like DOS: MZ/ZM signature means EXE, else COM."""
+    """Pick the loader by file content, like DOS: MZ/ZM signature means EXE, else COM. An LE program is refused."""
+    refuse_le_program(data)
     if is_exe(data):
         load_exe(cpu, data, psp_seg)
     else:
