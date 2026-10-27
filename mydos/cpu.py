@@ -30,7 +30,13 @@ class DivideError(Exception):
 EVEN_PARITY = [bin(n).count("1") % 2 == 0 for n in range(256)]
 # the bytes that come before an opcode and change what it does, not instructions themselves
 PREFIXES = frozenset((Op.ES_PREFIX, Op.CS_PREFIX, Op.SS_PREFIX, Op.DS_PREFIX, Op.REP_PREFIX, Op.REPNE_PREFIX,
-                      Op.OPSIZE_PREFIX))
+                      Op.OPSIZE_PREFIX, Op.ADDRSIZE_PREFIX))
+
+
+# the opcodes that work with SI, DI, CX or BX as addresses or counters: with 32-bit addresses they would need ESI, EDI,
+# ECX and EBX, which they do not use yet, so they stop the emulator and do not do the wrong thing
+ADDRESS_SIZED = frozenset(range(0x6C, 0x70)) | frozenset(range(0xA4, 0xA8)) | frozenset(range(0xAA, 0xB0)) | frozenset(
+    range(0xE0, 0xE4)) | {0xD7}
 
 
 # the flags that the conditions of the conditional jumps look at, and for each combination of them the 16 answers
@@ -91,7 +97,9 @@ class CPU(Ops32):
         self.ip = 0
         self.flags = 0x0002
         self.eflags_high = 0  # the bits of EFLAGS above the 16th that are kept, shifted down: only the alignment check
-        self.osize32 = False  # set by step(): the prefix 66h is in front of this instruction
+        self.osize32 = False  # set by step(): this instruction works on 32 bits (a 66h in front, or a 32-bit code)
+        self.asize32 = False  # set by step(): the addresses of this instruction are of 32 bits (67h, or a 32-bit code)
+        self.code32 = False  # the code segment is a 32-bit one: sizes are of 32 bits and 66h and 67h make them 16
         self.int_handlers = {}  # int number -> fn(cpu)
         self.instructions = 0  # how many instructions have been started: the emulated time
         self.port_readers = {}  # I/O port number -> fn(port): a byte read from the device behind that port
@@ -549,7 +557,7 @@ class CPU(Ops32):
             self.trace(self)
         self.seg_override = None  # set by a prefix, applies to this instruction only
         self.rep = None  # same for the repeat prefix
-        self.osize32 = False  # and for the prefix of the operand size
+        self.osize32 = self.asize32 = self.code32  # and for the sizes: what the code segment says, and the prefixes
         ip = self.start_ip = self.ip  # where this instruction began (for error messages)
         address = (self.s[self.CS] * 16 + ip) & 0xFFFFF  # the first byte is read here, as fetch8 does, with no call
         self.ip = (ip + 1) & 0xFFFF
@@ -561,11 +569,17 @@ class CPU(Ops32):
             if op in self.SEG_PREFIXES:
                 self.seg_override = self.SEG_PREFIXES[op]
             elif op == Op.OPSIZE_PREFIX:
-                self.osize32 = True
+                self.osize32 = not self.code32
+            elif op == Op.ADDRSIZE_PREFIX:
+                self.asize32 = not self.code32
             else:
                 self.rep = op
             op = self.fetch8()
         handler = (self.ops32 if self.osize32 else self.ops).get(op)
+        if self.asize32 and op in ADDRESS_SIZED:
+            raise NotImplementedError(
+                f"opcode {op:02X} with 32-bit addresses at {self.s[self.CS]:04X}:{self.start_ip:04X}: "
+                f"{self.code_bytes().hex(' ')}")
         if handler is None:
             raw = self.code_bytes().hex(" ")
             what = f"opcode 66 {op:02X}, the 32-bit form," if self.osize32 else f"opcode {op:02X}"
@@ -743,7 +757,7 @@ class CPU(Ops32):
         m = modrm.decode(self, self.seg_override)
         if m.is_reg:
             raise NotImplementedError(f"LEA with a register at {self.s[self.CS]:04X}:{self.start_ip:04X}")
-        self.r[m.reg] = m.off
+        self.r[m.reg] = m.off & 0xFFFF
 
     def aam(self, op):
         """Split AL into two digits (opcode D4 + the base, which is 10 in every program that wants decimal digits).
@@ -931,11 +945,11 @@ class CPU(Ops32):
         return self.s[self.DS if self.seg_override is None else self.seg_override]
 
     def moffs(self):
-        """Read the fixed address that follows the A0-A3 opcodes and say where it points.
+        """Read the fixed address that follows the A0-A3 opcodes (16 bits, or 32 with 32-bit addresses).
 
         Returns (segment value, offset). The segment is DS unless a prefix chose another one.
         """
-        off = self.fetch16()
+        off = self.fetch32() if self.asize32 else self.fetch16()
         return self.data_segment(), off
 
     def mov_al_moffs8(self, op):

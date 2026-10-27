@@ -44,6 +44,7 @@ class _Reader:
 
     def __init__(self, cpu, seg, off):
         self.cpu, self.seg, self.start, self.pos = cpu, seg, off, off
+        self.addr32 = cpu.code32  # the addresses are of 32 bits: the code is a 32-bit one, or the prefix 67h says so
 
     def u8(self):
         v = self.cpu.rb(self.seg, self.pos)
@@ -80,6 +81,8 @@ def _modrm(r, seg_override, bits):
     mod, reg, rm = b >> 6, (b >> 3) & 7, b & 7
     if mod == 3:
         return reg, {8: REG8, 16: REG16, 32: REG32}[bits][rm], False
+    if r.addr32:
+        return reg, f"{seg_override + ':' if seg_override else ''}[{_inner32(r, mod, rm)}]", True
     if mod == 0 and rm == 6:
         inner = f"{r.u16():04X}"  # a bare address
     else:
@@ -90,6 +93,34 @@ def _modrm(r, seg_override, bits):
             d = r.u16()
             inner += _disp(d - 0x10000 if d & 0x8000 else d)
     return reg, f"{seg_override + ':' if seg_override else ''}[{inner}]", True
+
+
+def _inner32(r, mod, rm):
+    """What is inside the brackets of a memory operand with 32-bit addresses (see modrm._decode32), as text."""
+    parts, disp32 = [], False
+    if rm == 4:
+        sib = r.u8()
+        base, index = sib & 7, (sib >> 3) & 7
+        if base == 5 and mod == 0:
+            disp32 = True
+        else:
+            parts.append(REG32[base])
+        if index != 4:
+            parts.append(REG32[index] + ("" if sib >> 6 == 0 else f"*{1 << (sib >> 6)}"))
+    elif rm == 5 and mod == 0:
+        disp32 = True
+    else:
+        parts.append(REG32[rm])
+    inner = "+".join(parts)
+    if disp32:
+        address = f"{r.u32():08X}"
+        return f"{inner}+{address}" if inner else address
+    if mod == 1:
+        inner += _disp(r.s8())
+    elif mod == 2:
+        d = r.u32()
+        inner += _disp(d - (1 << 32) if d & 0x80000000 else d)
+    return inner
 
 
 def _disp(d):
@@ -107,13 +138,14 @@ def _operands(r, op, seg_override, osize32=False):
 
 def _direct(r, seg_override):
     """The [address] that follows the A0-A3 opcodes."""
-    return f"{seg_override + ':' if seg_override else ''}[{r.u16():04X}]"
+    address = f"{r.u32():08X}" if r.addr32 else f"{r.u16():04X}"
+    return f"{seg_override + ':' if seg_override else ''}[{address}]"
 
 
 def _decode(r):
     """Return the text of the instruction at the reader, or None if the opcode is not known."""
     seg_override = rep = None
-    osize32 = False
+    osize32 = r.cpu.code32
     op = r.u8()
     while True:  # prefixes, as in CPU.step
         if op in SEG_PREFIXES:
@@ -121,7 +153,9 @@ def _decode(r):
         elif op in (Op.REP_PREFIX, Op.REPNE_PREFIX):
             rep = op
         elif op == Op.OPSIZE_PREFIX:
-            osize32 = True
+            osize32 = not r.cpu.code32
+        elif op == Op.ADDRSIZE_PREFIX:
+            r.addr32 = not r.cpu.code32
         else:
             break
         op = r.u8()

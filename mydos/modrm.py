@@ -1,4 +1,4 @@
-"""Decoder for the x86 ModRM byte (16-bit addressing).
+"""Decoder for the x86 ModRM byte, with 16-bit addressing and with the 32-bit one of the 386 (and its SIB byte).
 
 Many opcodes (MOV, ADD, CMP, ...) are followed by a ModRM byte that says what their
 operands are:
@@ -129,6 +129,8 @@ def decode(cpu, seg_override=None):
     seg_override is a segment register index (regs.ES/CS/SS/DS) from a prefix such as
     2E, or None to use the default segment.
     """
+    if cpu.asize32:
+        return _decode32(cpu, seg_override)
     reg, kind, first, second, default_seg = _TABLE[cpu.fetch8()]
     if kind == REGISTER:
         return ModRM(reg, True, first)
@@ -144,3 +146,43 @@ def decode(cpu, seg_override=None):
         elif kind == DISPLACEMENT_16:
             off += cpu.fetch16()
     return ModRM(reg, False, 0, cpu.s[default_seg if seg_override is None else seg_override], off & 0xFFFF)
+
+
+def _decode32(cpu, seg_override):
+    """decode() for the addresses of 32 bits (a 386 and later).
+
+    r/m picks one register as the base (EAX..EDI), except that r/m = 4 says that a SIB byte follows, and with mod = 00
+    r/m = 5 is a bare 32-bit address. The SIB byte (scale, index, base) adds the index register times 1, 2, 4 or 8
+    (index 4 is no register at all) to the base (with mod = 00 base 5 is no register, but a 32-bit displacement). Then
+    the displacement of mod = 01 (8 bits, signed) or mod = 10 (32 bits). Whatever has ESP or EBP as its base goes to
+    the stack segment, the others to the data segment. The offset is not cut to 16 bits: it has 32.
+    """
+    b = cpu.fetch8()
+    mod, reg, rm = b >> 6, (b >> 3) & 7, b & 7
+    if mod == 3:
+        return ModRM(reg, True, rm)
+    default_seg = regs.DS
+    off = 0
+    if rm == 4:
+        sib = cpu.fetch8()
+        base, index = sib & 7, (sib >> 3) & 7
+        if index != 4:
+            off = cpu.get32(index) << (sib >> 6)
+        if base == 5 and mod == 0:
+            off += cpu.fetch32()
+        else:
+            off += cpu.get32(base)
+            if base in (regs.SP, regs.BP):
+                default_seg = regs.SS
+    elif rm == 5 and mod == 0:
+        off = cpu.fetch32()
+    else:
+        off = cpu.get32(rm)
+        if rm == regs.BP:
+            default_seg = regs.SS
+    if mod == 1:
+        d = cpu.fetch8()
+        off += d - 256 if d & 0x80 else d
+    elif mod == 2:
+        off += cpu.fetch32()
+    return ModRM(reg, False, 0, cpu.s[default_seg if seg_override is None else seg_override], off & 0xFFFFFFFF)

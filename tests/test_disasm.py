@@ -1,6 +1,6 @@
 import unittest
 
-from mydos.cpu import CPU
+from mydos.cpu import ADDRESS_SIZED, CPU
 from mydos.disasm import disasm
 
 
@@ -206,6 +206,58 @@ class TestText(unittest.TestCase):
         self.assertEqual(dis(b"\x0F\x00"), (1, "db 0F"))
 
 
+class TestAddresses32(unittest.TestCase):
+    """The prefix 67h, and the code segments of 32 bits."""
+
+    def test_the_registers_of_the_address_and_the_displacement(self):
+        for code, text in (
+                ("67 8B 03", "mov ax, [ebx]"),
+                ("67 8B 43 FE", "mov ax, [ebx-2]"),
+                ("67 8B 43 7F", "mov ax, [ebx+7F]"),
+                ("67 8B 83 04 00 01 00", "mov ax, [ebx+10004]"),
+                ("67 8B 83 FC FF FF FF", "mov ax, [ebx-4]"),
+                ("67 8B 05 20 01 00 00", "mov ax, [00000120]"),
+                ("67 8B 45 00", "mov ax, [ebp]"),
+                ("26 67 8B 03", "mov ax, es:[ebx]"),
+                ("66 67 8B 04 8B", "mov eax, [ebx+ecx*4]"),
+                ("67 67 8B 03", "mov ax, [ebx]")):
+            with self.subTest(code=code):
+                data = bytes.fromhex(code)
+                self.assertEqual(dis(data), (len(data), text))
+
+    def test_the_sib_byte(self):
+        for code, text in (
+                ("67 8B 04 0B", "mov ax, [ebx+ecx]"),
+                ("67 8B 04 4B", "mov ax, [ebx+ecx*2]"),
+                ("67 8B 04 8B", "mov ax, [ebx+ecx*4]"),
+                ("67 8B 04 CB", "mov ax, [ebx+ecx*8]"),
+                ("67 8B 04 23", "mov ax, [ebx]"),  # the index 4 is none
+                ("67 8B 04 24", "mov ax, [esp]"),
+                ("67 8B 04 8D 00 02 00 00", "mov ax, [ecx*4+00000200]"),  # the base 5 with mod 0 is a displacement
+                ("67 8B 04 25 00 03 00 00", "mov ax, [00000300]"),
+                ("67 8B 44 0D 04", "mov ax, [ebp+ecx+4]"),
+                ("67 8B 84 8B 00 01 00 00", "mov ax, [ebx+ecx*4+100]")):
+            with self.subTest(code=code):
+                data = bytes.fromhex(code)
+                self.assertEqual(dis(data), (len(data), text))
+
+    def test_a_fixed_address_of_a_move(self):
+        self.assertEqual(dis(bytes.fromhex("67 A1 02 00 01 00")), (6, "mov ax, [00010002]"))
+        self.assertEqual(dis(bytes.fromhex("66 67 A3 40 00 00 00")), (7, "mov [00000040], eax"))
+        self.assertEqual(dis(bytes.fromhex("67 A0 50 00 00 00")), (6, "mov al, [00000050]"))
+
+    def test_in_a_code_segment_of_32_bits_the_prefixes_make_the_sizes_16(self):
+        def dis32(text):
+            cpu = machine(bytes.fromhex(text))
+            cpu.code32 = True
+            return disasm(cpu, 0x1000, 0x100)
+        self.assertEqual(dis32("8B 03"), (2, "mov eax, [ebx]"))
+        self.assertEqual(dis32("66 8B 03"), (3, "mov ax, [ebx]"))
+        self.assertEqual(dis32("67 8B 07"), (3, "mov eax, [bx]"))
+        self.assertEqual(dis32("66 67 8B 07"), (4, "mov ax, [bx]"))
+        self.assertEqual(dis32("A1 02 00 00 00"), (5, "mov eax, [00000002]"))
+
+
 class TestAgreesWithCpu32(unittest.TestCase):
     def test_every_opcode_that_has_a_32_bit_form_has_the_same_length_here(self):
         """If you teach the CPU a 32-bit instruction and forget disasm.py, this fails."""
@@ -232,11 +284,37 @@ class TestAgreesWithCpu32(unittest.TestCase):
         """Both ways: nothing that the CPU stops at is written as an instruction, and nothing it takes as a db."""
         taken = set(CPU().ops32)
         for op in range(256):
-            if op in (0x26, 0x2E, 0x36, 0x3E, 0x66, 0xF2, 0xF3):  # the prefixes: another prefix is read after 66
+            if op in (0x26, 0x2E, 0x36, 0x3E, 0x66, 0x67, 0xF2, 0xF3):  # the prefixes: another one is read after 66
                 continue
             code = bytes([0x66, op, MODRM_FOR.get(op, 0xD8), 0, 0, 0, 0, 0, 0])
             length, text = disasm(machine(code), 0x1000, 0x100)
             self.assertEqual(not text.startswith("db"), op in taken, f"66 {op:02X}: {text}")
+
+
+class TestAgreesWithCpuOn32BitAddresses(unittest.TestCase):
+    def length_on_cpu(self, code):
+        cpu = machine(code)
+        cpu.ip = 0x100
+        fetched = []
+        real_fetch8 = cpu.fetch8
+        cpu.fetch8 = lambda: fetched.append(1) or real_fetch8()
+        try:
+            cpu.step()
+        except Exception:
+            pass
+        return len(fetched) + 1  # step() reads the first byte itself
+
+    def test_every_opcode_has_the_same_length_with_a_sib_byte_and_a_32_bit_displacement(self):
+        for prefix, ops in ((b"\x67", CPU().ops), (b"\x66\x67", CPU().ops32)):
+            for op in ops:
+                if op in ADDRESS_SIZED:
+                    continue
+                with self.subTest(op=f"{prefix.hex()} {op:02X}"):
+                    modrm = (MODRM_FOR.get(op, 0xD8) & 0x38) | 0x84  # mod 10, r/m 100: a SIB byte and a 32-bit disp.
+                    code = prefix + bytes([op, modrm, 0x88, 1, 0, 0, 0, 0, 0, 0, 0])
+                    length, text = disasm(machine(code), 0x1000, 0x100)
+                    self.assertFalse(text.startswith("db"), text)
+                    self.assertEqual(length, self.length_on_cpu(code), text)
 
 
 class TestAgreesWithCpu(unittest.TestCase):

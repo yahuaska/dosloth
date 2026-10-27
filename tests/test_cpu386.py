@@ -1,6 +1,6 @@
 import unittest
 
-from mydos import flags
+from mydos import flags, modrm
 from mydos.cpu import CPU, Exit
 from mydos.regs import AX, BP, BX, CX, DI, DX, SI, SP
 
@@ -530,11 +530,6 @@ class TestWhatIsNotDoneYet(Machine):
         with self.assertRaisesRegex(NotImplementedError, "66 f7 e1 90 00 00 00 00$"):  # eight bytes
             cpu.step()
 
-    def test_the_prefix_of_the_address_size_is_not_known_yet(self):
-        cpu = self.start(bytes([0x67, 0x8B, 0x00]))
-        with self.assertRaisesRegex(NotImplementedError, "opcode 67 at 1000:0000"):
-            cpu.step()
-
     def test_a_16_bit_form_that_is_not_there_for_the_32_bit_one_is_not_taken_instead(self):
         # F7 /4 is mul: with 66 it is a 32-bit mul, which is not done: it must not do the 16-bit one
         cpu = self.start(bytes([0x66, 0xF7, 0xE1]), eax=0x10000, ecx=0x10000)
@@ -613,6 +608,227 @@ class TestTheTestOfTheInstaller(Machine):
             except Exit:
                 break
         self.assertEqual(cpu.get8(0), 3)
+
+
+class TestAddresses32(Machine):
+    """The prefix 67h: the memory operand has 32-bit registers and the SIB byte. The data is at DS = 2000h."""
+
+    def put(self, offset, value, size=4):
+        self.cpu.mem[0x20000 + offset:0x20000 + offset + size] = value.to_bytes(size, "little")
+
+    def test_every_base_register_with_no_displacement(self):
+        for rm in (0, 1, 2, 3, 6, 7):  # 4 is the SIB byte, 5 is the bare address
+            base = NAMES[rm]
+            cpu = self.start(bytes([0x67, 0x8B, 0x00 | rm]), **{base: 0x00001234})
+            seg = 0x4000 if rm in (4, 5) else 0x2000
+            cpu.mem[seg * 16 + 0x1234:seg * 16 + 0x1238] = bytes([0x78, 0x56, 0x34, 0x12])
+            cpu.step()
+            self.assertEqual(cpu.r[AX], 0x5678, base)  # the 16-bit mov ax, [base]
+            self.assertEqual(cpu.ip, 3, base)
+
+    def test_the_high_half_of_the_register_counts(self):
+        cpu = self.start(bytes([0x67, 0x8B, 0x03]), ebx=0x00010010)  # 2000:10010h is 30010h
+        cpu.mem[0x30010:0x30012] = bytes([0xCD, 0xAB])
+        cpu.step()
+        self.assertEqual(cpu.r[AX], 0xABCD)
+
+    def test_the_displacement_of_8_bits_is_signed_and_the_one_of_32_bits_is_whole(self):
+        cpu = self.start(bytes([0x67, 0x8B, 0x43, 0xFE]), ebx=0x100)  # mov ax, [ebx-2]
+        self.put(0xFE, 0x1111, 2)
+        cpu.step()
+        self.assertEqual((cpu.r[AX], cpu.ip), (0x1111, 4))
+        cpu = self.start(bytes([0x67, 0x8B, 0x43, 0x7F]), ebx=0x100)  # mov ax, [ebx+7Fh]
+        self.put(0x17F, 0x2222, 2)
+        cpu.step()
+        self.assertEqual(cpu.r[AX], 0x2222)
+        cpu = self.start(bytes([0x67, 0x8B, 0x83]) + le32(0x00010004), ebx=0x10)  # mov ax, [ebx+10004h]
+        cpu.mem[0x30014:0x30016] = bytes([0x33, 0x33])
+        cpu.step()
+        self.assertEqual((cpu.r[AX], cpu.ip), (0x3333, 7))
+        cpu = self.start(bytes([0x67, 0x8B, 0x83]) + le32(-4), ebx=0x104)  # a negative one
+        self.put(0x100, 0x4444, 2)
+        cpu.step()
+        self.assertEqual(cpu.r[AX], 0x4444)
+
+    def test_a_bare_32_bit_address(self):
+        cpu = self.start(bytes([0x67, 0x8B, 0x05]) + le32(0x00000120))  # mov ax, [00000120]
+        self.put(0x120, 0x5555, 2)
+        cpu.step()
+        self.assertEqual((cpu.r[AX], cpu.ip), (0x5555, 7))
+
+    def test_the_sib_byte_adds_the_index_times_the_scale(self):
+        for scale in range(4):
+            cpu = self.start(bytes([0x67, 0x8B, 0x04, scale << 6 | 1 << 3 | 3]), ebx=0x100, ecx=0x10)  # [ebx+ecx*s]
+            self.put(0x100 + 0x10 * (1 << scale), 0x6000 + scale, 2)
+            cpu.step()
+            self.assertEqual((cpu.r[AX], cpu.ip), (0x6000 + scale, 4), scale)
+
+    def test_the_index_4_is_no_register_not_esp(self):
+        cpu = self.start(bytes([0x67, 0x8B, 0x04, 0x23]), ebx=0x100, esp=0x1000)  # SIB 00 100 011: [ebx]
+        self.put(0x100, 0x7777, 2)
+        cpu.step()
+        self.assertEqual(cpu.r[AX], 0x7777)
+
+    def test_the_base_5_with_mod_0_is_a_32_bit_displacement_and_no_base(self):
+        code = bytes([0x67, 0x8B, 0x04, 0x8D]) + le32(0x200)  # SIB 10 001 101: [ecx*4+200h]
+        cpu = self.start(code, ecx=0x10, ebp=0x5000)
+        self.put(0x240, 0x8888, 2)
+        cpu.step()
+        self.assertEqual((cpu.r[AX], cpu.ip), (0x8888, 8))
+        cpu = self.start(bytes([0x67, 0x8B, 0x04, 0x25]) + le32(0x300))  # SIB 00 100 101: the index is none too
+        self.put(0x300, 0x9999, 2)
+        cpu.step()
+        self.assertEqual(cpu.r[AX], 0x9999)
+
+    def test_the_base_5_with_a_displacement_is_ebp_and_goes_to_the_stack_segment(self):
+        cpu = self.start(bytes([0x67, 0x8B, 0x44, 0x0D, 0x04]), ebp=0x100, ecx=0x10)  # [ebp+ecx+4], SIB 00 001 101
+        cpu.mem[0x40000 + 0x114:0x40000 + 0x116] = bytes([0xAA, 0xBB])
+        cpu.step()
+        self.assertEqual((cpu.r[AX], cpu.ip), (0xBBAA, 5))
+
+    def test_esp_as_the_base_goes_to_the_stack_segment_and_ebp_alone_too(self):
+        cpu = self.start(bytes([0x67, 0x8B, 0x04, 0x24]), esp=0x120)  # [esp]
+        cpu.mem[0x40120:0x40122] = bytes([0x12, 0x34])
+        cpu.step()
+        self.assertEqual(cpu.r[AX], 0x3412)
+        cpu = self.start(bytes([0x67, 0x8B, 0x45, 0x00]), ebp=0x130)  # [ebp+0]: mod 01, since [ebp] is a bare address
+        cpu.mem[0x40130:0x40132] = bytes([0x56, 0x78])
+        cpu.step()
+        self.assertEqual(cpu.r[AX], 0x7856)
+
+    def test_the_other_bases_go_to_the_data_segment_even_with_an_index(self):
+        cpu = self.start(bytes([0x67, 0x8B, 0x04, 0xA3]), ebx=0x100, esp=0x1000, esi=0)  # SIB 10 100 011: no index
+        self.put(0x100, 0x4321, 2)
+        cpu.step()
+        self.assertEqual(cpu.r[AX], 0x4321)
+
+    def test_a_segment_prefix_decides_the_segment(self):
+        cpu = self.start(bytes([0x26, 0x67, 0x8B, 0x03]), ebx=0x40)  # es:
+        cpu.s[CPU.ES] = 0x3000
+        cpu.mem[0x30040:0x30042] = bytes([0xEF, 0xBE])
+        cpu.step()
+        self.assertEqual(cpu.r[AX], 0xBEEF)
+
+    def test_the_address_wraps_at_32_bits(self):
+        cpu = self.start(bytes([0x67, 0x8B, 0x43, 0x02]), ebx=0xFFFFFFFF)  # [ebx+2] is [1]
+        self.put(1, 0x2468, 2)
+        cpu.step()
+        self.assertEqual(cpu.r[AX], 0x2468)
+
+    def test_the_offset_is_cut_to_32_bits_and_not_to_16(self):
+        for code, registers, offset in ((bytes([0x43, 0x02]), {"ebx": 0xFFFFFFFF}, 1),
+                                        (bytes([0x43, 0xFE]), {"ebx": 1}, 0xFFFFFFFF),
+                                        (bytes([0x83]) + le32(0x00010000), {"ebx": 0x00020005}, 0x00030005)):
+            cpu = self.start(code, **registers)
+            cpu.asize32 = True
+            self.assertEqual(modrm.decode(cpu, None).off, offset)
+
+    def test_a_register_operand_is_not_an_address_and_the_prefix_changes_nothing(self):
+        cpu = self.start(bytes([0x67, 0x8B, 0xC3]), ebx=0x1234)  # mov ax, bx
+        cpu.step()
+        self.assertEqual((cpu.r[AX], cpu.ip), (0x1234, 3))
+
+    def test_it_works_with_a_32_bit_operand_and_with_a_store(self):
+        cpu = self.start(bytes([0x66, 0x67, 0x89, 0x04, 0x8B]), eax=0xDEADBEEF, ebx=0x100, ecx=2)  # [ebx+ecx*4]
+        cpu.step()
+        self.assertEqual(bytes(cpu.mem[0x20108:0x2010C]), bytes([0xEF, 0xBE, 0xAD, 0xDE]))
+        self.assertEqual(cpu.ip, 5)
+
+    def test_lea_gives_the_offset_of_32_bits_or_of_16(self):
+        cpu = self.start(bytes([0x66, 0x67, 0x8D, 0x04, 0x8B]), ebx=0x00010000, ecx=0x40000000)  # lea eax, [ebx+ecx*4]
+        cpu.step()
+        self.assertEqual(cpu.get32(AX), 0x00010000)  # 4 * 40000000h is 100000000h: 32 bits drop it
+        cpu = self.start(bytes([0x67, 0x8D, 0x04, 0x8B]), eax=0xAAAA0000, ebx=0x00012345, ecx=1)  # lea ax, [..]
+        cpu.step()
+        self.assertEqual(cpu.get32(AX), 0xAAAA2349)  # only AX is written, with the low 16 bits of the offset
+
+    def test_the_address_of_a_move_with_a_fixed_address_is_of_32_bits(self):
+        cpu = self.start(bytes([0x67, 0xA1]) + le32(0x00010002))  # mov ax, [10002h]
+        cpu.mem[0x30002:0x30004] = bytes([0xCA, 0xFE])
+        cpu.step()
+        self.assertEqual((cpu.r[AX], cpu.ip), (0xFECA, 6))
+        cpu = self.start(bytes([0x66, 0x67, 0xA3]) + le32(0x40), eax=0x01020304)  # mov [40h], eax
+        cpu.step()
+        self.assertEqual((bytes(cpu.mem[0x20040:0x20044]), cpu.ip), (bytes([4, 3, 2, 1]), 7))
+        cpu = self.start(bytes([0x67, 0xA0]) + le32(0x50))  # mov al, [50h]
+        self.put(0x50, 0x99, 1)
+        cpu.step()
+        self.assertEqual((cpu.get8(0), cpu.ip), (0x99, 6))
+        cpu = self.start(bytes([0xA1, 0x50, 0x00]))  # and without the prefix the address is of 16 bits
+        self.put(0x50, 0x1357, 2)
+        cpu.step()
+        self.assertEqual((cpu.r[AX], cpu.ip), (0x1357, 3))
+
+    def test_the_prefix_is_for_one_instruction_and_twice_is_once(self):
+        cpu = self.start(bytes([0x67, 0x67, 0x8B, 0x43, 0x02, 0x8B, 0x07]), ebx=0x00010000, edi=0x20)
+        cpu.mem[0x30002:0x30004] = bytes([1, 2])
+        cpu.step()
+        self.assertEqual(cpu.r[AX], 0x0201)
+        cpu.step()  # mov ax, [bx]: 16 bits again: bx is 0, so DS:0
+        self.assertEqual((cpu.r[AX], cpu.asize32), (0, False))
+
+    def test_the_string_instructions_and_the_loops_do_not_take_32_bit_addresses_yet(self):
+        for code in ([0x67, 0xA4], [0x67, 0xF3, 0xA5], [0x67, 0xAA], [0x67, 0xE2, 0xFE], [0x67, 0xE3, 0x00],
+                     [0x67, 0xD7], [0x67, 0xAE], [0x67, 0xAD], [0x67, 0xA7], [0x67, 0x6C], [0x67, 0x6F],
+                     [0x67, 0xAF], [0x67, 0xAB], [0x67, 0xAC], [0x67, 0xA5], [0x67, 0xE0, 0], [0x67, 0xE1, 0],
+                     [0x67, 0x6D], [0x67, 0x6E]):
+            cpu = self.start(bytes(code))
+            with self.assertRaisesRegex(NotImplementedError, "with 32-bit addresses at 1000:0000"):
+                cpu.step()
+            self.assertEqual((cpu.r[CX], cpu.r[SI], cpu.r[DI]), (0, 0, 0), code)
+
+    def test_without_the_prefix_the_string_instructions_are_as_they_were(self):
+        cpu = self.start(bytes([0xAA]), eax=0x41)  # stosb
+        cpu.step()
+        self.assertEqual(cpu.mem[0x20000], 0x41)
+
+
+class TestCode32(Machine):
+    """A 32-bit code segment: the sizes are of 32 bits, and the prefixes 66h and 67h make them 16."""
+
+    def run32(self, code, **registers):
+        cpu = self.start(code, **registers)
+        cpu.code32 = True
+        cpu.step()
+        return cpu
+
+    def test_a_mov_without_prefixes_has_a_32_bit_operand_and_a_32_bit_address(self):
+        cpu = self.start(bytes([0x8B, 0x04, 0x8B]), ebx=0x00010000, ecx=2)  # mov eax, [ebx+ecx*4]
+        cpu.code32 = True
+        cpu.mem[0x30008:0x3000C] = bytes([1, 2, 3, 4])
+        cpu.step()
+        self.assertEqual((cpu.get32(AX), cpu.ip), (0x04030201, 3))
+
+    def test_66_makes_the_operand_16_and_67_makes_the_address_16(self):
+        cpu = self.start(bytes([0x66, 0x8B, 0x03]), ebx=0x100, eax=0xAAAA0000)
+        cpu.code32 = True
+        self.put(cpu, 0x100, bytes([0x34, 0x12, 0x78, 0x56]))
+        cpu.step()
+        self.assertEqual(cpu.get32(AX), 0xAAAA1234)  # mov ax, [ebx]
+        cpu = self.start(bytes([0x67, 0x8B, 0x05]), edi=0x00050100)
+        cpu.code32 = True
+        self.put(cpu, 0x100, bytes([0x78, 0x56, 0x34, 0x12]))
+        cpu.step()
+        self.assertEqual((cpu.get32(AX), cpu.ip), (0x12345678, 3))  # mov eax, [di]: only 16 bits of the address
+
+    def test_both_prefixes_and_the_sizes_come_back_for_the_next_instruction(self):
+        cpu = self.start(bytes([0x66, 0x67, 0x8B, 0x05, 0x8B, 0x43, 0x04]), edi=0x100, ebx=0x10)
+        cpu.code32 = True
+        self.put(cpu, 0x100, bytes([0x11, 0x22, 0x33, 0x44]))
+        self.put(cpu, 0x14, bytes([0x55, 0x66, 0x77, 0x88]))
+        cpu.step()
+        self.assertEqual((cpu.get32(AX), cpu.osize32, cpu.asize32), (0x2211, False, False))
+        cpu.step()
+        self.assertEqual((cpu.get32(AX), cpu.osize32, cpu.asize32), (0x88776655, True, True))
+
+    def test_the_two_prefixes_twice_are_not_a_toggle(self):
+        cpu = self.start(bytes([0x66, 0x66, 0x8B, 0xC3]), ebx=0x12345678, eax=0xFFFF0000)
+        cpu.code32 = True
+        cpu.step()
+        self.assertEqual(cpu.get32(AX), 0xFFFF5678)
+
+    def put(self, cpu, offset, data):
+        cpu.mem[0x20000 + offset:0x20000 + offset + len(data)] = data
 
 
 if __name__ == "__main__":

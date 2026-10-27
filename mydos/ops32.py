@@ -117,7 +117,7 @@ class Ops32:
         self.set32(op - Op.MOV_R16_IMM16, self.fetch32())
 
     def mov_eax_moffs(self, op):
-        """Load EAX from the doubleword at a fixed 16-bit address (A1), or store EAX there (A3)."""
+        """Load EAX from the doubleword at a fixed address (A1), or store EAX there (A3)."""
         seg, off = self.moffs()
         if op == Op.MOV_AX_MOFFS16:
             self.set32(self.AX, self.rd(seg, off))

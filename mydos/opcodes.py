@@ -18,6 +18,7 @@ class Op(IntEnum):
 
     # segment-override prefixes: modify the next instruction, not instructions themselves
     OPSIZE_PREFIX = 0x66  # 386 and later: the next instruction works on 32 bits instead of 16
+    ADDRSIZE_PREFIX = 0x67  # 386 and later: the addresses of the next instruction are of 32 bits instead of 16
     ES_PREFIX = 0x26
     CS_PREFIX = 0x2E
     SS_PREFIX = 0x36

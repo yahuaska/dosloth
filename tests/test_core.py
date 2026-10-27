@@ -217,9 +217,9 @@ class TestPrefixes(unittest.TestCase):
         cpu.ops[0x90] = lambda op: self.seen.append((cpu.seg_override, cpu.rep, cpu.ip))  # what a NOP sees
         return cpu
 
-    def test_there_are_seven_prefixes(self):
-        # the four of the segments, the two of the repeats, and the size of the operand of the 386
-        self.assertEqual(PREFIXES, frozenset((0x26, 0x2E, 0x36, 0x3E, 0xF2, 0xF3, 0x66)))
+    def test_there_are_eight_prefixes(self):
+        # the four of the segments, the two of the repeats, and the sizes of the operand and of the address of the 386
+        self.assertEqual(PREFIXES, frozenset((0x26, 0x2E, 0x36, 0x3E, 0xF2, 0xF3, 0x66, 0x67)))
 
     def test_no_prefix_is_an_instruction_of_its_own(self):
         cpu = CPU()
