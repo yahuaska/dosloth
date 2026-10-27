@@ -12,10 +12,11 @@ from .opcodes import Alu, Op
 REG16 = ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"]
 REG8 = ["al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"]
 REG32 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"]
-SREG = ["es", "cs", "ss", "ds"]
+SREG = ["es", "cs", "ss", "ds", "fs", "gs"]
 # registers added up into the address, by the r/m field of a ModRM byte (see modrm.py)
 BASES = ["bx+si", "bx+di", "bp+si", "bp+di", "si", "di", "bp", "bx"]
-SEG_PREFIXES = {Op.ES_PREFIX: "es", Op.CS_PREFIX: "cs", Op.SS_PREFIX: "ss", Op.DS_PREFIX: "ds"}
+SEG_PREFIXES = {Op.ES_PREFIX: "es", Op.CS_PREFIX: "cs", Op.SS_PREFIX: "ss", Op.DS_PREFIX: "ds", Op.FS_PREFIX: "fs",
+                Op.GS_PREFIX: "gs"}
 JCC = ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"]
 # instructions that are a single byte with no operands
 PLAIN = {
@@ -37,7 +38,9 @@ UNCHANGED_BY_66 = frozenset((
     *range(Op.MOV_R8_IMM8, Op.MOV_R8_IMM8 + 8), Op.ENTER, Op.LEAVE, Op.RET_NEAR, Op.RET_NEAR_POP, Op.XLAT,
     Op.GROUP3_RM, Op.GROUP3_RM + 1, Op.GROUP4_RM8, Op.GROUP5_RM16, Op.IMUL_RM_IMM16, Op.IMUL_RM_IMM8,
     Op.SHIFT_RM_IMM8, Op.SHIFT_RM_IMM8 + 1, *range(Op.SHIFT_RM, Op.SHIFT_RM + 4), Op.LOOPNE, Op.LOOPE, Op.LOOP,
-    Op.JCXZ, Op.TWO_BYTE, Op.MOVSB, Op.CMPSB, Op.STOSB, Op.LODSB, Op.SCASB))
+    Op.JCXZ, Op.TWO_BYTE, Op.MOVSB, Op.CMPSB, Op.STOSB, Op.LODSB, Op.SCASB, Op.PUSH_ES, Op.PUSH_CS, Op.PUSH_SS,
+    Op.PUSH_DS, Op.POP_ES, Op.POP_SS, Op.POP_DS, Op.MOV_RM16_SREG, Op.MOV_SREG_RM16, Op.LES, Op.LDS))
+FAR_POINTER_LOADS = {0xB2: "lss", 0xB4: "lfs", 0xB5: "lgs"}
 STRING_32 = {Op.MOVSW: "movsd", Op.CMPSW: "cmpsd", Op.STOSW: "stosd", Op.LODSW: "lodsd", Op.SCASW: "scasd"}
 COMPARING = (Op.CMPSB, Op.CMPSW, Op.SCASB, Op.SCASW)  # these look at ZF, so a prefix F3 reads "repe"
 SHIFTS = ["rol", "ror", "rcl", "rcr", "shl", "shr", "sal", "sar"]  # by the ModRM reg field
@@ -302,6 +305,13 @@ def _decode_0f(r, seg_override):
         return f"{'bsf' if second == 0xBC else 'bsr'} {regs[reg]}, {rm}"
     if 0xC8 <= second <= 0xCF:
         return f"bswap {REG32[second & 7]}"
+    if second in (0xA0, 0xA1, 0xA8, 0xA9):
+        return f"{'pop' if second & 1 else 'push'} {'fs' if second < 0xA8 else 'gs'}"
+    if second in (0xB2, 0xB4, 0xB5):
+        reg, rm, is_mem = _modrm(r, seg_override, bits)
+        if not is_mem:  # the CPU wants a pointer in memory
+            return None
+        return f"{FAR_POINTER_LOADS[second]} {regs[reg]}, {rm}"
     return None
 
 
@@ -377,8 +387,8 @@ def _decode_opcode(r, op, seg_override):
         dst, src = _operands(r, op, seg_override)
         return f"mov {dst}, {src}"
     if op in (Op.MOV_RM16_SREG, Op.MOV_SREG_RM16):
-        reg, rm, _ = _modrm(r, seg_override, 16)
-        if reg > 3:
+        reg, rm, _ = _modrm(r, seg_override, 32 if r.osize32 and op == Op.MOV_RM16_SREG else 16)
+        if reg > 5 or (op == Op.MOV_SREG_RM16 and reg == 1):  # CS cannot be loaded
             return None
         return f"mov {rm}, {SREG[reg]}" if op == Op.MOV_RM16_SREG else f"mov {SREG[reg]}, {rm}"
     if op == Op.MOV_AL_MOFFS8:
@@ -435,10 +445,10 @@ def _decode_opcode(r, op, seg_override):
         imm = _constant(r, bits) if op == Op.IMUL_RM_IMM16 else _signed(r.s8())
         return f"imul {REGS_BY_BITS[bits][reg]}, {rm}, {imm}"
     if op in (Op.LES, Op.LDS):
-        reg, rm, is_mem = _modrm(r, seg_override, 16)
+        reg, rm, is_mem = _modrm(r, seg_override, 32 if r.osize32 else 16)
         if not is_mem:  # the CPU wants a pointer in memory
             return None
-        return f"{'les' if op == Op.LES else 'lds'} {REG16[reg]}, {rm}"
+        return f"{'les' if op == Op.LES else 'lds'} {REGS_BY_BITS[32 if r.osize32 else 16][reg]}, {rm}"
     if Op.IO_IMM <= op < Op.IO_IMM + 4 or Op.IO_DX <= op < Op.IO_DX + 4:
         reg = "ax" if op & 1 else "al"
         port = "dx" if op & 8 else f"{r.u8():02X}"

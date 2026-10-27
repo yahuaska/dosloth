@@ -169,7 +169,8 @@ def terminate(cpu, state, code):
     state.memory.free_owned(state.psp_seg)
     state.handles, state.dta, state.psp_seg = parent.handles, parent.dta, parent.psp_seg
     state.exit_status = code
-    cpu.r[:], cpu.s[:], cpu.ip, cpu.flags = parent.registers, parent.segments, parent.ip, parent.flags
+    cpu.r[:], cpu.ip, cpu.flags = parent.registers, parent.ip, parent.flags
+    cpu.s[:len(parent.segments)] = parent.segments  # one saved before FS and GS has four: they stay as they are
     if parent.high is not None:
         cpu.rh[:] = parent.high
     cpu.r[CPU.AX] = 0

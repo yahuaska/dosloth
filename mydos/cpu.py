@@ -29,8 +29,8 @@ class DivideError(Exception):
 # for each byte: does it have an even number of bits set? That is what the parity flag says
 EVEN_PARITY = [bin(n).count("1") % 2 == 0 for n in range(256)]
 # the bytes that come before an opcode and change what it does, not instructions themselves
-PREFIXES = frozenset((Op.ES_PREFIX, Op.CS_PREFIX, Op.SS_PREFIX, Op.DS_PREFIX, Op.REP_PREFIX, Op.REPNE_PREFIX,
-                      Op.OPSIZE_PREFIX, Op.ADDRSIZE_PREFIX))
+PREFIXES = frozenset((Op.ES_PREFIX, Op.CS_PREFIX, Op.SS_PREFIX, Op.DS_PREFIX, Op.FS_PREFIX, Op.GS_PREFIX,
+                      Op.REP_PREFIX, Op.REPNE_PREFIX, Op.OPSIZE_PREFIX, Op.ADDRSIZE_PREFIX))
 
 
 # the opcodes that work with SI, DI, CX or BX as addresses or counters: with 32-bit addresses they work with ESI, EDI,
@@ -66,15 +66,16 @@ def condition_holds(flags_value, cc):
 class CPU(Ops32):
     """A tiny 8086-style CPU running in real mode, with 1 MB of flat memory.
 
-    Registers live in two lists: self.r (AX, CX, DX, BX, SP, BP, SI, DI) and self.s (ES, CS, SS, DS).
+    Registers live in two lists: self.r (AX, CX, DX, BX, SP, BP, SI, DI) and self.s (ES, CS, SS, DS, FS, GS).
     step() reads one instruction and looks its opcode up in self.ops; every entry there is one of
     the instruction methods further down.
     """
     # register numbers, available as CPU.AX, CPU.DS, ...
-    from .regs import AX, CX, DX, BX, SP, BP, SI, DI, ES, CS, SS, DS
+    from .regs import AX, CX, DX, BX, SP, BP, SI, DI, ES, CS, SS, DS, FS, GS
 
     # segment-override prefix byte -> segment register
-    SEG_PREFIXES = {Op.ES_PREFIX: ES, Op.CS_PREFIX: CS, Op.SS_PREFIX: SS, Op.DS_PREFIX: DS}
+    SEG_PREFIXES = {Op.ES_PREFIX: ES, Op.CS_PREFIX: CS, Op.SS_PREFIX: SS, Op.DS_PREFIX: DS, Op.FS_PREFIX: FS,
+                    Op.GS_PREFIX: GS}
 
     def __init__(self):
         """Make a fresh machine: zeroed memory, zeroed registers, no interrupts installed."""
@@ -88,7 +89,7 @@ class CPU(Ops32):
         self.video_start = self.video_end = 0
         self.r = [0] * 8
         self.rh = [0] * 8  # the high halves of the 32-bit registers of a 386: see ops32.py
-        self.s = [0] * 4
+        self.s = [0] * 6  # ES, CS, SS, DS, and the FS and GS of the 386
         self.ip = 0
         self.flags = 0x0002
         self.eflags_high = 0  # the bits of EFLAGS above the 16th that are kept, shifted down: only the alignment check
@@ -920,11 +921,11 @@ class CPU(Ops32):
     def mov_rm16_sreg(self, op):
         """Copy a segment register into a register or memory (opcode 8C + ModRM).
 
-        The segment register is picked by the 'reg' field of the ModRM byte: 0=ES, 1=CS, 2=SS, 3=DS.
-        Values 4-7 mean nothing here, so they stop the emulator.
+        The segment register is picked by the 'reg' field of the ModRM byte: 0=ES, 1=CS, 2=SS, 3=DS, 4=FS, 5=GS.
+        Values 6 and 7 mean nothing, so they stop the emulator.
         """
         m = modrm.decode(self, self.seg_override)
-        if m.reg > 3:  # the reg field only names ES, CS, SS, DS here
+        if m.reg > 5:  # the reg field only names the six segment registers
             raise NotImplementedError(f"MOV r/m16, sreg with reg={m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
         m.write16(self, self.s[m.reg])
 
@@ -936,7 +937,7 @@ class CPU(Ops32):
         allowed on the x86, so that stops the emulator too.
         """
         m = modrm.decode(self, self.seg_override)
-        if m.reg > 3 or m.reg == self.CS:  # loading CS this way is not a valid instruction
+        if m.reg > 5 or m.reg == self.CS:  # loading CS this way is not a valid instruction
             raise NotImplementedError(f"MOV sreg, r/m16 with reg={m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
         self.s[m.reg] = m.read16(self)
 

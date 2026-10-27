@@ -1971,7 +1971,7 @@ class TestNearConditionalJumps(unittest.TestCase):
             self.assertEqual((cpu.ip, cpu.start_ip), (0x15, 0), hex(prefix))
 
     def test_the_other_instructions_that_start_with_0f_stop_the_emulator_and_say_which(self):
-        for second in (0x00, 0x01, 0x0B, 0x20, 0x7F, 0xA0, 0xA2, 0xB0, 0xC0, 0xFF):
+        for second in (0x00, 0x01, 0x0B, 0x20, 0x7F, 0xA2, 0xB0, 0xC0, 0xFF):
             cpu = machine(bytes([0x0F, second, 0x12, 0x34]), False)
             with self.assertRaises(NotImplementedError) as caught:
                 cpu.step()

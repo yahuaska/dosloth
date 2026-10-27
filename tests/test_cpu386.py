@@ -517,23 +517,25 @@ class TestSignExtensions(Machine):
 
 class TestWhatIsNotDoneYet(Machine):
     def test_an_instruction_with_the_prefix_66_that_has_no_32_bit_form_yet_stops_the_emulator(self):
-        for opcode in (0x8C, 0x8E, 0x06, 0x07, 0x1E, 0x1F, 0x9A, 0xEA, 0xC4, 0xC5, 0xCA, 0xCB, 0xCF, 0xE5, 0xE7,
-                       0xED, 0xEF, 0x6D, 0x6F, 0xD8):
+        for opcode in (0x9A, 0xEA, 0xCA, 0xCB, 0xCF, 0xE5, 0xE7, 0xED, 0xEF, 0x6D, 0x6F, 0xD8):
             cpu = self.start(bytes([0x66, opcode, 0xC0, 0, 0, 0, 0]))
             with self.assertRaisesRegex(NotImplementedError, f"opcode 66 {opcode:02X}, the 32-bit form, at 1000:0000"):
                 cpu.step()
 
     def test_the_message_has_the_bytes_from_the_prefix(self):
-        cpu = self.start(bytes([0x66, 0x8C, 0xD8, 0x90]))
-        with self.assertRaisesRegex(NotImplementedError, "66 8c d8 90 00 00 00 00$"):  # eight bytes
+        cpu = self.start(bytes([0x66, 0xCB, 0x90]))
+        with self.assertRaisesRegex(NotImplementedError, "66 cb 90 00 00 00 00 00$"):  # eight bytes
             cpu.step()
 
     def test_a_16_bit_form_that_is_not_there_for_the_32_bit_one_is_not_taken_instead(self):
-        # 8C /3 is mov ax, ds: with 66 it is mov eax, ds, which is not done: it must not do the 16-bit one
-        cpu = self.start(bytes([0x66, 0x8C, 0xD8]), eax=0x12345678)
+        # CB is retf, which takes a pointer of 16:16 off the stack: with 66 it would take 16:32, which is not done,
+        # and it must not take the other one
+        cpu = self.start(bytes([0x66, 0xCB]))
+        cpu.push16(0x3000)
+        cpu.push16(0x0123)
         with self.assertRaises(NotImplementedError):
             cpu.step()
-        self.assertEqual(cpu.get32(AX), 0x12345678)
+        self.assertEqual(cpu.r[SP], 0x01FC)
 
     def test_the_table_of_the_32_bit_forms_is_not_the_16_bit_table(self):
         cpu = CPU()

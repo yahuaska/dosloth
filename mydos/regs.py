@@ -2,5 +2,5 @@
 
 # 16-bit general registers, in x86 encoding order
 AX, CX, DX, BX, SP, BP, SI, DI = range(8)
-# segment registers, in x86 encoding order
-ES, CS, SS, DS = range(4)
+# segment registers, in x86 encoding order (FS and GS are the 386's)
+ES, CS, SS, DS, FS, GS = range(6)

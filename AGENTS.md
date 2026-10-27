@@ -16,7 +16,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   (`cpu.rh`), the table `cpu.ops32` of the 32-bit forms (shifts, MUL/DIV, stack, near calls, string instructions...),
   the prefix 67h and the 32-bit addresses with SIB (in `modrm.py`); `cpu.code32` flips the sizes for a 32-bit code
   segment. The `0F` opcodes that the games use are in `cpu.ops0f` (MOVZX/MOVSX, SETcc, long Jcc, SHLD/SHRD, BT*...).
-  Real mode only so far: IP and SP are of 16 bits. Not done yet: FS/GS, x87
+  FS and GS (`cpu.s` has six segments, prefixes 64h/65h). Real mode only so far: IP and SP are of 16 bits. Not done
+  yet: x87
 - `mydos/pages.py` - the memory is a 256 MB private anonymous `mmap` (costs nothing until written); this finds the
   parts that are not zero, for dumps and snapshots. Never copy or iterate all of `cpu.mem`: slice what you need
 - `mydos/dos.py`  - INT 21h and friends (Python-side handlers)

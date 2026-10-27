@@ -82,6 +82,15 @@ class TestAnLeProgramIsRefused(unittest.TestCase):
 
 
 class TestLoad(unittest.TestCase):
+    def test_a_program_starts_with_zeros_in_fs_and_gs(self):
+        cpu = CPU()
+        cpu.s[CPU.FS], cpu.s[CPU.GS] = 0x1111, 0x2222
+        loader.load(cpu, b"\xB8\x00\x4C", 0x3000)
+        self.assertEqual((cpu.s[CPU.FS], cpu.s[CPU.GS]), (0, 0))
+        cpu.s[CPU.FS], cpu.s[CPU.GS] = 0x1111, 0x2222
+        loader.load(cpu, exe(b"\xB8\x00\x4C"), 0x4000)
+        self.assertEqual((cpu.s[CPU.FS], cpu.s[CPU.GS]), (0, 0))
+
     def test_load_picks_the_loader_by_the_first_bytes_and_puts_the_program_at_the_given_segment(self):
         cpu = CPU()
         loader.load(cpu, b"\xB8\x00\x4C", 0x3000)

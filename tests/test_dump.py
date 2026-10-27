@@ -53,6 +53,7 @@ class TestWhereItGoes(DumpTest):
         info = json.loads((self.program_dir / "T.COM.crash.json").read_text())
         self.assertEqual(info["error"], "NotImplementedError: INT 21h AH=3F")
         self.assertEqual((info["registers"]["AX"], info["segments"]["CS"], info["start_ip"]), ("1234", "1000", "0020"))
+        self.assertEqual(list(info["segments"]), ["ES", "CS", "SS", "DS", "FS", "GS"])
         self.assertEqual(info["code"].split()[:3], ["cd", "21", "90"])
         self.assertEqual(len(info["code"].split()), 16)
         self.assertEqual(info["program"], str(program))

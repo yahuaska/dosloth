@@ -231,7 +231,8 @@ def restore(machine, packed, blobs):
         pages.erase(cpu.mem)
         for address, run in memory["runs"]:
             cpu.mem[address:address + len(run)] = run
-    cpu.r[:], cpu.s[:] = saved["r"], saved["s"]
+    cpu.r[:] = saved["r"]
+    cpu.s[:len(saved["s"])] = saved["s"]  # a snapshot from before FS and GS has four: those stay 0
     cpu.rh[:] = saved.get("rh", cpu.rh)  # a snapshot of before the 386 has no high halves: they stay 0
     cpu.eflags_high = saved.get("eflags_high", cpu.eflags_high)
     cpu.ip, cpu.flags, cpu.instructions = saved["ip"], saved["flags"], saved["instructions"]

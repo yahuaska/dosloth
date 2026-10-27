@@ -380,6 +380,41 @@ class TestTwoByteInstructions(unittest.TestCase):
         self.assertEqual(disasm(cpu, 0x1000, 0x100), (6, "je 0116"))
 
 
+class TestSegmentRegisters(unittest.TestCase):
+    def check(self, cases):
+        for code, text in cases:
+            with self.subTest(code=code):
+                data = bytes.fromhex(code)
+                self.assertEqual(dis(data), (len(data), text))
+
+    def test_the_prefixes_and_the_moves(self):
+        self.check((("64 8B 07", "mov ax, fs:[bx]"), ("65 8B 07", "mov ax, gs:[bx]"),
+                    ("64 A1 00 01", "mov ax, fs:[0100]"),
+                    ("66 67 64 8B 04 8B", "mov eax, fs:[ebx+ecx*4]"), ("8E E0", "mov fs, ax"), ("8E E8", "mov gs, ax"),
+                    ("8C E0", "mov ax, fs"), ("8C 2E 00 01", "mov [0100], gs"), ("66 8C E0", "mov eax, fs"),
+                    ("66 8C 1E 00 01", "mov [0100], ds"), ("66 8E E0", "mov fs, ax"), ("8C D8", "mov ax, ds")))
+
+    def test_a_segment_register_that_is_not_one_is_a_db(self):
+        for code in ("8C F0", "8E F0", "8E C8", "66 8C F0"):  # 6 and 7 are nothing, and CS cannot be loaded
+            data = bytes.fromhex(code)
+            self.assertEqual(dis(data), (1, f"db {data[0]:02X}"), code)
+
+    def test_push_and_pop(self):
+        self.check((("0F A0", "push fs"), ("0F A1", "pop fs"), ("0F A8", "push gs"), ("0F A9", "pop gs"),
+                    ("66 0F A0", "push fs"), ("66 06", "push es"), ("66 1F", "pop ds"), ("66 0E", "push cs")))
+
+    def test_far_pointers(self):
+        self.check((("0F B4 0E 00 01", "lfs cx, [0100]"), ("0F B5 0E 00 01", "lgs cx, [0100]"),
+                    ("0F B2 0E 00 01", "lss cx, [0100]"), ("66 0F B4 0E 00 01", "lfs ecx, [0100]"),
+                    ("66 C4 0E 00 01", "les ecx, [0100]"), ("66 C5 0E 00 01", "lds ecx, [0100]"),
+                    ("C4 0E 00 01", "les cx, [0100]")))
+
+    def test_a_far_pointer_in_a_register_is_a_db(self):
+        for code in ("0F B4 C3", "66 C5 C3"):
+            data = bytes.fromhex(code)
+            self.assertEqual(dis(data), (1, f"db {data[0]:02X}"), code)
+
+
 class TestTwoByteAgreesWithCpu(unittest.TestCase):
     def test_every_second_byte_is_known_to_both_or_to_neither_and_the_lengths_are_the_same(self):
         for prefix in (b"", b"\x66", b"\x67"):
@@ -424,7 +459,7 @@ class TestAgreesWithCpu32(unittest.TestCase):
                 self.assertEqual(length, len(fetched) + 1, text)  # step() reads the first byte, the prefix, itself
 
     def test_an_opcode_with_the_prefix_that_the_cpu_does_not_know_is_a_db_of_the_prefix(self):
-        self.assertEqual(dis(b"\x66\x8C\xD8"), (1, "db 66"))  # mov eax, ds: no 32-bit form yet
+        self.assertEqual(dis(b"\x66\xCB"), (1, "db 66"))  # retf with a pointer of 16:32: no form yet
 
     def test_the_opcodes_that_the_cpu_takes_with_the_prefix_are_the_ones_that_are_written_with_it(self):
         """Both ways: nothing that the CPU stops at is written as an instruction, and nothing it takes as a db."""

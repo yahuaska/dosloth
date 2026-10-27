@@ -475,15 +475,24 @@ class TestWhatIsPutBack(SnapshotTest):
     def test_the_registers_the_flags_and_the_place_come_back(self):
         a = self.make()
         a.cpu.r[:] = [1, 2, 3, 4, 5, 6, 7, 8]
-        a.cpu.s[:] = [9, 10, 11, 12]
+        a.cpu.s[:] = [9, 10, 11, 12, 13, 14]
         a.cpu.ip, a.cpu.flags, a.cpu.instructions = 0x1234, 0x0A47, 999
         path = str(self.out / "x.state")
         snapshot.save(path, a)
         b = self.make()
         snapshot.load(path, b)
         self.assertEqual((b.cpu.r, b.cpu.s, b.cpu.ip, b.cpu.flags, b.cpu.instructions),
-                         ([1, 2, 3, 4, 5, 6, 7, 8], [9, 10, 11, 12], 0x1234, 0x0A47, 999))
+                         ([1, 2, 3, 4, 5, 6, 7, 8], [9, 10, 11, 12, 13, 14], 0x1234, 0x0A47, 999))
         self.assertEqual(b.cpu.start_ip, 0x1234)
+
+    def test_a_snapshot_from_before_fs_and_gs_has_four_segments_and_leaves_those_two_as_built(self):
+        a = self.make()
+        a.cpu.s[:] = [9, 10, 11, 12, 13, 14]
+        packed, blobs = self.tampered(a, lambda data: data["cpu"].update(s=[9, 10, 11, 12]))
+        b = self.make()
+        b.cpu.s[4:] = [77, 88]
+        snapshot.restore(b, packed, blobs)
+        self.assertEqual(b.cpu.s, [9, 10, 11, 12, 77, 88])
 
     def test_the_name_of_the_program_comes_back_for_naming_a_dump(self):
         a = self.make()

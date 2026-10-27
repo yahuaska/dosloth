@@ -8,7 +8,7 @@ from . import pages
 from .cpu import CPU
 
 REG16 = ["AX", "CX", "DX", "BX", "SP", "BP", "SI", "DI"]  # order of CPU.r
-SEGS = ["ES", "CS", "SS", "DS"]                           # order of CPU.s
+SEGS = ["ES", "CS", "SS", "DS", "FS", "GS"]                           # order of CPU.s
 
 
 def describe(cpu, prog_path, exc):

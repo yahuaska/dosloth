@@ -426,6 +426,23 @@ class TestThe32BitRegistersOfAChild(ProcessTest):
         self.assertEqual(self.cpu.rh, before)
         self.assertEqual(self.cpu.get32(0), 0x11110000)  # EAX: the high half of the parent and the AX of the exec
 
+    def test_fs_and_gs_of_the_parent_come_back_and_the_child_starts_with_zeros(self):
+        child = bytes([0xB8, 0x34, 0x12, 0x8E, 0xE0, 0xB8, 0x00, 0x4C, 0xCD, 0x21])  # mov ax, 1234h ; mov fs, ax ; exit
+        self.program("CHILD.COM", com(child))
+        self.cpu.s[CPU.FS], self.cpu.s[CPU.GS] = 0x5555, 0x6666
+        self.start("CHILD.COM")
+        self.assertEqual((self.cpu.s[CPU.FS], self.cpu.s[CPU.GS]), (0, 0))
+        self.run_child()
+        self.assertEqual((self.cpu.s[CPU.FS], self.cpu.s[CPU.GS]), (0x5555, 0x6666))
+
+    def test_a_parent_saved_with_four_segments_leaves_fs_and_gs_as_they_are(self):
+        self.program("CHILD.COM", com(bytes([0xB8, 0x00, 0x4C, 0xCD, 0x21])))
+        self.start("CHILD.COM")
+        self.state.parents[-1].segments = self.state.parents[-1].segments[:4]  # a snapshot from before FS and GS
+        self.cpu.s[CPU.FS] = 0x7777
+        self.run_child()
+        self.assertEqual((len(self.cpu.s), self.cpu.s[CPU.FS]), (6, 0x7777))
+
     def test_the_high_halves_are_those_the_child_made_while_it_runs(self):
         child = bytes([0x66, 0xB8, 0x00, 0x00, 0xAD, 0xDE, 0xB8, 0x00, 0x4C, 0xCD, 0x21])
         self.program("CHILD.COM", com(child))

@@ -23,6 +23,8 @@ class Op(IntEnum):
     CS_PREFIX = 0x2E
     SS_PREFIX = 0x36
     DS_PREFIX = 0x3E
+    FS_PREFIX = 0x64  # 386 and later
+    GS_PREFIX = 0x65  # 386 and later
 
     INC_R16 = 0x40       # 40..47: add 1 to AX CX DX BX SP BP SI DI
     DEC_R16 = 0x48       # 48..4F: subtract 1 from AX CX DX BX SP BP SI DI

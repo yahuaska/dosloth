@@ -16,10 +16,10 @@ SIB byte). In a code segment of 32 bits (`CPU.code32`) both sizes are 32 by defa
 What is here: the data moves and the arithmetic with registers, memory and constants, the stack (PUSH, POP, PUSHA,
 PUSHFD, ENTER, LEAVE), INC and DEC, XCHG, TEST, LEA, the sign extensions CWDE and CDQ, the shifts, NOT, NEG, MUL, DIV,
 the three-operand IMUL, the near jumps, calls and returns, and the string instructions, the loops and XLAT with the
-registers that 32-bit addresses call for, and the two-byte opcodes (0Fh) that the programs use: the long conditional
-jumps, SETcc, MOVZX, MOVSX, two-operand IMUL, SHLD, SHRD, BT and its kin, BSF, BSR, BSWAP. Not yet: the other registers
-(FS and GS), and what the flat mode needs: the instruction pointer and the stack pointer are still of 16 bits, so a
-near jump is cut to 16 bits.
+registers that 32-bit addresses call for, the two-byte opcodes (0Fh) that the programs use: the long conditional
+jumps, SETcc, MOVZX, MOVSX, two-operand IMUL, SHLD, SHRD, BT and its kin, BSF, BSR, BSWAP, and the registers FS and
+GS with their prefixes (64h, 65h), PUSH and POP, LFS, LGS and LSS. Not yet: what the flat mode needs. The instruction
+pointer and the stack pointer are still of 16 bits, so a near jump is cut to 16 bits.
 """
 from . import flags, modrm
 from .opcodes import Alu, Op
@@ -362,6 +362,51 @@ class Ops32:
             off = (self.r[self.BX] + self.get8(0)) & 0xFFFF
         self.set8(0, self.rb(self.data_segment(), off))
 
+    # --- the segment registers: the 32-bit forms of the instructions that have them, and FS and GS ---
+    def push_sreg32(self, op):
+        """Push a segment register as a doubleword (66 06, 0E, 16, 1E)."""
+        self.push32(self.s[(op >> 3) & 3])
+
+    def pop_sreg32(self, op):
+        """Pop a doubleword into ES, SS or DS (66 07, 17, 1F): the register takes its low 16 bits."""
+        self.s[(op >> 3) & 3] = self.pop32() & 0xFFFF
+
+    def mov_rm_sreg32(self, op):
+        """Copy a segment register into a register or memory (66 8C): a register gets all 32 bits, with zeros in the
+        high half, and memory a word."""
+        m = modrm.decode(self, self.seg_override)
+        if m.reg > 5:
+            raise NotImplementedError(f"MOV r/m, sreg with reg={m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        m.write(self, 32 if m.is_reg else 16, self.s[m.reg])
+
+    def load_far(self, segment, opcode):
+        """Load a register and the segment register `segment` from a far pointer in memory: the offset, of 16 or of 32
+        bits (the size of the operands), and then the segment word. Both are read before anything is written."""
+        m = modrm.decode(self, self.seg_override)
+        if m.is_reg:
+            raise NotImplementedError(f"opcode {opcode} with a register at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        bits = 32 if self.osize32 else 16
+        offset = m.read(self, bits)
+        selector = self.rw(m.seg, m.off + bits // 8)
+        self.set_reg(m.reg, bits, offset)
+        self.s[segment] = selector
+
+    def les_lds_wide(self, op):
+        """LES and LDS with a pointer of 16:32 (66 C4, C5)."""
+        self.load_far(self.ES if op == Op.LES else self.DS, f"66 {op:02X}")
+
+    def load_far_386(self, second):
+        """LSS, LFS and LGS (0F B2, B4, B5): like LES and LDS, for SS, FS and GS."""
+        self.load_far({0xB2: self.SS, 0xB4: self.FS, 0xB5: self.GS}[second], f"0F {second:02X}")
+
+    def push_pop_fs_gs(self, second):
+        """Push (0F A0, A8) or pop (0F A1, A9) FS or GS, as a word or, with the size of 32 bits, as a doubleword."""
+        segment = self.FS if second < 0xA8 else self.GS
+        if second & 1 == 0:
+            (self.push32 if self.osize32 else self.push16)(self.s[segment])
+        else:
+            self.s[segment] = (self.pop32() if self.osize32 else self.pop16()) & 0xFFFF
+
     # --- the instructions of two bytes (0F xx): `second` is the byte after the 0F ---
     def jcc_near(self, second):
         """Jump if a condition holds (0F 80-8F), by a distance of 16 bits, or of 32 bits with the size of 32 bits."""
@@ -477,6 +522,8 @@ class Ops32:
         table.update({code: self.bit_operation for code in (0xA3, 0xAB, 0xB3, 0xBB, 0xBA)})
         table.update({0xBC: self.bit_scan, 0xBD: self.bit_scan})
         table.update({code: self.bswap for code in range(0xC8, 0xD0)})
+        table.update({code: self.push_pop_fs_gs for code in (0xA0, 0xA1, 0xA8, 0xA9)})
+        table.update({code: self.load_far_386 for code in (0xB2, 0xB4, 0xB5)})
         return table
 
     def build_ops32(self):
@@ -521,6 +568,13 @@ class Ops32:
              *range(Op.LOOPNE, Op.JCXZ + 1))
         table[Op.GROUP5_RM16] = self.group5_rm32
         table[Op.TWO_BYTE] = ops[Op.TWO_BYTE]  # it finds the size itself
+        for code in (Op.PUSH_ES, Op.PUSH_CS, Op.PUSH_SS, Op.PUSH_DS):
+            table[code] = self.push_sreg32
+        for code in (Op.POP_ES, Op.POP_SS, Op.POP_DS):
+            table[code] = self.pop_sreg32
+        table[Op.MOV_RM16_SREG] = self.mov_rm_sreg32
+        same(Op.MOV_SREG_RM16)  # it loads the 16 bits of its operand, whatever the size
+        table[Op.LES] = table[Op.LDS] = self.les_lds_wide
         table[Op.PUSH_IMM16] = table[Op.PUSH_IMM8] = self.push_imm32
         table[Op.PUSHA], table[Op.POPA] = self.pusha32, self.popa32
         table[Op.POP_RM16] = self.pop_rm32

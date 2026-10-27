@@ -126,6 +126,7 @@ def load(cpu, data, psp_seg):
     """Pick the loader by file content, like DOS: MZ/ZM signature means EXE, else COM. An LE program is refused."""
     refuse_le_program(data)
     cpu.rh[:] = [0] * 8  # the high halves of the 32-bit registers: a program starts with nothing in them
+    cpu.s[CPU.FS] = cpu.s[CPU.GS] = 0  # nor in FS and GS
     if is_exe(data):
         load_exe(cpu, data, psp_seg)
     else:
