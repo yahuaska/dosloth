@@ -41,8 +41,9 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/calllog.py` - `-t LOGFILE`: every call of the program to DOS (INT 21h, 2Fh, 25h, 20h) with its names and
   the answer; a run of the same call is folded into one; the last line of the log is the call that was being made
   when something went wrong
-- `mydos/command.py` - a pocket COMMAND.COM: when a program starts one that is not on the disk (`/c md C:\X`), the
-  command is done in Python; only what a program has been seen to call for (MD so far), the rest stops loudly
+- `mydos/command.py` - a pocket COMMAND.COM: when a program starts one that is not on the disk, the command is done in
+  Python: `/c md C:\X`, or a program (`/c SETUP.exe child>nul`: found like DOS does, started as a child, `>nul` kept);
+  the rest stops loudly
 - `mydos/sysport.py` - port 61h of the system board: the speaker bits a program sets (nothing is heard), the refresh bit
   that toggles every 18 timer ticks (programs wait on it), the output of timer counter 2
 - `mydos/fcb.py` - a file name taken apart into the drive, name and extension of an FCB (INT 21h AH=29h)

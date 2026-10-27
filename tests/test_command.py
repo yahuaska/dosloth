@@ -125,11 +125,17 @@ class TestMd(ShellTest):
 
 
 class TestWhatIsNotDone(ShellTest):
-    def test_a_command_that_is_not_known_stops_with_its_name(self):
-        for line, name in (("/c dir C:\\", "DIR"), ("/c copy a b", "COPY"), ("/c echo hi", "ECHO"),
-                           ("/c ufoexe.exe /x", "UFOEXE.EXE")):
+    def test_an_internal_command_that_is_not_done_stops_with_its_name(self):
+        for line, name in (("/c dir C:\\", "DIR"), ("/c copy a b", "COPY"), ("/c echo hi", "ECHO"), ("/c Del x", "DEL"),
+                           ("/c set A=1", "SET"), ("/c cd games", "CD")):
             with self.assertRaisesRegex(NotImplementedError, f"the command {name} is not done"):
                 self.shell.run(line)
+
+    def test_every_internal_command_of_the_list_stops_and_none_is_looked_for_as_a_program(self):
+        (self.base / "DIR.COM").write_bytes(b"\xCD\x20")  # a file of the name of a command: DOS runs the command
+        for name in sorted(command.INTERNAL):
+            with self.assertRaisesRegex(NotImplementedError, f"the command {name} is not done"):
+                self.shell.run(f"/c {name.lower()} x")
 
     def test_the_message_has_the_whole_line(self):
         with self.assertRaisesRegex(NotImplementedError, r"COMMAND.COM /C 'copy a b'"):
@@ -141,15 +147,139 @@ class TestWhatIsNotDone(ShellTest):
                 self.shell.run(line)
         self.assertEqual(self.listing(), ["GAMES", "NOTES.TXT"])
 
-    def test_redirection_pipes_and_a_second_command_are_not_done(self):
-        for line in ("/c md C:\\X > nul", "/c md C:\\X < in", "/c md C:\\X | more", "/c md C:\\X & md C:\\Y"):
-            with self.assertRaisesRegex(NotImplementedError, "redirection and pipes"):
+    def test_every_redirection_but_the_output_to_nul_and_the_pipes_are_not_done(self):
+        for line in ("/c md C:\\X > file", "/c md C:\\X >> nul", "/c md C:\\X < in", "/c md C:\\X | more",
+                     "/c md C:\\X & md C:\\Y", "/c md C:\\X >nul x", "/c prog >nul >nul",
+                     "/c prog <nul", "/c prog >nuls", "/c prog >con"):
+            with self.assertRaisesRegex(NotImplementedError, "only the output to NUL is done"):
                 self.shell.run(line)
         self.assertEqual(self.listing(), ["GAMES", "NOTES.TXT"])
 
     def test_c_alone_does_nothing_and_succeeds(self):
         self.assertEqual(self.run_line("/c"), (0, ""))
         self.assertEqual(self.run_line("/c   "), (0, ""))
+        self.assertEqual(self.run_line("/c >nul"), (0, ""))
+
+
+class TestOutputToNul(ShellTest):
+    def test_an_internal_command_with_the_output_to_nul_works_and_says_nothing(self):
+        for line in ("/c md C:\\QUIET >nul", "/c md C:\\QUIET2 > nul", "/c md C:\\QUIET3>NUL"):
+            self.assertEqual(self.run_line(line), (0, ""), line)
+        self.assertEqual(self.listing(), ["GAMES", "NOTES.TXT", "QUIET", "QUIET2", "QUIET3"])
+
+    def test_even_what_goes_wrong_is_not_said(self):
+        self.assertEqual(self.run_line("/c md C:\\GAMES >nul"), (0, ""))
+        self.assertEqual(self.run_line("/c md >nul"), (0, ""))
+
+    def test_the_words_come_back_for_the_next_command(self):
+        self.shell.run("/c md C:\\GAMES >nul")
+        self.assertEqual(self.run_line("/c md C:\\GAMES")[1], "A subdirectory or file C:\\GAMES already exists\r\n")
+
+
+class TestRunningAProgram(ShellTest):
+    def setUp(self):
+        super().setUp()
+        for name in ("SETUP.EXE", "TOOL.COM", "TOOL.EXE", "BOTH.EXE", "BOTH.COM", "ONLY.EXE", "BATCH.BAT", "DATA.TXT"):
+            (self.base / name).write_bytes(b"x")
+        (self.base / "GAMES" / "GAME.EXE").write_bytes(b"x")
+        (self.base / "GAMES" / "TOOL.EXE").write_bytes(b"x")
+
+    def launch(self, line, search_path=()):
+        self.shell = command.Shell(self.volumes, self.said.append, search_path)
+        return self.shell.run(line)
+
+    def test_the_line_the_installer_sends_gives_the_program_its_tail_and_the_output_to_nul(self):
+        got = self.launch("/c SETUP.exe child>nul")
+        self.assertIsInstance(got, command.Launch)
+        self.assertEqual(got.where.dos_path(), "C:\\SETUP.EXE")
+        self.assertEqual((got.tail, got.null_output), (" child", True))
+        self.assertEqual(self.said, [])
+
+    def test_the_forms_of_the_output_to_nul_and_the_ones_without_it(self):
+        for line, tail, null in (("/c setup>nul", "", True), ("/c setup >nul", "", True), ("/c setup > nul", "", True),
+                                 ("/c setup >NUL", "", True), ("/c setup   >  Nul   ", "", True),
+                                 ("/c setup a b>nul", " a b", True), ("/c setup a b", " a b", False),
+                                 ("/c setup", "", False), ("/c setup /x /y", " /x /y", False),
+                                 ("/c  setup   a  b ", "   a  b", False)):
+            got = self.launch(line)
+            self.assertEqual((got.tail, got.null_output), (tail, null), line)
+
+    def test_the_command_word_may_be_in_any_case(self):
+        self.assertEqual(self.launch("/c Setup.Exe").where.dos_path(), "C:\\SETUP.EXE")
+        self.assertEqual(self.launch("/c setup").where.dos_path(), "C:\\SETUP.EXE")
+
+    def test_a_name_with_no_extension_tries_com_then_exe_then_bat(self):
+        self.assertEqual(self.launch("/c both").where.dos_path(), "C:\\BOTH.COM")
+        self.assertEqual(self.launch("/c tool").where.dos_path(), "C:\\TOOL.COM")
+        self.assertEqual(self.launch("/c only").where.dos_path(), "C:\\ONLY.EXE")
+        with self.assertRaisesRegex(NotImplementedError, "batch files are not done"):
+            self.launch("/c batch")
+
+    def test_a_name_with_an_extension_is_that_file_and_no_other(self):
+        self.assertEqual(self.launch("/c tool.exe").where.dos_path(), "C:\\TOOL.EXE")
+        with self.assertRaisesRegex(NotImplementedError, "batch files"):
+            self.launch("/c batch.bat")
+
+    def test_a_file_that_is_not_a_program_by_its_extension_is_a_bad_command(self):
+        self.assertEqual(self.launch("/c data.txt"), 0)
+        self.assertEqual("".join(self.said), "Bad command or file name\r\n")
+
+    def test_what_is_not_there_is_a_bad_command_with_exit_code_0(self):
+        self.assertEqual(self.launch("/c nothing"), 0)
+        self.assertEqual(self.launch("/c nothing.exe"), 0)
+        self.assertEqual("".join(self.said), "Bad command or file name\r\n" * 2)
+
+    def test_a_directory_is_not_a_program(self):
+        (self.base / "TOOLS.EXE").mkdir()
+        self.assertEqual(self.launch("/c tools.exe"), 0)
+        self.assertEqual("".join(self.said), "Bad command or file name\r\n")
+
+    def test_the_current_directory_comes_first_and_then_the_directories_of_path(self):
+        self.volumes.chdir("GAMES")
+        self.assertEqual(self.launch("/c game", ["C:\\"]).where.dos_path(), "C:\\GAMES\\GAME.EXE")  # here
+        self.assertEqual(self.launch("/c setup", ["C:\\"]).where.dos_path(), "C:\\SETUP.EXE")  # in PATH
+        self.assertEqual(self.launch("/c tool.exe", ["C:\\"]).where.dos_path(), "C:\\GAMES\\TOOL.EXE")  # here wins
+        self.assertEqual(self.launch("/c tool", ["C:\\"]).where.dos_path(), "C:\\GAMES\\TOOL.EXE")  # the name is first
+        self.assertEqual(self.launch("/c setup"), 0)  # no PATH: not found
+
+    def test_path_is_gone_through_in_order_and_a_directory_with_a_bad_name_is_passed_over(self):
+        got = self.launch("/c game", ["Z:\\NOWHERE", "C:\\MISSING", "C:\\GAMES;", "C:\\GAMES\\"])
+        self.assertEqual(got.where.dos_path(), "C:\\GAMES\\GAME.EXE")
+
+    def test_a_word_with_a_directory_or_a_drive_is_taken_as_it_is_and_not_looked_for_in_path(self):
+        self.assertEqual(self.launch("/c games\\game", ["C:\\"]).where.dos_path(), "C:\\GAMES\\GAME.EXE")
+        self.assertEqual(self.launch("/c C:\\games\\game.exe").where.dos_path(), "C:\\GAMES\\GAME.EXE")
+        self.assertEqual(self.launch("/c c:setup").where.dos_path(), "C:\\SETUP.EXE")
+        self.assertEqual(self.launch("/c ..\\setup", ["C:\\GAMES"]), 0)  # above the root, and PATH is not tried
+
+    def test_a_dot_in_the_name_of_a_directory_is_not_an_extension(self):
+        (self.base / "APPS.OLD").mkdir()
+        (self.base / "APPS.OLD" / "RUN.EXE").write_bytes(b"x")
+        self.assertEqual(self.launch("/c apps.old\\run").where.dos_path(), "C:\\APPS.OLD\\RUN.EXE")
+        self.assertEqual(self.launch("/c c:apps.old\\run").where.dos_path(), "C:\\APPS.OLD\\RUN.EXE")
+
+    def test_a_directory_of_path_may_end_with_a_backslash_or_not(self):
+        for directory in ("C:\\GAMES", "C:\\GAMES\\"):
+            self.assertEqual(self.launch("/c game", [directory]).where.dos_path(), "C:\\GAMES\\GAME.EXE", directory)
+
+    def test_a_program_on_another_drive(self):
+        with self.volumes.filesystems[3].create(["TEMP.COM"]) as file:
+            file.write(b"x")
+        got = self.launch("/c d:temp")
+        self.assertEqual(got.where.dos_path(), "D:\\TEMP.COM")
+
+    def test_an_internal_command_is_done_even_if_a_program_has_its_name(self):
+        (self.base / "MD.COM").write_bytes(b"x")
+        self.assertEqual(self.launch("/c md C:\\VIAMD"), 0)
+        self.assertTrue((self.base / "VIAMD").is_dir())
+
+    def test_the_tail_keeps_the_blanks_the_way_they_were_typed(self):
+        self.assertEqual(self.launch("/c setup  a   b").tail, "  a   b")
+
+
+    def test_two_as_an_argument_before_the_redirection_is_an_argument_as_in_dos(self):
+        got = self.launch("/c setup 2>nul")
+        self.assertEqual((got.tail, got.null_output), (" 2", True))
 
 
 class TestTheConsole(unittest.TestCase):

@@ -1,7 +1,7 @@
 import struct
 import unittest
 
-from mydos import command, dos, flags, psp
+from mydos import command, dos, flags, process, psp
 from mydos.cpu import CPU
 from mydos.handles import OpenFile
 from tests import test_dos
@@ -459,8 +459,8 @@ class TestThePocketCommandCom(ProcessTest):
         self.assertEqual(len([entry for entry in self.base.iterdir() if entry.name.startswith("X")]), 3)
 
     def test_a_command_that_is_not_known_stops_the_emulator(self):
-        with self.assertRaisesRegex(NotImplementedError, "the command XCOPY is not done"):
-            self.shell("/c xcopy a b")
+        with self.assertRaisesRegex(NotImplementedError, "the command COPY is not done"):
+            self.shell("/c copy a b")
 
     def test_a_program_that_is_not_there_and_is_not_a_command_com_is_still_error_2(self):
         self.shell("/c md X", name="C:\\NOTCOMMAND.COM")
@@ -494,6 +494,159 @@ class TestThePocketCommandCom(ProcessTest):
         block = self.parameters(tail=0x3000 << 16 | 0xFFFC)
         self.call(0x4B00, "C:\\COMMAND.COM", bx=block, dx=0x0100)
         self.assertTrue((self.base / "X").is_dir())
+
+    # mov al,[0080h] ; mov ah,4Ch ; int 21h      the exit code is the length of the command tail
+    TAIL_LENGTH = bytes([0xA0, 0x80, 0x00, 0xB4, 0x4C, 0xCD, 0x21])
+    # mov ah,40h ; mov bx,1 ; mov cx,2 ; mov dx,120h ; int 21h ; mov ax,4C00h ; int 21h       prints "hi" and ends
+    SAYS_HI = bytes([0xB4, 0x40, 0xBB, 0x01, 0x00, 0xB9, 0x02, 0x00, 0xBA, 0x20, 0x01, 0xCD, 0x21, 0xB8, 0x00, 0x4C,
+                     0xCD, 0x21])
+
+    def test_a_program_in_the_command_is_started_as_a_child_of_the_one_that_asked(self):
+        self.program("CHILD.COM", com(self.TAIL_LENGTH))
+        blocks = dict(self.state.memory.blocks)
+        self.shell("/c CHILD.COM arg>nul")
+        child = self.state.psp_seg
+        self.assertNotEqual(child, PARENT)
+        self.assertEqual(self.at_psp(0x16), PARENT)  # its parent is the program that asked: there is no shell between
+        self.assertEqual(len(self.state.parents), 1)
+        self.assertEqual((self.cpu.s[CPU.CS], self.cpu.ip), (child, 0x100))
+        self.assertEqual(self.cpu.r[CPU.AX], 0)
+        self.run_child()
+        self.assertEqual(self.state.memory.blocks, blocks)  # the memory of the child is given back
+        self.assertEqual((self.cpu.s[CPU.CS], self.cpu.ip), (0x0800, 2))
+
+    def test_the_text_after_the_name_is_the_command_tail_of_the_child(self):
+        self.program("CHILD.COM", com(self.TAIL_LENGTH))
+        self.shell("/c child /x  /y>nul")
+        child = self.state.psp_seg
+        self.assertEqual(self.at_psp(0x80, 1), 7)
+        self.assertEqual(bytes(self.cpu.mem[child * 16 + 0x81:child * 16 + 0x89]), b" /x  /y\r")
+        self.run_child()
+        self.call(0x4D00)
+        self.assertEqual(self.cpu.r[CPU.AX], 7)  # the exit code of the child is the one the parent gets
+
+    def test_no_arguments_is_an_empty_tail(self):
+        self.program("CHILD.COM", com(self.TAIL_LENGTH))
+        self.shell("/c child")
+        self.assertEqual(bytes(self.cpu.mem[self.state.psp_seg * 16 + 0x80:self.state.psp_seg * 16 + 0x82]), b"\0\r")
+        self.run_child()
+        self.call(0x4D00)
+        self.assertEqual(self.cpu.r[CPU.AX], 0)
+
+    def test_the_output_of_the_child_goes_to_the_console_unless_the_line_ends_with_nul(self):
+        import contextlib
+        import io
+        self.program("CHILD.COM", com(self.SAYS_HI, "hi"))
+        for line, shown in (("/c child", "hi"), ("/c child >nul", ""), ("/c child> nul", "")):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.shell(line)
+                self.run_child()
+            self.assertEqual(out.getvalue(), shown, line)
+
+    def test_in_the_child_the_standard_output_is_the_nul_device_and_the_rest_is_as_it_was(self):
+        from mydos.handles import Console, NullDevice
+        self.program("CHILD.COM", com(self.TAIL_LENGTH))
+        self.shell("/c child>nul")
+        handles = self.state.handles
+        self.assertEqual(handles.get(1), NullDevice("NUL"))
+        self.assertEqual((handles.get(0), handles.get(2)), (Console("stdout"), Console("stderr")))
+        parents = self.state.parents[-1].handles
+        self.assertEqual(parents.get(1), Console("stdout"))  # the one that asked keeps its own
+        self.run_child()
+        self.assertEqual(self.state.handles.get(1), Console("stdout"))
+
+    def test_the_child_shares_the_files_of_the_parent_as_after_any_exec(self):
+        self.program("CHILD.COM", com(self.TAIL_LENGTH))
+        self.call(0x3D00, "NOTES.TXT")
+        inherited = self.state.handles.get(5)
+        self.shell("/c child>nul")
+        self.assertIs(self.state.handles.get(5), inherited)
+        self.run_child()
+        self.assertFalse(inherited.file.closed)
+
+    def test_the_program_is_looked_for_in_the_path_of_the_environment_when_it_is_not_here(self):
+        self.program("CHILD.COM", com(self.TAIL_LENGTH))
+        self.call(0x3B00, "GAMES")  # the current directory has no CHILD.COM, and PATH is C:\
+        self.shell("/c child")
+        self.assertNotEqual(self.state.psp_seg, PARENT)
+        self.run_child()
+
+    def test_the_environment_of_the_child_has_its_own_name_and_the_strings_of_the_parent(self):
+        self.program("CHILD.COM", com(self.TAIL_LENGTH))
+        self.shell("/c child")
+        env = self.at_psp(0x2C)
+        text = bytes(self.cpu.rb(env, i) for i in range(80))
+        self.assertTrue(text.startswith(b"COMSPEC=C:\\COMMAND.COM\0PATH=C:\\\0\0\x01\0C:\\CHILD.COM\0"), text)
+        self.run_child()
+
+    def test_an_exe_is_started_too_and_its_exit_code_comes_back(self):
+        self.program("TOOL.EXE", exe(EXIT(9)))
+        self.shell("/c tool")
+        child = self.state.psp_seg
+        self.assertEqual((self.cpu.s[CPU.CS], self.cpu.ip), (child + 0x10, 0))
+        self.run_child()
+        self.call(0x4D00)
+        self.assertEqual(self.cpu.r[CPU.AX], 9)
+
+    def test_a_program_that_is_not_there_is_said_to_be_a_bad_command_and_nothing_is_started(self):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.shell("/c nothing arg>nul")
+        self.assertEqual(out.getvalue(), "Bad command or file name\r\n")
+        self.assertEqual((self.state.psp_seg, self.state.parents), (PARENT, []))
+        self.assertIsNone(self.failed())
+        self.assertEqual((self.cpu.s[CPU.CS], self.cpu.ip), (0x0800, 2))
+
+    def set_environment(self, *strings):
+        """Give the running program (the parent) an environment of these strings, at 2800h."""
+        data = b"\0".join(text.encode() for text in strings) + b"\0\0"
+        for i, byte in enumerate(data):
+            self.cpu.wb(0x2800, i, byte)
+        self.cpu.ww(PARENT, 0x2C, 0x2800)
+
+    def test_the_directories_of_path_are_those_of_the_environment_without_the_empty_ones(self):
+        self.set_environment("COMSPEC=C:\\COMMAND.COM", "PATH=C:\\;;D:\\X;")
+        self.assertEqual(process.search_path(self.cpu, self.state), ["C:\\", "D:\\X"])
+
+    def test_path_is_found_whatever_the_case_of_its_name_and_where_it_is_among_the_strings(self):
+        for strings in (("path=C:\\A",), ("A=1", "Path=C:\\A", "B=2"), ("PATH=C:\\A", "PATH=C:\\B")):
+            self.set_environment(*strings)
+            self.assertEqual(process.search_path(self.cpu, self.state), ["C:\\A"], strings)
+
+    def test_an_environment_with_no_path_has_no_directories_to_look_in(self):
+        self.set_environment("COMSPEC=C:\\COMMAND.COM", "XPATH=C:\\", "PATHX=C:\\")
+        self.assertEqual(process.search_path(self.cpu, self.state), [])
+
+    def test_the_directories_of_a_path_that_the_environment_names_are_where_the_program_is_looked_for(self):
+        self.program("CHILD.COM", com(self.TAIL_LENGTH))
+        self.call(0x3B00, "GAMES")
+        self.set_environment("Path=C:\\")
+        self.shell("/c child")
+        self.assertNotEqual(self.state.psp_seg, PARENT)
+        self.run_child()
+        self.set_environment("COMSPEC=C:\\COMMAND.COM")  # and with no PATH it is not found from here
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.shell("/c child")
+        self.assertEqual(out.getvalue(), "Bad command or file name\r\n")
+        self.assertEqual(self.state.psp_seg, PARENT)
+
+    def test_a_file_the_parent_had_as_its_standard_output_is_closed_when_the_parent_lets_go_after_the_child(self):
+        from mydos.handles import OpenFile
+        self.program("CHILD.COM", com(self.TAIL_LENGTH))
+        file = self.volumes.filesystems[3].create(["OUT.TXT"])
+        redirected = OpenFile(file, "D:\\OUT.TXT")
+        self.state.handles.slots[1] = redirected  # the parent's output goes to a file
+        self.shell("/c child>nul")
+        self.run_child()
+        self.assertIs(self.state.handles.get(1), redirected)
+        self.assertFalse(file.closed)
+        self.state.handles.close(1)  # the last one to have it
+        self.assertTrue(file.closed)
 
     def test_the_exit_code_of_the_shell_is_what_ah_4dh_gives_afterwards(self):
         from unittest import mock

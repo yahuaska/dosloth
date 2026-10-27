@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from . import command, flags, loader, psp
 from .cpu import CPU, Exit
 from .filesystem import FILE_NOT_FOUND, PATH_NOT_FOUND, FsError
-from .handles import HandleTable
+from .handles import HandleTable, NullDevice
 
 INSUFFICIENT_MEMORY = 8
 BAD_FORMAT = 11  # a .EXE with a header that is not all there
@@ -64,6 +64,15 @@ def read_tail(cpu, block):
     return read_bytes(cpu, tail_segment, tail_offset + 1, length).decode("cp437")
 
 
+def search_path(cpu, state):
+    """The directories of PATH in the environment of the running program, as a list of DOS paths."""
+    for entry in read_environment(cpu, cpu.rw(state.psp_seg, 0x2C)):
+        text = entry.decode("cp437")
+        if text[:5].upper() == "PATH=":
+            return [directory for directory in text[5:].split(";") if directory]
+    return []
+
+
 def start(cpu, state, where, block):
     """AH=4Bh, AL=00h for the file at `where` (a volumes.Location). The file is read and started; but a COMMAND.COM
     that is not there (nor its directory: a program may look for it wherever its COMSPEC says) is the pocket one, see
@@ -75,27 +84,38 @@ def start(cpu, state, where, block):
     except FsError as error:
         if error.code not in (FILE_NOT_FOUND, PATH_NOT_FOUND) or not command.is_command_com(where.parts):
             raise
-        state.exit_status = command.Shell(state.volumes).run(read_tail(cpu, block))
+        done = command.Shell(state.volumes, search_path=search_path(cpu, state)).run(read_tail(cpu, block))
+        if isinstance(done, command.Launch):  # a program: it is the child of the one that asked, with no shell between
+            with done.where.filesystem.open(done.where.parts) as program:
+                execute(cpu, state, program.read(), done.where.dos_path(), tail=done.tail.encode("cp437"),
+                        null_output=done.null_output)
+            return
+        state.exit_status = done
         cpu.r[CPU.AX] = 0
         cpu.set_flag(flags.CF, False)
         return
     execute(cpu, state, data, where.dos_path(), block)
 
 
-def execute(cpu, state, data, dos_path, block):
+def execute(cpu, state, data, dos_path, block=None, tail=b"", null_output=False):
     """AH=4Bh, AL=00h: load the program in `data` (the file; `dos_path` is its name) and start it.
 
     `block` is the segment and offset of the parameter block: the segment of the environment (0: the parent's),
-    and the far pointers to the command tail and to the two FCBs. Raises an FsError for what DOS answers with an
-    error: 8 if there is not memory enough, 11 for a .EXE with no header.
+    and the far pointers to the command tail and to the two FCBs. Without one (a program that the pocket
+    COMMAND.COM runs) the environment is the parent's, the command tail is `tail` (the bytes after the name,
+    without the length and the carriage return) and the FCBs are blank; and `null_output` sends the standard output
+    of the new program to the NUL device. Raises an FsError for what DOS answers with an error: 8 if there is not
+    memory enough, 11 for a .EXE with no header.
     """
     try:
         minimum, maximum = loader.memory_needed(data)
     except ValueError as error:
         raise FsError(BAD_FORMAT, str(error)) from None
-    segment, offset = block
     parent_psp = state.psp_seg
-    env_source = cpu.rw(segment, offset) or cpu.rw(parent_psp, 0x2C)
+    env_source = cpu.rw(parent_psp, 0x2C)
+    if block is not None:
+        segment, offset = block
+        env_source = cpu.rw(segment, offset) or env_source
     strings = read_environment(cpu, env_source)
     env_size = (len(psp.environment(dos_path, strings)) + 15) // 16
     env_seg = state.memory.allocate(env_size, parent_psp)
@@ -111,15 +131,22 @@ def execute(cpu, state, data, dos_path, block):
     state.memory.own(env_seg, child)
 
     psp.build(cpu, child, env_seg, child + size, dos_path, strings, parent_psp)
-    tail_at, fcb1_at, fcb2_at = (read_pointer(cpu, segment, offset + at) for at in (2, 6, 10))
-    cpu.mem[child * 16 + 0x80:child * 16 + 0x80 + TAIL_SIZE] = read_bytes(cpu, *tail_at, TAIL_SIZE)
-    for target, at in ((0x5C, fcb1_at), (0x6C, fcb2_at)):
-        cpu.mem[child * 16 + target:child * 16 + target + 16] = read_bytes(cpu, *at, 16)
+    if block is not None:
+        tail_at, fcb1_at, fcb2_at = (read_pointer(cpu, segment, offset + at) for at in (2, 6, 10))
+        cpu.mem[child * 16 + 0x80:child * 16 + 0x80 + TAIL_SIZE] = read_bytes(cpu, *tail_at, TAIL_SIZE)
+        for target, at in ((0x5C, fcb1_at), (0x6C, fcb2_at)):
+            cpu.mem[child * 16 + target:child * 16 + target + 16] = read_bytes(cpu, *at, 16)
+    else:
+        line = bytes([len(tail)]) + tail + b"\r"
+        cpu.mem[child * 16 + 0x80:child * 16 + 0x80 + len(line)] = line
 
     state.parents.append(Parent(parent_psp, list(cpu.r), list(cpu.s), cpu.ip, cpu.flags, state.dta, state.handles))
     state.psp_seg = child
     state.dta = (child, 0x80)
     state.handles = state.handles.copy()
+    if null_output:
+        state.handles.close(1)
+        state.handles.slots[1] = NullDevice("NUL")
     loader.load(cpu, data, child)
     cpu.r[CPU.AX] = 0
     cpu.flags = flags.ALWAYS_ONE | flags.IF
