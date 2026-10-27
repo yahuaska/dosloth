@@ -2291,6 +2291,83 @@ class TestDirectConsole(unittest.TestCase):
         self.assertTrue(self.cpu.get_flag(flags.ZF))
 
 
+class TestInputStatus(unittest.TestCase):
+    """INT 21h AH=0Bh: is there a character to read? AL = FFh or 00h, and nothing is taken."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        self.keyboard = bios.install(self.cpu)
+        self.state = dos.install(self.cpu)
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+
+    def call(self, ah=0x0B, al=0x77, cpu=None):
+        cpu = cpu or self.cpu
+        cpu.r[CPU.AX] = ah << 8 | al
+        cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = 0x1111, 0x2222, 0x3333
+        cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x4444, 0x5555
+        cpu.ip = 0
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cpu.step()
+        return cpu.get8(0)
+
+    def test_with_no_key_it_is_00(self):
+        self.assertEqual(self.call(), 0x00)
+
+    def test_with_a_key_it_is_ff_and_the_key_stays(self):
+        self.keyboard.press(0x1E, 0x61)
+        self.assertEqual(self.call(), 0xFF)
+        self.assertEqual(self.call(), 0xFF)  # asking again changes nothing
+        self.assertEqual(list(self.keyboard.buffer), [0x1E61])
+        self.assertEqual(self.call(ah=0x08), 0x61)  # the key is still there to read
+        self.assertEqual(self.call(), 0x00)
+
+    def test_it_follows_the_keys_that_are_read_one_by_one(self):
+        for scan, ascii_code in ((0x1E, 0x61), (0x30, 0x62)):
+            self.keyboard.press(scan, ascii_code)
+        answers = []
+        for _ in range(3):
+            answers.append(self.call())
+            if answers[-1]:
+                self.call(ah=0x08)
+        self.assertEqual(answers, [0xFF, 0xFF, 0x00])
+
+    def test_a_key_with_no_character_is_one_character_that_is_zero_and_another_that_is_its_scan_code(self):
+        self.keyboard.press(0x3B, 0x00)  # F1
+        self.assertEqual(self.call(), 0xFF)
+        self.assertEqual(self.call(ah=0x08), 0x00)  # the first half
+        self.assertEqual(self.call(), 0xFF)  # the scan code is still to be read, though the buffer is empty
+        self.assertEqual(self.call(ah=0x08), 0x3B)
+        self.assertEqual(self.call(), 0x00)
+
+    def test_a_scan_code_that_waits_is_there_with_other_keys_in_the_buffer_or_without(self):
+        self.state.pending_scan = 0x48
+        self.assertEqual(self.call(), 0xFF)
+        self.state.pending_scan = 0x00  # a scan code of 0 is still a character
+        self.assertEqual(self.call(), 0xFF)
+
+    def test_the_other_registers_and_the_flags_are_left_alone(self):
+        self.cpu.set_flag(flags.CF, True)
+        self.call()
+        cpu = self.cpu
+        self.assertEqual(cpu.get8(4), 0x0B)  # AH
+        self.assertEqual((cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX], cpu.r[CPU.SI], cpu.r[CPU.DI]),
+                         (0x1111, 0x2222, 0x3333, 0x4444, 0x5555))
+        self.assertTrue(cpu.get_flag(flags.CF))
+
+    def test_a_machine_with_no_bios_has_no_keys(self):
+        cpu = CPU()
+        dos.install(cpu)
+        cpu.s[CPU.CS] = 0x1000
+        cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+        self.assertEqual(self.call(cpu=cpu), 0x00)
+
+    def test_it_does_not_wait_and_does_not_need_anything_that_could_press_a_key(self):
+        self.assertIsNone(self.keyboard.waiter)
+        self.assertEqual(self.call(), 0x00)  # where AH=08h would stop the emulator
+
+
 class TestConsoleInputWithoutEcho(unittest.TestCase):
     """INT 21h AH=08h: wait for a key and take it, without showing it."""
 

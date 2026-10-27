@@ -178,6 +178,11 @@ def int21(cpu, state):
         # Ctrl-C is not looked for (the real call would run the Ctrl-C handler, INT 23h): it is a character like any.
         # A key with no character comes as 0 now and its scan code at the next call, as with AH=06h.
         cpu.set8(0, wait_for_key(cpu, state))
+    elif ah == 0x0B:  # is there a character to read? AL = 0FFh if so, 00h if not; the character is not taken
+        # A key that made no character has its scan code still to give, and that is a character here too. Ctrl-C is not
+        # looked for, as in AH=08h.
+        keyboard = cpu.keyboard
+        cpu.set8(0, 0xFF if state.pending_scan is not None or (keyboard is not None and keyboard.buffer) else 0x00)
     elif ah == 0x0E:  # make drive DL the current one (0 is A:, 1 is B:, ...); AL = how many drives there are
         drive = cpu.get8(2)  # 8-bit register 2 is DL
         if drive in state.config.disks:  # a drive that does not exist is not an error: the call just does nothing
