@@ -4,3 +4,4 @@ __pycache__/
 *.state
 /samples/*
 !/samples/README.md
+/XCOMA/
