@@ -24,16 +24,21 @@ PLAIN = {
     Op.RET_NEAR: "ret", Op.RETF: "retf", Op.IRET: "iret", Op.LEAVE: "leave",
     Op.CMC: "cmc", Op.CLC: "clc", Op.STC: "stc", Op.CLI: "cli", Op.STI: "sti", Op.CLD: "cld", Op.STD: "std",
     Op.SCASB: "scasb", Op.SCASW: "scasw", Op.MOVSB: "movsb", Op.MOVSW: "movsw", Op.CMPSB: "cmpsb", Op.CMPSW: "cmpsw",
-    Op.STOSB: "stosb", Op.STOSW: "stosw", Op.LODSB: "lodsb", Op.LODSW: "lodsw",
+    Op.STOSB: "stosb", Op.STOSW: "stosw", Op.LODSB: "lodsb", Op.LODSW: "lodsw", Op.XLAT: "xlat",
 }
-# the instructions that the prefix 66h means nothing to (those with no operand of a size that it changes): they are
-# written as they are with it. The same as the ones that CPU.build_ops32 takes from the 16-bit table, besides the
-# byte forms of the arithmetic block, which _decode_opcode32 sends there itself.
+# the instructions that _decode_opcode writes for the 32-bit size as well: the prefix 66h means nothing to them (no
+# operand of a size that it changes), or they know the size themselves (r.osize32) and their text has the same shape.
+# The same as the ones that CPU.build_ops32 takes from the 16-bit table, besides the byte forms of the arithmetic
+# block, which _decode_opcode32 sends there itself.
 UNCHANGED_BY_66 = frozenset((
     Op.NOP, Op.CLC, Op.STC, Op.CLI, Op.STI, Op.CLD, Op.STD, Op.CMC, Op.HLT, Op.WAIT, Op.SAHF, Op.LAHF, Op.JMP_SHORT,
     Op.INT, Op.ALU_RM8_IMM8, Op.MOV_RM_REG, Op.MOV_RM_REG + 2, Op.TEST_RM_REG, Op.XCHG_RM_REG, Op.MOV_AL_MOFFS8,
     Op.MOV_MOFFS8_AL, Op.TEST_ACC_IMM, Op.MOV_RM_IMM, *range(Op.JCC, Op.JCC + 16),
-    *range(Op.MOV_R8_IMM8, Op.MOV_R8_IMM8 + 8)))
+    *range(Op.MOV_R8_IMM8, Op.MOV_R8_IMM8 + 8), Op.ENTER, Op.LEAVE, Op.RET_NEAR, Op.RET_NEAR_POP, Op.XLAT,
+    Op.GROUP3_RM, Op.GROUP3_RM + 1, Op.GROUP4_RM8, Op.GROUP5_RM16, Op.IMUL_RM_IMM16, Op.IMUL_RM_IMM8,
+    Op.SHIFT_RM_IMM8, Op.SHIFT_RM_IMM8 + 1, *range(Op.SHIFT_RM, Op.SHIFT_RM + 4), Op.LOOPNE, Op.LOOPE, Op.LOOP,
+    Op.JCXZ, Op.MOVSB, Op.CMPSB, Op.STOSB, Op.LODSB, Op.SCASB))
+STRING_32 = {Op.MOVSW: "movsd", Op.CMPSW: "cmpsd", Op.STOSW: "stosd", Op.LODSW: "lodsd", Op.SCASW: "scasd"}
 COMPARING = (Op.CMPSB, Op.CMPSW, Op.SCASB, Op.SCASW)  # these look at ZF, so a prefix F3 reads "repe"
 SHIFTS = ["rol", "ror", "rcl", "rcr", "shl", "shr", "sal", "sar"]  # by the ModRM reg field
 LOOPS = {Op.LOOPNE: "loopne", Op.LOOPE: "loope", Op.LOOP: "loop", Op.JCXZ: "jcxz"}
@@ -45,6 +50,7 @@ class _Reader:
     def __init__(self, cpu, seg, off):
         self.cpu, self.seg, self.start, self.pos = cpu, seg, off, off
         self.addr32 = cpu.code32  # the addresses are of 32 bits: the code is a 32-bit one, or the prefix 67h says so
+        self.osize32 = cpu.code32  # the operands are of 32 bits: the same, with 66h
 
     def u8(self):
         v = self.cpu.rb(self.seg, self.pos)
@@ -65,6 +71,23 @@ class _Reader:
 
     def length(self):
         return (self.pos - self.start) & 0xFFFF
+
+
+SIZE_NAMES = {8: "byte", 16: "word", 32: "dword"}
+REGS_BY_BITS = {8: REG8, 16: REG16, 32: REG32}
+
+
+def _bits_of(r, op):
+    """The size of the operand of an opcode whose low bit says byte or word: 8, 16, or 32 for a word with the size
+    of 32 bits."""
+    return (32 if r.osize32 else 16) if op & 1 else 8
+
+
+def _constant(r, bits):
+    """A constant of the size of the operand, after the ModRM bytes, as hex."""
+    if bits == 8:
+        return f"{r.u8():02X}"
+    return f"{r.u16():04X}" if bits == 16 else f"{r.u32():08X}"
 
 
 def _signed(v):
@@ -145,7 +168,6 @@ def _direct(r, seg_override):
 def _decode(r):
     """Return the text of the instruction at the reader, or None if the opcode is not known."""
     seg_override = rep = None
-    osize32 = r.cpu.code32
     op = r.u8()
     while True:  # prefixes, as in CPU.step
         if op in SEG_PREFIXES:
@@ -153,14 +175,14 @@ def _decode(r):
         elif op in (Op.REP_PREFIX, Op.REPNE_PREFIX):
             rep = op
         elif op == Op.OPSIZE_PREFIX:
-            osize32 = not r.cpu.code32
+            r.osize32 = not r.cpu.code32
         elif op == Op.ADDRSIZE_PREFIX:
             r.addr32 = not r.cpu.code32
         else:
             break
         op = r.u8()
 
-    text = _decode_opcode32(r, op, seg_override) if osize32 else _decode_opcode(r, op, seg_override)
+    text = _decode_opcode32(r, op, seg_override) if r.osize32 else _decode_opcode(r, op, seg_override)
     if text is None:
         return None
     if rep == Op.REPNE_PREFIX:
@@ -225,6 +247,20 @@ def _decode_opcode32(r, op, seg_override):
         return "pushfd" if op == Op.PUSHF else "popfd"
     if op in (Op.CBW, Op.CWD):
         return "cwde" if op == Op.CBW else "cdq"
+    if op == Op.PUSH_IMM16:
+        return f"push {r.u32():08X}"
+    if op == Op.PUSH_IMM8:
+        return f"push {_signed(r.s8())}"
+    if op in (Op.PUSHA, Op.POPA):
+        return "pushad" if op == Op.PUSHA else "popad"
+    if op == Op.POP_RM16:
+        reg, rm, is_mem = _modrm(r, seg_override, 32)
+        return f"pop {'dword ' if is_mem else ''}{rm}" if reg == 0 else None
+    if op in (Op.CALL_NEAR, Op.JMP_NEAR):
+        d = r.u32()
+        return f"{'call' if op == Op.CALL_NEAR else 'jmp'} {(r.pos + d) & 0xFFFF:04X}"  # cut to 16 bits
+    if op in STRING_32:
+        return STRING_32[op]
     if op in UNCHANGED_BY_66:
         return _decode_opcode(r, op, seg_override)
     return None  # an instruction that has a 32-bit form that we do not know: the CPU stops at it as well
@@ -336,25 +372,33 @@ def _decode_opcode(r, op, seg_override):
             return None
         return f"{'dec' if reg else 'inc'} {'byte ' if is_mem else ''}{rm}"
     if op == Op.GROUP5_RM16:
-        reg, rm, is_mem = _modrm(r, seg_override, 16)
-        word = f"word {rm}" if is_mem else rm
+        bits = 32 if r.osize32 else 16
+        reg, rm, is_mem = _modrm(r, seg_override, bits)
+        word = f"{'dword' if bits == 32 else 'word'} {rm}" if is_mem else rm
         if reg in (0, 1, 2, 4, 6):
             return f"{['inc', 'dec', 'call', None, 'jmp', None, 'push'][reg]} {word}"
-        if reg in (3, 5) and is_mem:  # a far pointer needs memory
+        if reg in (3, 5) and is_mem and bits == 16:  # a far pointer needs memory (and a 16:32 one has no form yet)
             return f"{'call' if reg == 3 else 'jmp'} far {rm}"
         return None
     if op in (Op.GROUP3_RM, Op.GROUP3_RM + 1):
-        bits = 16 if op & 1 else 8
+        bits = _bits_of(r, op)
         reg, rm, is_mem = _modrm(r, seg_override, bits)
-        size = ("word " if bits == 16 else "byte ") if is_mem else ""
+        size = f"{SIZE_NAMES[bits]} " if is_mem else ""
         if reg in (0, 1):  # TEST has a constant after the ModRM bytes
-            return f"test {size}{rm}, {r.u16():04X}" if bits == 16 else f"test {size}{rm}, {r.u8():02X}"
+            return f"test {size}{rm}, {_constant(r, bits)}"
         return f"{['', '', 'not', 'neg', 'mul', 'imul', 'div', 'idiv'][reg]} {size}{rm}"
-    if Op.SHIFT_RM <= op < Op.SHIFT_RM + 4:
-        bits = 16 if op & 1 else 8
+    if Op.SHIFT_RM <= op < Op.SHIFT_RM + 4 or op in (Op.SHIFT_RM_IMM8, Op.SHIFT_RM_IMM8 + 1):
+        bits = _bits_of(r, op)
         reg, rm, is_mem = _modrm(r, seg_override, bits)
-        size = ("word " if bits == 16 else "byte ") if is_mem else ""
+        size = f"{SIZE_NAMES[bits]} " if is_mem else ""
+        if op < Op.SHIFT_RM:  # a count after the ModRM bytes
+            return f"{SHIFTS[reg]} {size}{rm}, {r.u8():02X}"
         return f"{SHIFTS[reg]} {size}{rm}, {'cl' if op & 2 else '1'}"
+    if op in (Op.IMUL_RM_IMM16, Op.IMUL_RM_IMM8):
+        bits = 32 if r.osize32 else 16
+        reg, rm, is_mem = _modrm(r, seg_override, bits)
+        imm = _constant(r, bits) if op == Op.IMUL_RM_IMM16 else _signed(r.s8())
+        return f"imul {REGS_BY_BITS[bits][reg]}, {rm}, {imm}"
     if op in (Op.LES, Op.LDS):
         reg, rm, is_mem = _modrm(r, seg_override, 16)
         if not is_mem:  # the CPU wants a pointer in memory

@@ -10,16 +10,26 @@ the operand size). The prefix is a flag of the instruction, `CPU.osize32`, and t
 are in a table of their own, `CPU.ops32`, which step() looks in when the flag is set. A 66h in front of an opcode that
 is not in it stops the emulator, so a 32-bit instruction that is not done yet is never taken for the 16-bit one.
 
-What is here: the data moves and the arithmetic with registers, memory (at a 16-bit address) and constants, the stack
-(PUSH, POP, PUSHFD, POPFD), INC and DEC, XCHG, TEST, LEA and the sign extensions CWDE and CDQ. Not yet: the 32-bit
-addresses (with a SIB byte, the prefix 67h), the shifts, MUL and DIV, the string instructions, the two-byte opcodes
-(0Fh) of the 386, and the other registers (the flat mode and the selectors).
+The addresses are of 32 bits when the prefix 67h is in front of the instruction (`CPU.asize32`, see modrm.py for the
+SIB byte). In a code segment of 32 bits (`CPU.code32`) both sizes are 32 by default, and the prefixes make them 16.
+
+What is here: the data moves and the arithmetic with registers, memory and constants, the stack (PUSH, POP, PUSHA,
+PUSHFD, ENTER, LEAVE), INC and DEC, XCHG, TEST, LEA, the sign extensions CWDE and CDQ, the shifts, NOT, NEG, MUL, DIV,
+the three-operand IMUL, the near jumps, calls and returns, and the string instructions, the loops and XLAT with the
+registers that 32-bit addresses call for. Not yet: the two-byte opcodes (0Fh) of the 386, the other registers
+(FS and GS), and what the flat mode needs: the instruction pointer and the stack pointer are still of 16 bits, so a
+near jump is cut to 16 bits.
 """
 from . import flags, modrm
 from .opcodes import Alu, Op
 
 # the alignment check flag, bit 18 of EFLAGS, as it is kept in CPU.eflags_high (the bits from the 16th up, shifted down)
 AC = 0x4
+
+
+def signed(value, bits):
+    """Read `value` (an unsigned number of `bits` bits) as a two's complement signed number."""
+    return value - (1 << bits) if value >> (bits - 1) else value
 
 
 class Ops32:
@@ -158,6 +168,199 @@ class Ops32:
         self.set32(self.DX, 0xFFFFFFFF if self.rh[self.AX] & 0x8000 else 0)
 
     # --- the table ---
+    # --- the stack and the frames of procedures ---
+    def push_imm32(self, op):
+        """Push a constant of 32 bits (68), or a byte widened to 32 bits (6A: 6A FE pushes FFFFFFFEh)."""
+        if op == Op.PUSH_IMM16:
+            self.push32(self.fetch32())
+        else:
+            d = self.fetch8()
+            self.push32((d - 256 if d & 0x80 else d) & 0xFFFFFFFF)
+
+    def pusha32(self, op):
+        """Push the eight 32-bit registers (66 60): EAX, ECX, EDX, EBX, the ESP from before, EBP, ESI, EDI."""
+        original_sp = self.get32(self.SP)
+        for reg in (self.AX, self.CX, self.DX, self.BX):
+            self.push32(self.get32(reg))
+        self.push32(original_sp)
+        for reg in (self.BP, self.SI, self.DI):
+            self.push32(self.get32(reg))
+
+    def popa32(self, op):
+        """Take the eight 32-bit registers back (66 61): EDI, ESI, EBP, the saved ESP is thrown away, EBX ... EAX."""
+        for reg in (self.DI, self.SI, self.BP):
+            self.set32(reg, self.pop32())
+        self.pop32()
+        for reg in (self.BX, self.DX, self.CX, self.AX):
+            self.set32(reg, self.pop32())
+
+    def pop_rm32(self, op):
+        """Take a doubleword off the stack into a register or into memory (66 8F /0)."""
+        m = modrm.decode(self, self.seg_override)
+        if m.reg != 0:
+            raise NotImplementedError(f"opcode 66 8F /{m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+        m.write(self, 32, self.pop32())
+
+    def enter32(self, op):
+        """Build the stack frame of a procedure with doublewords (66 C8): see CPU.enter. The frame pointers of the
+        outer procedures are 4 bytes apart."""
+        size = self.fetch16()
+        level = self.fetch8() & 0x1F
+        self.push32(self.get32(self.BP))
+        frame = self.get32(self.SP)
+        for _ in range(level - 1):
+            self.set32(self.BP, self.get32(self.BP) - 4)
+            self.push32(self.rd(self.s[self.SS], self.r[self.BP]))
+        if level:
+            self.push32(frame)
+        self.set32(self.BP, frame)
+        self.r[self.SP] = (self.r[self.SP] - size) & 0xFFFF
+
+    def leave32(self, op):
+        """Tear down a frame of doublewords (66 C9): SP <- BP, then EBP <- a doubleword off the stack."""
+        self.r[self.SP] = self.r[self.BP]
+        self.set32(self.BP, self.pop32())
+
+    # --- jumps, calls and returns: the distance and the stack have 32 bits, the instruction pointer has not yet
+    def fetch_rel32(self):
+        """Read the distance of 32 bits after an opcode and return the address it points to, cut to 16 bits."""
+        d = self.fetch32()
+        return (self.ip + d) & 0xFFFF
+
+    def call_near32(self, op):
+        """Call a procedure (66 E8 + a distance of 32 bits): the return address goes on the stack as a doubleword."""
+        target = self.fetch_rel32()
+        self.push32(self.ip)
+        self.ip = target
+
+    def jmp_near32(self, op):
+        """Jump to a place at a distance of 32 bits (66 E9)."""
+        self.ip = self.fetch_rel32()
+
+    def ret_near32(self, op):
+        """Return from a procedure: the address is a doubleword (66 C3)."""
+        self.ip = self.pop32() & 0xFFFF
+
+    def ret_near_pop32(self, op):
+        """Return from a procedure and drop its arguments (66 C2 + imm16): the address is a doubleword."""
+        count = self.fetch16()
+        self.ip = self.pop32() & 0xFFFF
+        self.r[self.SP] = (self.r[self.SP] + count) & 0xFFFF
+
+    def group5_rm32(self, op):
+        """INC, DEC, CALL, JMP and PUSH of a 32-bit register or memory operand (66 FF, by the 'reg' field).
+
+        The far forms (CALL FAR and JMP FAR, 3 and 5) take a pointer of 16:32, which needs selectors: they stop.
+        """
+        m = modrm.decode(self, self.seg_override)
+        if m.reg in (0, 1):
+            m.write(self, 32, self.inc_dec(m.read(self, 32), 32, decrement=bool(m.reg)))
+        elif m.reg == 2:  # read the operand before pushing: it may be addressed through SP
+            target = m.read(self, 32)
+            self.push32(self.ip)
+            self.ip = target & 0xFFFF
+        elif m.reg == 4:
+            self.ip = m.read(self, 32) & 0xFFFF
+        elif m.reg == 6:  # read first: PUSH ESP pushes the value it had before
+            self.push32(m.read(self, 32))
+        else:
+            raise NotImplementedError(f"opcode 66 FF /{m.reg} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+
+    # --- multiplying with a constant ---
+    def imul_imm(self, op):
+        """A register <- the r/m operand times a constant, signed (69: the constant is a word or a doubleword, 6B: a
+        byte, widened). 80186 and later; the size is that of the operands, 16 or 32. CF and OF say that the product
+        does not fit in the register; the other flags are left as they were."""
+        m = modrm.decode(self, self.seg_override)
+        bits = 32 if self.osize32 else 16
+        if op == Op.IMUL_RM_IMM16:
+            imm = signed(self.fetch32() if bits == 32 else self.fetch16(), bits)
+        else:
+            imm = signed(self.fetch8(), 8)
+        product = signed(m.read(self, bits), bits) * imm
+        self.set_reg(m.reg, bits, product)
+        doesnt_fit = not -(1 << (bits - 1)) <= product < 1 << (bits - 1)
+        self.set_flag(flags.CF, doesnt_fit)
+        self.set_flag(flags.OF, doesnt_fit)
+
+    # --- the instructions that work with SI, DI, CX and BX as addresses and counters ---
+    def string32(self, op):
+        """The string instructions A4-A7 and AA-AF, for the sizes and the addresses of any width.
+
+        The operand is a doubleword with the size of 32 bits (an odd opcode), and the registers are ESI, EDI and ECX
+        when the addresses are of 32 bits (and SI, DI and CX as in CPU.string_op otherwise). The rest is as there: the
+        direction flag, REP counting down the counter, REPE and REPNE stopping the comparing ones on the flag.
+        """
+        bits = (32 if self.osize32 else 16) if op & 1 else 8
+        step = -(bits // 8) if self.get_flag(flags.DF) else bits // 8
+        wide = self.asize32
+        mask = 0xFFFFFFFF if wide else 0xFFFF
+        read = (self.rb, self.rw, self.rd)[bits // 16]
+        write = (self.wb, self.ww, self.wd)[bits // 16]
+        regs, source, target = self.r, self.SI, self.DI
+        counter = self.CX
+
+        def get(n):
+            return self.get32(n) if wide else regs[n]
+
+        def put(n, value):
+            if wide:
+                self.set32(n, value)
+            else:
+                regs[n] = value & mask
+
+        kind = op & 0xFE
+        compares = kind in (0xA6, 0xAE)
+
+        def one():
+            if kind == 0xA4:  # movs
+                write(self.s[self.ES], get(target), read(self.data_segment(), get(source)))
+                put(source, get(source) + step)
+                put(target, get(target) + step)
+            elif kind == 0xA6:  # cmps
+                self.sub_with_flags(read(self.data_segment(), get(source)), read(self.s[self.ES], get(target)), bits)
+                put(source, get(source) + step)
+                put(target, get(target) + step)
+            elif kind == 0xAA:  # stos
+                write(self.s[self.ES], get(target), self.get_reg(self.AX, bits))
+                put(target, get(target) + step)
+            elif kind == 0xAC:  # lods
+                self.set_reg(self.AX, bits, read(self.data_segment(), get(source)))
+                put(source, get(source) + step)
+            else:  # scas
+                self.sub_with_flags(self.get_reg(self.AX, bits), read(self.s[self.ES], get(target)), bits)
+                put(target, get(target) + step)
+
+        if self.rep is None:
+            one()
+            return
+        while get(counter) != 0:
+            one()
+            put(counter, get(counter) - 1)
+            if compares and (self.rep == Op.REPNE_PREFIX) == self.get_flag(flags.ZF):
+                break
+
+    def loop_a32(self, op):
+        """LOOPNE, LOOPE, LOOP and JCXZ (E0-E3) with 32-bit addresses: the counter is ECX, and JCXZ is JECXZ."""
+        target = self.fetch_rel8()
+        if op == Op.JCXZ:
+            if self.get32(self.CX) == 0:
+                self.ip = target
+            return
+        count = (self.get32(self.CX) - 1) & 0xFFFFFFFF
+        self.set32(self.CX, count)
+        zero = self.get_flag(flags.ZF)
+        if count != 0 and (op == Op.LOOP or zero == (op == Op.LOOPE)):
+            self.ip = target
+
+    def xlat(self, op):
+        """AL <- the byte at DS:[BX + AL] (D7): a lookup in a table of bytes. With 32-bit addresses, EBX + AL."""
+        if self.asize32:
+            off = (self.get32(self.BX) + self.get8(0)) & 0xFFFFFFFF
+        else:
+            off = (self.r[self.BX] + self.get8(0)) & 0xFFFF
+        self.set8(0, self.rb(self.data_segment(), off))
+
     def build_ops32(self):
         """The table of the opcodes that have a 32-bit form, or that 66h means nothing to: {opcode: handler}."""
         ops, table = self.ops, {}
@@ -194,4 +397,26 @@ class Ops32:
         table[Op.TEST_ACC_IMM + 1] = self.test_eax_imm32
         table[Op.PUSHF], table[Op.POPF] = self.pushfd, self.popfd
         table[Op.CBW], table[Op.CWD] = self.cwde, self.cdq
+        # shifts, NOT, NEG, MUL, DIV and the three-operand IMUL work out their size from the opcode and the prefix
+        same(*range(Op.SHIFT_RM, Op.SHIFT_RM + 4), Op.SHIFT_RM_IMM8, Op.SHIFT_RM_IMM8 + 1, Op.GROUP3_RM,
+             Op.GROUP3_RM + 1, Op.GROUP4_RM8, Op.IMUL_RM_IMM16, Op.IMUL_RM_IMM8, Op.XLAT,
+             *range(Op.LOOPNE, Op.JCXZ + 1))
+        table[Op.GROUP5_RM16] = self.group5_rm32
+        table[Op.PUSH_IMM16] = table[Op.PUSH_IMM8] = self.push_imm32
+        table[Op.PUSHA], table[Op.POPA] = self.pusha32, self.popa32
+        table[Op.POP_RM16] = self.pop_rm32
+        table[Op.ENTER], table[Op.LEAVE] = self.enter32, self.leave32
+        table[Op.CALL_NEAR], table[Op.JMP_NEAR] = self.call_near32, self.jmp_near32
+        table[Op.RET_NEAR], table[Op.RET_NEAR_POP] = self.ret_near32, self.ret_near_pop32
+        for code in (*range(0xA4, 0xA8), *range(0xAA, 0xB0)):
+            table[code] = self.string32
+        return table
+
+    def build_address_ops32(self):
+        """What the instructions that use SI, DI, CX and BX are when the addresses are of 32 bits: {opcode: handler}.
+        The string instructions work out their operand size themselves, so they are the same ones as in the table of
+        the 32-bit forms."""
+        table = {code: self.string32 for code in (*range(0xA4, 0xA8), *range(0xAA, 0xB0))}
+        table.update({code: self.loop_a32 for code in range(Op.LOOPNE, Op.JCXZ + 1)})
+        table[Op.XLAT] = self.xlat
         return table

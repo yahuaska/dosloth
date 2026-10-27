@@ -31,6 +31,8 @@ class Op(IntEnum):
     PUSHA = 0x60         # 80186 and later: push AX CX DX BX SP BP SI DI
     POPA = 0x61          # 80186 and later: pop DI SI BP (skip SP) BX DX CX AX
     PUSH_IMM16 = 0x68    # 80186 and later, followed by imm16: push the constant
+    IMUL_RM_IMM16 = 0x69  # 80186 and later, + ModRM + imm16 (imm32): reg <- r/m times the constant
+    IMUL_RM_IMM8 = 0x6B   # 80186 and later, + ModRM + imm8 (sign-extended): reg <- r/m times the constant
     PUSH_IMM8 = 0x6A     # 80186 and later, followed by imm8: push the constant, sign-extended to a word
     TWO_BYTE = 0x0F      # 80386 and later: the first byte of an instruction of two; the second one says which
     JCC = 0x70           # 70..7F: conditional short jump, followed by a signed 8-bit displacement
@@ -76,6 +78,7 @@ class Op(IntEnum):
     LES = 0xC4           # + ModRM (memory): load a register and ES from a far pointer
     LDS = 0xC5           # + ModRM (memory): load a register and DS from a far pointer
     ENTER = 0xC8         # 80186 and later, followed by imm16 and imm8: build a stack frame
+    SHIFT_RM_IMM8 = 0xC0  # C0 (byte) and C1 (word) + ModRM + imm8: shift or rotate r/m by a constant; 80186 and later
     LEAVE = 0xC9         # 80186 and later: mov sp, bp ; pop bp
     RETF_POP = 0xCA      # followed by imm16: pops IP and CS, then drops that many bytes of arguments
     RETF = 0xCB          # pops IP, then CS
@@ -84,6 +87,7 @@ class Op(IntEnum):
     INT = 0xCD           # followed by the interrupt number
     AAM = 0xD4           # followed by the base (10 in practice): AH = AL // base, AL = AL % base
     AAD = 0xD5           # followed by the base: AL = AH * base + AL, AH = 0
+    XLAT = 0xD7          # AL <- the byte at DS:[BX + AL]
     SHIFT_RM = 0xD0      # D0..D3 + ModRM: shift or rotate r/m by 1 or by CL, the 'reg' field picks how (CPU.shift_rm)
     ESC = 0xD8           # D8..DF + ModRM: an instruction of the coprocessor (8087), which we do not have
     LOOPNE = 0xE0        # followed by a signed 8-bit displacement

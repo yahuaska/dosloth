@@ -517,25 +517,23 @@ class TestSignExtensions(Machine):
 
 class TestWhatIsNotDoneYet(Machine):
     def test_an_instruction_with_the_prefix_66_that_has_no_32_bit_form_yet_stops_the_emulator(self):
-        for opcode in (0x60, 0x61, 0x6A, 0x68, 0xF7, 0xF6 + 0, 0xD1, 0xC1, 0xD3, 0xA5, 0xA7, 0xAB, 0xAD, 0xAF, 0x0F,
-                       0xFF, 0xC9, 0xE8, 0xE9, 0x8C, 0x8E, 0x6B, 0x69):
-            if opcode == 0xF6:  # a byte form that the prefix does not change
-                continue
+        for opcode in (0x0F, 0x8C, 0x8E, 0x06, 0x07, 0x1E, 0x1F, 0x9A, 0xEA, 0xC4, 0xC5, 0xCA, 0xCB, 0xCF, 0xE5, 0xE7,
+                       0xED, 0xEF, 0x6D, 0x6F, 0xD8):
             cpu = self.start(bytes([0x66, opcode, 0xC0, 0, 0, 0, 0]))
             with self.assertRaisesRegex(NotImplementedError, f"opcode 66 {opcode:02X}, the 32-bit form, at 1000:0000"):
                 cpu.step()
 
     def test_the_message_has_the_bytes_from_the_prefix(self):
-        cpu = self.start(bytes([0x66, 0xF7, 0xE1, 0x90]))
-        with self.assertRaisesRegex(NotImplementedError, "66 f7 e1 90 00 00 00 00$"):  # eight bytes
+        cpu = self.start(bytes([0x66, 0x8C, 0xD8, 0x90]))
+        with self.assertRaisesRegex(NotImplementedError, "66 8c d8 90 00 00 00 00$"):  # eight bytes
             cpu.step()
 
     def test_a_16_bit_form_that_is_not_there_for_the_32_bit_one_is_not_taken_instead(self):
-        # F7 /4 is mul: with 66 it is a 32-bit mul, which is not done: it must not do the 16-bit one
-        cpu = self.start(bytes([0x66, 0xF7, 0xE1]), eax=0x10000, ecx=0x10000)
+        # 8C /3 is mov ax, ds: with 66 it is mov eax, ds, which is not done: it must not do the 16-bit one
+        cpu = self.start(bytes([0x66, 0x8C, 0xD8]), eax=0x12345678)
         with self.assertRaises(NotImplementedError):
             cpu.step()
-        self.assertEqual((cpu.get32(AX), cpu.get32(DX)), (0x10000, 0))
+        self.assertEqual(cpu.get32(AX), 0x12345678)
 
     def test_the_table_of_the_32_bit_forms_is_not_the_16_bit_table(self):
         cpu = CPU()
@@ -767,11 +765,8 @@ class TestAddresses32(Machine):
         cpu.step()  # mov ax, [bx]: 16 bits again: bx is 0, so DS:0
         self.assertEqual((cpu.r[AX], cpu.asize32), (0, False))
 
-    def test_the_string_instructions_and_the_loops_do_not_take_32_bit_addresses_yet(self):
-        for code in ([0x67, 0xA4], [0x67, 0xF3, 0xA5], [0x67, 0xAA], [0x67, 0xE2, 0xFE], [0x67, 0xE3, 0x00],
-                     [0x67, 0xD7], [0x67, 0xAE], [0x67, 0xAD], [0x67, 0xA7], [0x67, 0x6C], [0x67, 0x6F],
-                     [0x67, 0xAF], [0x67, 0xAB], [0x67, 0xAC], [0x67, 0xA5], [0x67, 0xE0, 0], [0x67, 0xE1, 0],
-                     [0x67, 0x6D], [0x67, 0x6E]):
+    def test_ins_and_outs_do_not_take_32_bit_addresses_yet(self):
+        for code in ([0x67, 0x6C], [0x67, 0x6D], [0x67, 0x6E], [0x67, 0x6F]):
             cpu = self.start(bytes(code))
             with self.assertRaisesRegex(NotImplementedError, "with 32-bit addresses at 1000:0000"):
                 cpu.step()

@@ -258,6 +258,72 @@ class TestAddresses32(unittest.TestCase):
         self.assertEqual(dis32("A1 02 00 00 00"), (5, "mov eax, [00000002]"))
 
 
+class TestInstructions32(unittest.TestCase):
+    """The text of the 32-bit forms of step 2b, and of the 186 instructions that came with them."""
+
+    def check(self, cases):
+        for code, text in cases:
+            with self.subTest(code=code):
+                data = bytes.fromhex(code)
+                self.assertEqual(dis(data), (len(data), text))
+
+    def test_shifts(self):
+        self.check((("66 D1 E3", "shl ebx, 1"), ("66 D3 EB", "shr ebx, cl"), ("66 C1 E3 04", "shl ebx, 04"),
+                    ("66 C1 26 00 01 04", "shl dword [0100], 04"), ("C0 EB 03", "shr bl, 03"),
+                    ("C1 E3 04", "shl bx, 04"), ("C1 3E 00 01 02", "sar word [0100], 02"), ("66 D1 C3", "rol ebx, 1")))
+
+    def test_group_3(self):
+        self.check((("66 F7 C3 78 56 34 12", "test ebx, 12345678"), ("66 F7 D3", "not ebx"), ("66 F7 DB", "neg ebx"),
+                    ("66 F7 E3", "mul ebx"), ("66 F7 EB", "imul ebx"), ("66 F7 F3", "div ebx"),
+                    ("66 F7 FB", "idiv ebx"), ("66 F7 36 00 01", "div dword [0100]"), ("F7 C3 34 12", "test bx, 1234"),
+                    ("F6 C3 80", "test bl, 80")))
+
+    def test_imul_with_a_constant(self):
+        self.check((("66 6B CB FE", "imul ecx, ebx, -2"), ("66 69 CB 78 56 34 12", "imul ecx, ebx, 12345678"),
+                    ("6B CB FE", "imul cx, bx, -2"), ("69 CB 00 10", "imul cx, bx, 1000"),
+                    ("66 6B 0E 00 01 0A", "imul ecx, [0100], A")))
+
+    def test_group_5_and_pop(self):
+        self.check((("66 FF C3", "inc ebx"), ("66 FF 06 00 01", "inc dword [0100]"), ("66 FF D3", "call ebx"),
+                    ("66 FF E3", "jmp ebx"), ("66 FF F3", "push ebx"), ("66 FF 36 00 01", "push dword [0100]"),
+                    ("66 8F C3", "pop ebx"), ("66 8F 06 00 01", "pop dword [0100]"),
+                    ("FF 36 00 01", "push word [0100]")))
+
+    def test_group_5_far_forms_have_no_32_bit_text(self):
+        self.assertEqual(dis(bytes.fromhex("66 FF 1E 00 01")), (1, "db 66"))
+        self.assertEqual(dis(bytes.fromhex("66 8F C8")), (1, "db 66"))
+
+    def test_the_stack(self):
+        self.check((("66 68 78 56 34 12", "push 12345678"), ("66 6A FE", "push -2"), ("66 60", "pushad"),
+                    ("66 61", "popad"), ("66 C8 0C 00 01", "enter 000C, 01"), ("66 C9", "leave"), ("66 C3", "ret"),
+                    ("66 C2 08 00", "ret 0008")))
+
+    def test_near_jumps_and_calls(self):
+        self.check((("66 E8 00 01 00 00", "call 0206"), ("66 E9 20 00 00 00", "jmp 0126"),
+                    ("66 E8 00 FF FF FF", "call 0006"),  # the target is cut to 16 bits, as the CPU does
+                    ("66 E9 00 00 01 00", "jmp 0106")))
+
+    def test_string_instructions(self):
+        self.check((("66 A5", "movsd"), ("66 A7", "cmpsd"), ("66 AB", "stosd"), ("66 AD", "lodsd"), ("66 AF", "scasd"),
+                    ("66 F3 A5", "rep movsd"), ("66 F3 A7", "repe cmpsd"), ("66 F2 AF", "repne scasd"),
+                    ("66 A4", "movsb"), ("67 A4", "movsb"), ("A5", "movsw")))
+
+    def test_loops_and_xlat(self):
+        self.check((("67 E2 FD", "loop 0100"), ("67 E3 10", "jcxz 0113"), ("D7", "xlat"), ("67 D7", "xlat"),
+                    ("66 E2 FE", "loop 0101")))
+
+    def test_in_a_code_segment_of_32_bits(self):
+        def dis32(text):
+            cpu = machine(bytes.fromhex(text))
+            cpu.code32 = True
+            return disasm(cpu, 0x1000, 0x100)
+        self.assertEqual(dis32("C1 E3 04"), (3, "shl ebx, 04"))
+        self.assertEqual(dis32("66 C1 E3 04"), (4, "shl bx, 04"))
+        self.assertEqual(dis32("F7 35 00 01 00 00"), (6, "div dword [00000100]"))
+        self.assertEqual(dis32("E8 00 01 00 00"), (5, "call 0205"))
+        self.assertEqual(dis32("F3 A5"), (2, "rep movsd"))
+
+
 class TestAgreesWithCpu32(unittest.TestCase):
     def test_every_opcode_that_has_a_32_bit_form_has_the_same_length_here(self):
         """If you teach the CPU a 32-bit instruction and forget disasm.py, this fails."""

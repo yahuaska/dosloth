@@ -1,7 +1,7 @@
 import mmap
 
 from . import flags, modrm
-from .ops32 import Ops32
+from .ops32 import Ops32, signed
 from .opcodes import Alu, Op
 
 
@@ -33,8 +33,8 @@ PREFIXES = frozenset((Op.ES_PREFIX, Op.CS_PREFIX, Op.SS_PREFIX, Op.DS_PREFIX, Op
                       Op.OPSIZE_PREFIX, Op.ADDRSIZE_PREFIX))
 
 
-# the opcodes that work with SI, DI, CX or BX as addresses or counters: with 32-bit addresses they would need ESI, EDI,
-# ECX and EBX, which they do not use yet, so they stop the emulator and do not do the wrong thing
+# the opcodes that work with SI, DI, CX or BX as addresses or counters: with 32-bit addresses they work with ESI, EDI,
+# ECX and EBX instead (see address_ops32 in ops32.py); those of this set that it does not have stop the emulator
 ADDRESS_SIZED = frozenset(range(0x6C, 0x70)) | frozenset(range(0xA4, 0xA8)) | frozenset(range(0xAA, 0xB0)) | frozenset(
     range(0xE0, 0xE4)) | {0xD7}
 
@@ -61,11 +61,6 @@ def condition_holds(flags_value, cc):
     of = bool(flags_value & flags.OF)
     holds = (of, cf, zf, cf or zf, sf, bool(flags_value & flags.PF), sf != of, zf or sf != of)[cc >> 1]
     return holds != bool(cc & 1)  # odd numbers are the opposite condition
-
-
-def signed(value, bits):
-    """Read `value` (an unsigned number of `bits` bits) as a two's complement signed number."""
-    return value - (1 << bits) if value >> (bits - 1) else value
 
 
 class CPU(Ops32):
@@ -215,6 +210,10 @@ class CPU(Ops32):
             self.ops[Op.MOV_RM_IMM + size] = self.mov_rm_imm
         for form in range(4):
             self.ops[Op.SHIFT_RM + form] = self.shift_rm
+        for size in range(2):
+            self.ops[Op.SHIFT_RM_IMM8 + size] = self.shift_rm
+        self.ops[Op.IMUL_RM_IMM16] = self.ops[Op.IMUL_RM_IMM8] = self.imul_imm
+        self.ops[Op.XLAT] = self.xlat
         for form in range(8):
             self.ops[Op.ESC + form] = self.esc
         for size in range(2):
@@ -231,6 +230,7 @@ class CPU(Ops32):
             self.ops[Op.MOV_R8_IMM8 + i] = self.mov_r8_imm8
             self.ops[Op.MOV_R16_IMM16 + i] = self.mov_r16_imm16
         self.ops32 = self.build_ops32()  # what the prefix 66h makes of them: see ops32.py
+        self.address_ops32 = self.build_address_ops32()  # and what the prefix 67h makes of some
 
     # --- memory ---
     def code_bytes(self):
@@ -576,10 +576,12 @@ class CPU(Ops32):
                 self.rep = op
             op = self.fetch8()
         handler = (self.ops32 if self.osize32 else self.ops).get(op)
-        if self.asize32 and op in ADDRESS_SIZED:
-            raise NotImplementedError(
-                f"opcode {op:02X} with 32-bit addresses at {self.s[self.CS]:04X}:{self.start_ip:04X}: "
-                f"{self.code_bytes().hex(' ')}")
+        if self.asize32 and op in ADDRESS_SIZED:  # these work with SI, DI, CX or BX: with ESI, EDI, ECX, EBX instead
+            handler = self.address_ops32.get(op)
+            if handler is None:
+                raise NotImplementedError(
+                    f"opcode {op:02X} with 32-bit addresses at {self.s[self.CS]:04X}:{self.start_ip:04X}: "
+                    f"{self.code_bytes().hex(' ')}")
         if handler is None:
             raw = self.code_bytes().hex(" ")
             what = f"opcode 66 {op:02X}, the 32-bit form," if self.osize32 else f"opcode {op:02X}"
@@ -1408,16 +1410,23 @@ class CPU(Ops32):
         """Shift or rotate a register or memory operand, by 1 or by the number in CL (opcodes D0-D3 + ModRM).
 
         Two bits of the opcode say what kind:
-            bit 0: the size of the operand, 0 = byte, 1 = word (as in opcodes 88 and 89)
+            bit 0: the size of the operand, 0 = byte, 1 = word (as in opcodes 88 and 89), or doubleword with 66h
             bit 1: how far, 0 = by one bit, 1 = by as many bits as CL says
-        so D0 is "byte, by 1", D1 "word, by 1", D2 "byte, by CL" and D3 "word, by CL". The 'reg' field
+        so D0 is "byte, by 1", D1 "word, by 1", D2 "byte, by CL" and D3 "word, by CL". C0 and C1 (80186 and later)
+        are the same with a count that is a byte after the ModRM bytes. A count counts its low 5 bits only, for
+        a doubleword and for C0 and C1. The 'reg' field
         of the ModRM byte says which of the eight operations; see shift_with_flags. Compilers use it
         for multiplying and dividing by powers of two: `shl bx, 1` is bx * 2, and
         `mov cx, 2` then `shl bx, cl` is bx * 4.
         """
         m = modrm.decode(self, self.seg_override)
-        bits = 16 if op & 1 else 8
-        count = self.get8(1) if op & 2 else 1  # 8-bit register 1 is CL
+        bits = (32 if self.osize32 else 16) if op & 1 else 8
+        if op < Op.SHIFT_RM:  # C0 and C1: the count is a byte after the ModRM bytes
+            count = self.fetch8() & 0x1F
+        else:
+            count = self.get8(1) if op & 2 else 1  # 8-bit register 1 is CL
+            if bits == 32:
+                count &= 0x1F  # a 386 uses the low 5 bits of the count
         m.write(self, bits, self.shift_with_flags(m.reg, m.read(self, bits), count, bits))
 
     def group3_rm(self, op):
@@ -1429,13 +1438,14 @@ class CPU(Ops32):
             3 NEG   change the sign                                        7 IDIV  the same, signed
 
         MUL, IMUL, DIV and IDIV have no second operand to name: they work on fixed registers (see
-        multiply and divide). The ModRM byte is followed by the constant only for TEST.
+        multiply and divide): AL, AX or EAX, and with the 32 bits DX:AX become EDX:EAX. The ModRM byte is followed
+        by the constant only for TEST.
         """
         m = modrm.decode(self, self.seg_override)
-        bits = 16 if op & 1 else 8
+        bits = (32 if self.osize32 else 16) if op & 1 else 8
         kind = m.reg
         if kind in (0, 1):
-            imm = self.fetch16() if bits == 16 else self.fetch8()  # after the ModRM bytes
+            imm = (self.fetch8, self.fetch16, self.fetch32)[bits // 16]()  # after the ModRM bytes
             self.set_logic_flags(m.read(self, bits) & imm, bits)
         elif kind == 2:
             m.write(self, bits, ~m.read(self, bits) & ((1 << bits) - 1))  # no flags change
@@ -1449,14 +1459,14 @@ class CPU(Ops32):
             self.divide(m.read(self, bits), bits, signed_numbers=(kind == 7))
 
     def multiply(self, operand, bits, signed_numbers):
-        """AL * operand into AX (bytes), or AX * operand into DX:AX (words): MUL and IMUL.
+        """AL * operand into AX (bytes), AX * operand into DX:AX (words), or EAX * operand into EDX:EAX: MUL and IMUL.
 
         The result is twice as wide as the factors, so it always fits. CF and OF say whether the upper
         half is needed: for MUL, whether it is not zero; for IMUL, whether it is more than a sign
         extension of the lower half (that is, the product does not fit in the width of the factors).
         The other flags are undefined on a real CPU; they are left as they were.
         """
-        a = self.get8(0) if bits == 8 else self.r[self.AX]  # 8-bit register 0 is AL
+        a = self.get_reg(self.AX, bits)  # AL, AX or EAX
         if signed_numbers:
             a, operand = signed(a, bits), signed(operand, bits)
         product = a * operand
@@ -1464,7 +1474,8 @@ class CPU(Ops32):
         if bits == 8:
             self.r[self.AX] = wide
         else:
-            self.r[self.AX], self.r[self.DX] = wide & 0xFFFF, wide >> 16
+            self.set_reg(self.AX, bits, wide)
+            self.set_reg(self.DX, bits, wide >> bits)
         if signed_numbers:
             needs_upper_half = not -(1 << (bits - 1)) <= product < 1 << (bits - 1)
         else:
@@ -1473,7 +1484,7 @@ class CPU(Ops32):
         self.set_flag(flags.OF, needs_upper_half)
 
     def divide(self, divisor, bits, signed_numbers):
-        """AX / divisor (bytes) or DX:AX / divisor (words): DIV and IDIV.
+        """AX / divisor (bytes), DX:AX / divisor (words) or EDX:EAX / divisor (doublewords): DIV and IDIV.
 
         Bytes: quotient in AL, remainder in AH. Words: quotient in AX, remainder in DX. The quotient is
         cut towards zero, and a remainder takes the sign of the dividend, as in C. A zero divisor, or a
@@ -1483,7 +1494,7 @@ class CPU(Ops32):
         if bits == 8:
             dividend = self.r[self.AX]
         else:
-            dividend = self.r[self.DX] << 16 | self.r[self.AX]
+            dividend = self.get_reg(self.DX, bits) << bits | self.get_reg(self.AX, bits)
         if signed_numbers:
             dividend, divisor = signed(dividend, 2 * bits), signed(divisor, bits)
         if divisor == 0:
@@ -1500,7 +1511,8 @@ class CPU(Ops32):
             self.set8(0, quotient & mask)  # AL
             self.set8(4, remainder & mask)  # AH
         else:
-            self.r[self.AX], self.r[self.DX] = quotient & mask, remainder & mask
+            self.set_reg(self.AX, bits, quotient & mask)
+            self.set_reg(self.DX, bits, remainder & mask)
 
     def group4_rm8(self, op):
         """Opcode FE: add 1 to (INC, reg field 0) or subtract 1 from (DEC, 1) a register or memory byte."""
