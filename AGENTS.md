@@ -14,6 +14,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/cpu.py`  - memory, registers, flags, instruction loop
 - `mydos/ops32.py` - the 386 part of the CPU (a mixin): the prefix 66h, the high halves of the 32-bit registers
   (`cpu.rh`), the table `cpu.ops32` of the 32-bit forms; real mode only so far, no 32-bit addressing
+- `mydos/pages.py` - the memory is a 256 MB private anonymous `mmap` (costs nothing until written); this finds the
+  parts that are not zero, for dumps and snapshots. Never copy or iterate all of `cpu.mem`: slice what you need
 - `mydos/dos.py`  - INT 21h and friends (Python-side handlers)
 - `mydos/bios.py` - BIOS interrupts (INT 1Ah time of day, INT 16h keyboard, INT 10h video: modes 03h/12h, the
   colors AH=10h, the VGA check; INT 11h equipment, INT 12h memory size), also Python-side handlers

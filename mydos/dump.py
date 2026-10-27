@@ -4,6 +4,7 @@ import os
 import re
 import sys
 
+from . import pages
 from .cpu import CPU
 
 REG16 = ["AX", "CX", "DX", "BX", "SP", "BP", "SI", "DI"]  # order of CPU.r
@@ -60,8 +61,11 @@ def write(cpu, prog_path, exc):
             info["memory_file"] = base + ".crash.mem"
             with open(base + ".crash.json", "w") as f:
                 json.dump(info, f, indent=2)
-            with open(base + ".crash.mem", "wb") as f:
-                f.write(cpu.mem)
+            with open(base + ".crash.mem", "wb") as f:  # the size of the memory, with holes where it is zeros
+                for address, data in pages.runs(cpu.mem):
+                    f.seek(address)
+                    f.write(data)
+                f.truncate(len(cpu.mem))
         except OSError as error:
             remove(base)
             problems.append(f"{base}: {error.strerror or error}")

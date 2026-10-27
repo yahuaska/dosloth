@@ -527,7 +527,7 @@ class TestWhatIsNotDoneYet(Machine):
 
     def test_the_message_has_the_bytes_from_the_prefix(self):
         cpu = self.start(bytes([0x66, 0xF7, 0xE1, 0x90]))
-        with self.assertRaisesRegex(NotImplementedError, "66 f7 e1 90"):
+        with self.assertRaisesRegex(NotImplementedError, "66 f7 e1 90 00 00 00 00$"):  # eight bytes
             cpu.step()
 
     def test_the_prefix_of_the_address_size_is_not_known_yet(self):

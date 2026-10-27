@@ -6,8 +6,9 @@ that cannot be saved, and the file must go on being readable when the code chang
 
 To go on from a snapshot, a machine is built as for a normal run, without a program, and then what the snapshot
 says is put over it. Whatever the snapshot does not mention (a part that did not exist yet when it was made) is
-left as the new machine made it. The memory comes back whole, and the parts of it that are ROM on a real machine are
-written again from the code, so that a snapshot of an older run points to the newest data.
+left as the new machine made it. The memory comes back whole (only what is not zero is in the file), and the parts
+of it that are ROM on a real machine are written again from the code, so that a snapshot of an older run points to
+the newest data.
 
 Not in a snapshot: the files of the host that a program changed since. They are what they are now, and the files
 that were open are opened again at the place they were at. A file that is gone is an error, said in plain words.
@@ -20,12 +21,13 @@ from collections import deque
 from dataclasses import asdict
 
 from . import machine as machine_module
+from . import pages
 from .filesystem import Entry, FsError, MemFs
 from .handles import Console, HandleTable, NullDevice, OpenFile
 from .process import Parent
 from .search import Searches
 
-VERSION = 1
+VERSION = 2  # 2: the memory is in runs of what is not zero; 1 had it all, the first megabyte
 STATE_MEMBER = "state.json"
 BLOB_MEMBER = "blob/{}"
 
@@ -169,8 +171,9 @@ def capture(machine, rewind=False):
         "version": VERSION,
         "program": machine.program,
         "disks": fingerprint(machine.config),
-        "cpu": {"mem": cpu.mem, "r": cpu.r, "rh": cpu.rh, "s": cpu.s, "ip": cpu.start_ip if rewind else cpu.ip,
-                "flags": cpu.flags, "eflags_high": cpu.eflags_high, "instructions": cpu.instructions - bool(rewind)},
+        "cpu": {"mem": {"size": len(cpu.mem), "runs": pages.runs(cpu.mem)}, "r": cpu.r, "rh": cpu.rh, "s": cpu.s,
+                "ip": cpu.start_ip if rewind else cpu.ip, "flags": cpu.flags, "eflags_high": cpu.eflags_high,
+                "instructions": cpu.instructions - bool(rewind)},
         "vga": dict(vars(machine.card)),
         "timer": [dict(vars(counter)) for counter in machine.timer.counters],
         "keyboard": machine.keyboard.buffer,
@@ -217,9 +220,17 @@ def restore(machine, packed, blobs):
                             f"drives with the same kinds of disk and mount; it had {data['disks']})")
     cpu, volumes, state = machine.cpu, machine.volumes, machine.state
     saved = data["cpu"]
-    if len(saved["mem"]) != len(cpu.mem):
-        raise SnapshotError("the memory of the snapshot is not the size of the memory of this machine")
-    cpu.mem[:] = saved["mem"]
+    memory = saved["mem"]
+    if isinstance(memory, (bytes, bytearray)):  # version 1: all of the first megabyte, in one piece
+        if len(memory) > len(cpu.mem):
+            raise SnapshotError("the memory of the snapshot is not the size of the memory of this machine")
+        cpu.mem[:len(memory)] = memory
+    else:
+        if memory["size"] != len(cpu.mem):
+            raise SnapshotError("the memory of the snapshot is not the size of the memory of this machine")
+        pages.erase(cpu.mem)
+        for address, run in memory["runs"]:
+            cpu.mem[address:address + len(run)] = run
     cpu.r[:], cpu.s[:] = saved["r"], saved["s"]
     cpu.rh[:] = saved.get("rh", cpu.rh)  # a snapshot of before the 386 has no high halves: they stay 0
     cpu.eflags_high = saved.get("eflags_high", cpu.eflags_high)

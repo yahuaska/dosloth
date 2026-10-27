@@ -2,7 +2,7 @@
 fast, so each is held against what it is meant to do, worked out in a plainer way."""
 import unittest
 
-from mydos import flags
+from mydos import flags, pages
 from mydos.cpu import CONDITION_FLAGS, CPU, EVEN_PARITY, PREFIXES, condition_holds, signed
 
 ALL_CLEAR = 0x0002
@@ -40,7 +40,8 @@ class TestMemoryAccess(unittest.TestCase):
             cpu = CPU()
             cpu.wb(seg, off, 0x5A)
             self.assertEqual(cpu.mem[physical(seg, off)], 0x5A, (seg, off))
-            self.assertEqual(sum(1 for byte in cpu.mem if byte), 1, (seg, off))  # and nowhere else
+            written = [(at + i) for at, run in pages.runs(cpu.mem) for i, byte in enumerate(run) if byte]
+            self.assertEqual(written, [physical(seg, off)], (seg, off))  # and nowhere else
             self.assertEqual(cpu.rb(seg, off), 0x5A, (seg, off))
 
     def test_two_places_that_are_the_same_byte_are_the_same_byte(self):

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from mydos import dump
-from mydos.cpu import CPU
+from mydos.cpu import CPU, MEMORY_SIZE
 
 
 class DumpTest(unittest.TestCase):
@@ -57,7 +57,11 @@ class TestWhereItGoes(DumpTest):
         self.assertEqual(len(info["code"].split()), 16)
         self.assertEqual(info["program"], str(program))
         self.assertEqual(info["memory_file"], str(program) + ".crash.mem")
-        self.assertEqual((self.program_dir / "T.COM.crash.mem").read_bytes(), bytes(self.cpu.mem))
+        with open(self.program_dir / "T.COM.crash.mem", "rb") as dump:  # as big as the memory, the same where not zero
+            self.assertEqual(os.fstat(dump.fileno()).st_size, len(self.cpu.mem))
+            self.assertEqual(dump.read(1024 * 1024), bytes(self.cpu.mem[:1024 * 1024]))
+            dump.seek(-4096, os.SEEK_END)
+            self.assertEqual(dump.read(), bytes(4096))
         self.assertIn(f"crash dump: {program}.crash.json, {program}.crash.mem", said)
         self.assertNotIn("cannot be written", said)
         self.assertEqual(os.listdir(self.here), [])
@@ -70,7 +74,7 @@ class TestWhereItGoes(DumpTest):
         info = json.loads((self.here / "T.COM.crash.json").read_text())
         self.assertEqual(info["program"], str(program))  # it still says which program it is of
         self.assertEqual(info["memory_file"], str(self.here / "T.COM.crash.mem"))
-        self.assertEqual((self.here / "T.COM.crash.mem").stat().st_size, 1024 * 1024)
+        self.assertEqual((self.here / "T.COM.crash.mem").stat().st_size, MEMORY_SIZE)
         self.assertIn(f"crash dump: {self.here}/T.COM.crash.json", said)
         self.assertIn("the directory of the program cannot be written to", said)
         self.assertEqual(os.listdir(self.program_dir), [])

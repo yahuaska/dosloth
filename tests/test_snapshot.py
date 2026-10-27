@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import mmap
 import os
 import tempfile
 import tomllib
@@ -562,9 +563,45 @@ class TestWhatIsPutBack(SnapshotTest):
 
     def test_the_memory_of_another_size_is_refused(self):
         a = self.make()
-        packed, blobs = self.tampered(a, lambda data: data["cpu"].update(mem=bytearray(1000)))
+        packed, blobs = self.tampered(a, lambda data: data["cpu"]["mem"].update(size=1000))
         with self.assertRaisesRegex(snapshot.SnapshotError, "size"):
             snapshot.restore(self.make(), packed, blobs)
+
+    def test_a_snapshot_of_version_1_has_the_first_megabyte_in_one_piece_and_it_is_put_at_the_start(self):
+        a = self.make()
+        old = bytearray(1024 * 1024)
+        old[0x500], old[0x12345], old[-1] = 0x77, 0x99, 0x55
+        packed, blobs = self.tampered(a, lambda data: data["cpu"].update(mem=old))
+        b = self.make()
+        b.cpu.mem[0x30000] = 5  # a piece of the first megabyte is replaced by what the snapshot has
+        b.cpu.mem[100 << 20] = 7  # what the old snapshot knows nothing of stays
+        snapshot.restore(b, packed, blobs)
+        self.assertEqual((b.cpu.mem[0x500], b.cpu.mem[0x12345], b.cpu.mem[0x30000]), (0x77, 0x99, 0))
+        self.assertEqual(b.cpu.mem[0xFFFFF], 0x55)  # to the last byte
+        self.assertEqual(b.cpu.mem[100 << 20], 7)
+
+    def test_a_memory_in_one_piece_that_is_bigger_than_the_memory_of_the_machine_is_refused(self):
+        a = self.make()
+        packed, blobs = self.tampered(a, lambda data: data["cpu"].update(mem=bytearray(2 * 1024 * 1024)))
+        b = self.make()
+        b.cpu.mem = mmap.mmap(-1, 1024 * 1024)
+        with self.assertRaisesRegex(snapshot.SnapshotError, "size"):
+            snapshot.restore(b, packed, blobs)
+        exact, blobs = self.tampered(a, lambda data: data["cpu"].update(mem=bytearray(1024 * 1024)))
+        snapshot.restore(b, exact, blobs)  # as big as the memory is not too big
+
+    def test_the_memory_above_the_first_megabyte_comes_back_and_what_the_snapshot_lacks_is_zeroed(self):
+        a = self.make()
+        a.cpu.mem[100 << 20] = 9
+        a.cpu.mem[len(a.cpu.mem) - 1] = 4
+        path = str(self.out / "x.state")
+        snapshot.save(path, a)
+        b = self.make()
+        b.cpu.mem[0x30000] = 5
+        b.cpu.mem[(50 << 20) + 17] = 7
+        snapshot.load(path, b)
+        self.assertEqual((b.cpu.mem[100 << 20], b.cpu.mem[len(b.cpu.mem) - 1]), (9, 4))
+        self.assertEqual((b.cpu.mem[0x30000], b.cpu.mem[(50 << 20) + 17]), (0, 0))
 
 
 class TestFiles(SnapshotTest):
@@ -577,8 +614,9 @@ class TestFiles(SnapshotTest):
             blobs = [archive.read(name) for name in names[1:]]
             state = snapshot.unpack(json.loads(archive.read("state.json")), blobs)
             self.assertEqual(state["version"], snapshot.VERSION)
+            self.assertEqual(snapshot.VERSION, 2)  # what has the memory in runs
             self.assertEqual(names[0], "state.json")
-            self.assertEqual(len(archive.read("blob/0")), 1024 * 1024)  # the memory
+            self.assertLess(len(archive.read("blob/0")), 1024 * 1024)  # the first run of the memory, not all of it
             self.assertEqual(sorted(names[1:]), sorted(f"blob/{i}" for i in range(len(names) - 1)))
 
     def test_the_file_appears_whole_and_nothing_is_left_beside_it(self):

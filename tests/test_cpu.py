@@ -1610,9 +1610,9 @@ class TestLea(unittest.TestCase):
         cpu = machine(bytes([0x8D, 0x07]), False)  # lea ax, [bx]
         cpu.r[CPU.BX] = 0x0100
         cpu.ww(0x2000, 0x0100, 0xAAAA)
-        memory_before = bytes(cpu.mem)
+        memory_before = bytes(cpu.mem[:1024 * 1024])  # the megabyte of DOS: a copy of all the memory is 256 MB
         cpu.step()
-        self.assertEqual((cpu.r[CPU.AX], bytes(cpu.mem)), (0x0100, memory_before))
+        self.assertEqual((cpu.r[CPU.AX], bytes(cpu.mem[:1024 * 1024])), (0x0100, memory_before))
 
     def test_a_segment_prefix_changes_nothing(self):
         plain = self.lea([0x8D, 0x07])
@@ -2050,7 +2050,7 @@ class TestEnter(unittest.TestCase):
                 cpu = self.machine_with_code([0xC8, size, 0, level], bp=0x0300, sp=0x0200)
                 for i in range(40):
                     cpu.ww(0x4000, 0x0300 - 2 * i, 0x9000 + i)  # distinct words below BP
-                before = cpu.mem[:]
+                before = cpu.mem[:1024 * 1024]  # the megabyte of DOS: a copy of all the memory is 256 MB
                 cpu.step()
                 bp, sp, memory = 0x0300, 0x0200, {}
                 sp -= 2
@@ -2151,7 +2151,7 @@ class TestWaitAndTheCoprocessor(unittest.TestCase):
     """9B WAIT, and D8-DF + ModRM, the instructions of the 8087: with no coprocessor they only take their bytes."""
 
     def state(self, cpu):
-        return (list(cpu.r), list(cpu.s), cpu.flags, bytes(cpu.mem))
+        return (list(cpu.r), list(cpu.s), cpu.flags, bytes(cpu.mem[:1024 * 1024]))
 
     def test_wait_does_nothing(self):
         cpu = machine(bytes([0x9B, 0xF4]), True)

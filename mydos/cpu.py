@@ -1,6 +1,13 @@
+import mmap
+
 from . import flags, modrm
 from .ops32 import Ops32
 from .opcodes import Alu, Op
+
+
+# The memory of the machine: the first megabyte is that of DOS, and what is above it is for the 32-bit programs. It is
+# all there from the start, and costs nothing until it is written to; pages.py tells how it is saved.
+MEMORY_SIZE = 256 * 1024 * 1024
 
 
 class Exit(Exception):
@@ -69,8 +76,9 @@ class CPU(Ops32):
     SEG_PREFIXES = {Op.ES_PREFIX: ES, Op.CS_PREFIX: CS, Op.SS_PREFIX: SS, Op.DS_PREFIX: DS}
 
     def __init__(self):
-        """Make a fresh machine: 1 MB of zeroed memory, zeroed registers, no interrupts installed."""
-        self.mem = bytearray(1024 * 1024)
+        """Make a fresh machine: zeroed memory, zeroed registers, no interrupts installed."""
+        # private: reading a page that was never written costs nothing (a shared mapping gets a real page for it)
+        self.mem = mmap.mmap(-1, MEMORY_SIZE, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)
         # A device may own a window of the address space, like the video card with its A0000h-AFFFFh: its
         # read_memory(offset) and write_memory(offset, value) then replace the plain memory there. With no
         # device the window is empty.
@@ -217,6 +225,11 @@ class CPU(Ops32):
         self.ops32 = self.build_ops32()  # what the prefix 66h makes of them: see ops32.py
 
     # --- memory ---
+    def code_bytes(self):
+        """The 8 bytes at CS:start_ip, for the message of an instruction that is not there."""
+        at = self.addr(self.s[self.CS], self.start_ip)
+        return bytes(self.mem[at:at + 8])
+
     def addr(self, seg, off):
         """Turn a segment:offset pair into a real memory address.
 
@@ -554,7 +567,7 @@ class CPU(Ops32):
             op = self.fetch8()
         handler = (self.ops32 if self.osize32 else self.ops).get(op)
         if handler is None:
-            raw = bytes(self.mem[self.addr(self.s[self.CS], self.start_ip):][:8]).hex(" ")
+            raw = self.code_bytes().hex(" ")
             what = f"opcode 66 {op:02X}, the 32-bit form," if self.osize32 else f"opcode {op:02X}"
             raise NotImplementedError(
                 f"{what} at {self.s[self.CS]:04X}:{self.start_ip:04X}: {raw}")
@@ -1317,7 +1330,7 @@ class CPU(Ops32):
             if self.condition(second & 0xF):
                 self.ip = target
             return
-        raw = bytes(self.mem[self.addr(self.s[self.CS], self.start_ip):][:8]).hex(" ")
+        raw = self.code_bytes().hex(" ")
         raise NotImplementedError(f"opcode 0F {second:02X} at {self.s[self.CS]:04X}:{self.start_ip:04X}: {raw}")
 
     def jmp_near(self, op):
