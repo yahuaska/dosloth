@@ -8,11 +8,15 @@ from dataclasses import dataclass
 
 from . import le
 from .cpu import CPU
-from .flat import REAL_MODE
+from .flat import REAL_MODE, Bases
 
 PSP_PARAGRAPHS = 0x10  # the PSP is 256 bytes
 COM_PARAGRAPHS = 0x1000  # a .COM program wants a whole 64 KB segment, the PSP included
 MAX_PARAGRAPHS = 0xFFFF  # the most a block can be asked for
+# the selectors of an LE program: its code and its data (both with base 0, so an offset is an address). The PSP and
+# the environment are named by their own segment numbers, which is what the PSP says to the program already (PSP:002C)
+CODE_SELECTOR = 0x0F
+DATA_SELECTOR = 0x17
 
 
 @dataclass
@@ -121,6 +125,49 @@ def load_exe(cpu, data, psp_seg):
     cpu.s[CPU.SS] = (start_seg + h.ss) & 0xFFFF
     cpu.r[CPU.SP] = h.sp
     cpu.ip = h.ip
+
+
+def load_le(cpu, data, psp_seg, extended):
+    """Load the LE program in `data` (bound to the extender or not) the way DOS/4G does, and start it in the flat mode.
+
+    Each object goes to a block of `extended` (see xmem.py), in the order of the objects, and the fixups are made for
+    where they went. The code has the selector CODE_SELECTOR and the data DATA_SELECTOR, and both have the base 0:
+    what the linker wrote as an offset in an object is the address. ES is the PSP, whose selector is its segment
+    (so is the one of the environment, that PSP:002C holds), SS and DS are the data and FS and GS are 0. The program
+    starts at its entry, with its stack where the header says, and all the registers but ESP are 0.
+
+    Raises a le.LeError for a program that cannot be loaded, or that has not room in `extended`, and leaves
+    `extended` as it was.
+    """
+    start = le.locate(data)
+    if start is None:
+        raise le.LeError("this file has no LE program in it")
+    image = le.LeImage(data, start)
+    mark = extended.top
+    bases = {}
+    try:
+        for obj in image.objects:
+            bases[obj.number] = extended.allocate(obj.size)
+            if bases[obj.number] is None:
+                raise le.LeError(f"no room for the object {obj.number} of {obj.size:X}h bytes in the extended memory")
+        code = {obj.number for obj in image.objects if obj.executable}
+        loaded = image.load(bases, lambda number: CODE_SELECTOR if number in code else DATA_SELECTOR)
+        entry = bases[image.entry_object] + image.entry_offset
+        esp = bases[image.stack_object] + image.stack_offset
+    except le.LeError:
+        extended.release_from(mark)
+        raise
+    for number, bytes_ in loaded.items():
+        pages = (len(bytes_) + 4095) // 4096 * 4096
+        cpu.mem[bases[number]:bases[number] + pages] = bytes_.ljust(pages, b"\0")
+    env_seg = int.from_bytes(cpu.mem[psp_seg * 16 + 0x2C:psp_seg * 16 + 0x2E], "little")
+    cpu.enter_flat(Bases({CODE_SELECTOR: 0, DATA_SELECTOR: 0, psp_seg: psp_seg * 16, env_seg: env_seg * 16}))
+    cpu.r[:] = [0] * 8
+    cpu.rh[:] = [0] * 8
+    cpu.s[:] = [0] * 6
+    cpu.s[CPU.CS], cpu.s[CPU.SS], cpu.s[CPU.DS], cpu.s[CPU.ES] = CODE_SELECTOR, DATA_SELECTOR, DATA_SELECTOR, psp_seg
+    cpu.set32(CPU.SP, esp)
+    cpu.ip = entry
 
 
 def load(cpu, data, psp_seg):
