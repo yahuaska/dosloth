@@ -96,6 +96,8 @@ class CPU(Ops32):
         self.osize32 = False  # set by step(): this instruction works on 32 bits (a 66h in front, or a 32-bit code)
         self.asize32 = False  # set by step(): the addresses of this instruction are of 32 bits (67h, or a 32-bit code)
         self.code32 = False  # the code segment is a 32-bit one: sizes are of 32 bits and 66h and 67h make them 16
+        self.ip_mask = 0xFFFF  # where the instruction pointer wraps: 16 bits, or 32 in the flat mode
+        self.stack32 = False  # the stack pointer is ESP, of 32 bits, and not SP: the stack segment is a 32-bit one
         self.int_handlers = {}  # int number -> fn(cpu)
         self.instructions = 0  # how many instructions have been started: the emulated time
         self.port_readers = {}  # I/O port number -> fn(port): a byte read from the device behind that port
@@ -375,18 +377,19 @@ class CPU(Ops32):
         read the byte first and then decide whether to go there.
         """
         d = self.fetch8()
-        return (self.ip + d - (256 if d & 0x80 else 0)) & 0xFFFF
+        return (self.ip + d - (256 if d & 0x80 else 0)) & self.ip_mask
 
     def fetch_rel16(self):
         """Read the two-byte jump distance after an opcode and return the address it points to.
 
         The word is a signed number counted from the end of the instruction, like the byte in
         fetch_rel8. Unlike the byte, it needs no sign handling: the address wraps round inside the
-        64 KB segment anyway, and adding FFFEh there is the same as subtracting 2. IP is left pointing
-        at the next instruction, which is what a call has to push as its return address.
+        64 KB segment anyway, and adding FFFEh there is the same as subtracting 2. (In the flat mode that holds as
+        well: a distance of 16 bits is the one that the prefix 66h makes, and it cuts the pointer to 16 bits.) IP is
+        left pointing at the next instruction, which is what a call has to push as its return address.
         """
         d = self.fetch16()  # first: reading it moves IP to the end of the instruction
-        return (self.ip + d) & 0xFFFF
+        return (self.ip + d) & 0xFFFF  # a distance of 16 bits makes the instruction pointer one of 16 bits, always
 
     def add_with_flags(self, a, b, bits, carry=0):
         """Compute a + b (+ carry) like the CPU's ADD and ADC do: set the flags and return the result.
@@ -518,18 +521,36 @@ class CPU(Ops32):
     def push16(self, val):
         """Put a word on the stack: SP goes down by 2, then the word is stored at SS:SP.
 
-        The stack grows toward lower addresses.
+        The stack grows toward lower addresses. With a 32-bit stack it is ESP that goes down.
         """
-        sp = (self.r[self.SP] - 2) & 0xFFFF
-        self.r[self.SP] = sp
+        if self.stack32:
+            sp = (self.get32(self.SP) - 2) & 0xFFFFFFFF
+            self.set32(self.SP, sp)
+        else:
+            sp = (self.r[self.SP] - 2) & 0xFFFF
+            self.r[self.SP] = sp
         self.ww(self.s[self.SS], sp, val)
 
     def pop16(self):
         """Take a word off the stack: read it from SS:SP, then move SP up by 2."""
-        sp = self.r[self.SP]
+        sp = self.get32(self.SP) if self.stack32 else self.r[self.SP]
         val = self.rw(self.s[self.SS], sp)
-        self.r[self.SP] = (sp + 2) & 0xFFFF
+        if self.stack32:
+            self.set32(self.SP, sp + 2)
+        else:
+            self.r[self.SP] = (sp + 2) & 0xFFFF
         return val
+
+    def get_stack(self, n):
+        """Register n (SP or BP) as the stack sees it: the 32 bits (ESP, EBP) with a 32-bit stack, else the 16."""
+        return self.get32(n) if self.stack32 else self.r[n]
+
+    def set_stack(self, n, value):
+        """Write register n (SP or BP) as the stack sees it: all 32 bits, or the low 16 and nothing above them."""
+        if self.stack32:
+            self.set32(n, value)
+        else:
+            self.r[n] = value & 0xFFFF
 
     # --- instruction fetch ---
     def fetch8(self):
@@ -730,7 +751,7 @@ class CPU(Ops32):
         is the one from before the instruction, not the one that changes as the others are pushed. Flags
         are not changed. A compiler uses it at the start of an interrupt handler to save everything.
         """
-        original_sp = self.r[self.SP]
+        original_sp = self.get_stack(self.SP)
         for reg in (self.AX, self.CX, self.DX, self.BX):
             self.push16(self.r[reg])
         self.push16(original_sp)
@@ -1253,7 +1274,7 @@ class CPU(Ops32):
         """
         count = self.fetch16()  # read before IP changes: the number is in the code that is being left
         self.ip = self.pop16()
-        self.r[self.SP] = (self.r[self.SP] + count) & 0xFFFF
+        self.set_stack(self.SP, self.get_stack(self.SP) + count)
 
     def load_far_pointer(self, op):
         """Load a register and a segment register from a far pointer in memory (LES is C4, LDS is C5).
@@ -1284,14 +1305,14 @@ class CPU(Ops32):
         size = self.fetch16()
         level = self.fetch8() & 0x1F
         self.push16(self.r[self.BP])
-        frame = self.r[self.SP]
+        frame = self.get_stack(self.SP)
         for _ in range(level - 1):  # none at level 0 or 1
-            self.r[self.BP] = (self.r[self.BP] - 2) & 0xFFFF
-            self.push16(self.rw(self.s[self.SS], self.r[self.BP]))
+            self.set_stack(self.BP, self.get_stack(self.BP) - 2)
+            self.push16(self.rw(self.s[self.SS], self.get_stack(self.BP)))
         if level:
             self.push16(frame)
-        self.r[self.BP] = frame
-        self.r[self.SP] = (self.r[self.SP] - size) & 0xFFFF
+        self.set_stack(self.BP, frame)
+        self.set_stack(self.SP, self.get_stack(self.SP) - size)
 
     def leave(self, op):
         """Tear down a procedure's stack frame (opcode C9; 80186 and later).
@@ -1300,7 +1321,7 @@ class CPU(Ops32):
         for local variables, then restores the caller's BP. It is exactly `mov sp, bp` followed by
         `pop bp`, in one byte. Flags are not changed. A RET normally follows.
         """
-        self.r[self.SP] = self.r[self.BP]
+        self.set_stack(self.SP, self.get_stack(self.BP))
         self.r[self.BP] = self.pop16()
 
     def retf(self, op):
@@ -1317,7 +1338,7 @@ class CPU(Ops32):
         count = self.fetch16()  # read before IP and CS change
         self.ip = self.pop16()
         self.s[self.CS] = self.pop16()
-        self.r[self.SP] = (self.r[self.SP] + count) & 0xFFFF
+        self.set_stack(self.SP, self.get_stack(self.SP) + count)
 
     def jcc(self, op):
         """Jump a short distance only if a condition on the flags holds (opcodes 70-7F + one signed byte).

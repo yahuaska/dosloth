@@ -54,10 +54,11 @@ class _Reader:
         self.cpu, self.seg, self.start, self.pos = cpu, seg, off, off
         self.addr32 = cpu.code32  # the addresses are of 32 bits: the code is a 32-bit one, or the prefix 67h says so
         self.osize32 = cpu.code32  # the operands are of 32 bits: the same, with 66h
+        self.mask = cpu.ip_mask  # where the address wraps, and how many digits it is shown with
 
     def u8(self):
         v = self.cpu.rb(self.seg, self.pos)
-        self.pos = (self.pos + 1) & 0xFFFF
+        self.pos = (self.pos + 1) & self.mask
         return v
 
     def u16(self):
@@ -73,7 +74,7 @@ class _Reader:
         return v - 256 if v & 0x80 else v
 
     def length(self):
-        return (self.pos - self.start) & 0xFFFF
+        return (self.pos - self.start) & self.mask
 
 
 SIZE_NAMES = {8: "byte", 16: "word", 32: "dword"}
@@ -148,6 +149,13 @@ def _inner32(r, mod, rm):
         d = r.u32()
         inner += _disp(d - (1 << 32) if d & 0x80000000 else d)
     return inner
+
+
+def _address(r, d, mask=None):
+    """The place that a jump of the distance d goes to, in hex: 4 digits, or 8 when IP has 32 bits. A distance of
+    16 bits (`mask` 0FFFFh) cuts it to 16 bits, as the CPU does."""
+    mask = r.mask if mask is None else mask
+    return f"{(r.pos + d) & mask:0{4 if mask == 0xFFFF else 8}X}"
 
 
 def _disp(d):
@@ -262,7 +270,7 @@ def _decode_opcode32(r, op, seg_override):
         return f"pop {'dword ' if is_mem else ''}{rm}" if reg == 0 else None
     if op in (Op.CALL_NEAR, Op.JMP_NEAR):
         d = r.u32()
-        return f"{'call' if op == Op.CALL_NEAR else 'jmp'} {(r.pos + d) & 0xFFFF:04X}"  # cut to 16 bits
+        return f"{'call' if op == Op.CALL_NEAR else 'jmp'} {_address(r, d)}"  # cut to the width of IP
     if op in STRING_32:
         return STRING_32[op]
     if op in UNCHANGED_BY_66:
@@ -277,7 +285,7 @@ def _decode_0f(r, seg_override):
     regs = REGS_BY_BITS[bits]
     if 0x80 <= second <= 0x8F:  # the jumps that reach 32 KB away, or farther
         d = r.u32() if r.osize32 else r.u16()
-        return f"{JCC[second - 0x80]} {(r.pos + d) & 0xFFFF:04X}"
+        return f"{JCC[second - 0x80]} {_address(r, d, None if r.osize32 else 0xFFFF)}"
     if 0x90 <= second <= 0x9F:
         reg, rm, is_mem = _modrm(r, seg_override, 8)
         return f"set{JCC[second - 0x90][1:]} {'byte ' if is_mem else ''}{rm}"
@@ -345,7 +353,7 @@ def _decode_opcode(r, op, seg_override):
         return f"pop {REG16[op - Op.POP_R16]}"
     if Op.JCC <= op < Op.JCC + 16:
         d = r.s8()
-        return f"{JCC[op - Op.JCC]} {(r.pos + d) & 0xFFFF:04X}"
+        return f"{JCC[op - Op.JCC]} {_address(r, d)}"
     if op == Op.TWO_BYTE:
         return _decode_0f(r, seg_override)
     if op in (Op.ALU_RM8_IMM8, Op.ALU_RM16_IMM16, Op.ALU_RM16_IMM8):
@@ -461,16 +469,16 @@ def _decode_opcode(r, op, seg_override):
         return f"int {r.u8():02X}"
     if op in LOOPS:
         d = r.s8()
-        return f"{LOOPS[op]} {(r.pos + d) & 0xFFFF:04X}"
+        return f"{LOOPS[op]} {_address(r, d)}"
     if op in (Op.CALL_FAR, Op.JMP_FAR):
         offset = r.u16()
         return f"{'call' if op == Op.CALL_FAR else 'jmp'} {r.u16():04X}:{offset:04X}"
     if op in (Op.CALL_NEAR, Op.JMP_NEAR):
         d = r.u16()
-        return f"{'call' if op == Op.CALL_NEAR else 'jmp'} {(r.pos + d) & 0xFFFF:04X}"  # wraps like the CPU
+        return f"{'call' if op == Op.CALL_NEAR else 'jmp'} {_address(r, d, 0xFFFF)}"  # wraps like the CPU
     if op == Op.JMP_SHORT:
         d = r.s8()
-        return f"jmp {(r.pos + d) & 0xFFFF:04X}"
+        return f"jmp {_address(r, d)}"
     return None
 
 

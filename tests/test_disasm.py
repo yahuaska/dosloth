@@ -380,6 +380,46 @@ class TestTwoByteInstructions(unittest.TestCase):
         self.assertEqual(disasm(cpu, 0x1000, 0x100), (6, "je 0116"))
 
 
+class TestWideInstructionPointer(unittest.TestCase):
+    """With an instruction pointer of 32 bits (the flat mode) a target is shown with 8 digits."""
+
+    def wide(self, text, code32=False):
+        cpu = machine(bytes.fromhex(text))
+        cpu.ip_mask = 0xFFFFFFFF
+        cpu.code32 = code32
+        return disasm(cpu, 0x1000, 0x100)
+
+    def test_the_short_jumps_and_the_loops(self):
+        self.assertEqual(self.wide("EB 10"), (2, "jmp 00000112"))
+        self.assertEqual(self.wide("74 10"), (2, "je 00000112"))
+        self.assertEqual(self.wide("E2 FE"), (2, "loop 00000100"))
+        self.assertEqual(self.wide("75 80"), (2, "jne 00000082"))
+
+    def test_the_distances_of_32_bits_are_not_cut_to_16_bits(self):
+        self.assertEqual(self.wide("66 E9 00 00 01 00"), (6, "jmp 00010106"))
+        self.assertEqual(self.wide("66 E8 F0 FF FF FF"), (6, "call 000000F6"))
+        self.assertEqual(self.wide("66 0F 84 10 00 00 00"), (7, "je 00000117"))
+        self.assertEqual(self.wide("E8 00 01 00 00", code32=True), (5, "call 00000205"))
+        self.assertEqual(self.wide("0F 85 00 01 00 00", code32=True), (6, "jne 00000206"))
+
+    def test_the_distances_of_16_bits_are_cut_to_16_bits_with_4_digits(self):
+        self.assertEqual(self.wide("E9 00 00"), (3, "jmp 0103"))
+        self.assertEqual(self.wide("E8 FE FF"), (3, "call 0101"))
+        self.assertEqual(self.wide("0F 84 10 00"), (4, "je 0114"))
+        self.assertEqual(self.wide("66 E9 00 00", code32=True), (4, "jmp 0104"))
+
+    def test_an_instruction_that_goes_over_64_kb_is_read_on_and_not_from_the_start(self):
+        for mask, expected in ((0xFFFFFFFF, "jmp 00010011"), (0xFFFF, "jmp 0006")):
+            cpu = machine(b"")
+            cpu.mem[0x1FFFF], cpu.mem[0x20000], cpu.mem[0x10000] = 0xEB, 0x10, 0x05  # the distance is at 10000h or at 0
+            cpu.ip_mask = mask
+            self.assertEqual(disasm(cpu, 0x1000, 0xFFFF), (2, expected))
+
+    def test_the_usual_mask_is_as_before(self):
+        self.assertEqual(dis(bytes.fromhex("EB 10")), (2, "jmp 0112"))
+        self.assertEqual(dis(bytes.fromhex("66 E9 00 00 01 00")), (6, "jmp 0106"))
+
+
 class TestSegmentRegisters(unittest.TestCase):
     def check(self, cases):
         for code, text in cases:

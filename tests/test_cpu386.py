@@ -58,6 +58,7 @@ class Machine(unittest.TestCase):
         cpu.s[CPU.CS], cpu.s[CPU.DS], cpu.s[CPU.ES], cpu.s[CPU.SS] = 0x1000, 0x2000, 0x2000, 0x4000
         cpu.r[:] = [0] * 8
         cpu.rh[:] = [0] * 8
+        cpu.code32, cpu.stack32, cpu.ip_mask = False, False, 0xFFFF  # a new start is a 16-bit one
         cpu.r[SP] = 0x0200
         cpu.ip = 0
         cpu.flags = 0x0002 | flags.DF | flags.IF

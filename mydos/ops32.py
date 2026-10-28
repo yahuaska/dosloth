@@ -62,15 +62,22 @@ class Ops32:
 
     def push32(self, val):
         """Put a doubleword on the stack: SP goes down by 4, then the doubleword is stored at SS:SP."""
-        sp = (self.r[self.SP] - 4) & 0xFFFF
-        self.r[self.SP] = sp
+        if self.stack32:
+            sp = (self.get32(self.SP) - 4) & 0xFFFFFFFF
+            self.set32(self.SP, sp)
+        else:
+            sp = (self.r[self.SP] - 4) & 0xFFFF
+            self.r[self.SP] = sp
         self.wd(self.s[self.SS], sp, val)
 
     def pop32(self):
         """Take a doubleword off the stack: read it from SS:SP, then move SP up by 4."""
-        sp = self.r[self.SP]
+        sp = self.get32(self.SP) if self.stack32 else self.r[self.SP]
         val = self.rd(self.s[self.SS], sp)
-        self.r[self.SP] = (sp + 4) & 0xFFFF
+        if self.stack32:
+            self.set32(self.SP, sp + 4)
+        else:
+            self.r[self.SP] = (sp + 4) & 0xFFFF
         return val
 
     # --- the instructions ---
@@ -208,25 +215,25 @@ class Ops32:
         size = self.fetch16()
         level = self.fetch8() & 0x1F
         self.push32(self.get32(self.BP))
-        frame = self.get32(self.SP)
+        frame = self.get_stack(self.SP)
         for _ in range(level - 1):
             self.set32(self.BP, self.get32(self.BP) - 4)
-            self.push32(self.rd(self.s[self.SS], self.r[self.BP]))
+            self.push32(self.rd(self.s[self.SS], self.get_stack(self.BP)))
         if level:
             self.push32(frame)
         self.set32(self.BP, frame)
-        self.r[self.SP] = (self.r[self.SP] - size) & 0xFFFF
+        self.set_stack(self.SP, self.get_stack(self.SP) - size)
 
     def leave32(self, op):
         """Tear down a frame of doublewords (66 C9): SP <- BP, then EBP <- a doubleword off the stack."""
-        self.r[self.SP] = self.r[self.BP]
+        self.set_stack(self.SP, self.get_stack(self.BP))
         self.set32(self.BP, self.pop32())
 
     # --- jumps, calls and returns: the distance and the stack have 32 bits, the instruction pointer has not yet
     def fetch_rel32(self):
-        """Read the distance of 32 bits after an opcode and return the address it points to, cut to 16 bits."""
+        """Read the distance of 32 bits after an opcode and return the address it points to, cut to the width of IP."""
         d = self.fetch32()
-        return (self.ip + d) & 0xFFFF
+        return (self.ip + d) & self.ip_mask
 
     def call_near32(self, op):
         """Call a procedure (66 E8 + a distance of 32 bits): the return address goes on the stack as a doubleword."""
@@ -240,13 +247,13 @@ class Ops32:
 
     def ret_near32(self, op):
         """Return from a procedure: the address is a doubleword (66 C3)."""
-        self.ip = self.pop32() & 0xFFFF
+        self.ip = self.pop32() & self.ip_mask
 
     def ret_near_pop32(self, op):
         """Return from a procedure and drop its arguments (66 C2 + imm16): the address is a doubleword."""
         count = self.fetch16()
-        self.ip = self.pop32() & 0xFFFF
-        self.r[self.SP] = (self.r[self.SP] + count) & 0xFFFF
+        self.ip = self.pop32() & self.ip_mask
+        self.set_stack(self.SP, self.get_stack(self.SP) + count)
 
     def group5_rm32(self, op):
         """INC, DEC, CALL, JMP and PUSH of a 32-bit register or memory operand (66 FF, by the 'reg' field).
@@ -259,9 +266,9 @@ class Ops32:
         elif m.reg == 2:  # read the operand before pushing: it may be addressed through SP
             target = m.read(self, 32)
             self.push32(self.ip)
-            self.ip = target & 0xFFFF
+            self.ip = target & self.ip_mask
         elif m.reg == 4:
-            self.ip = m.read(self, 32) & 0xFFFF
+            self.ip = m.read(self, 32) & self.ip_mask
         elif m.reg == 6:  # read first: PUSH ESP pushes the value it had before
             self.push32(m.read(self, 32))
         else:
