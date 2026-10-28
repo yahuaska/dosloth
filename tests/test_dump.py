@@ -9,6 +9,7 @@ from pathlib import Path
 
 from mydos import dump
 from mydos.cpu import CPU, MEMORY_SIZE
+from mydos.flat import Bases
 
 
 class DumpTest(unittest.TestCase):
@@ -153,6 +154,36 @@ class TestDescribe(DumpTest):
         info = dump.describe(self.cpu, "x", self.error)
         self.assertEqual(info["high_halves"], {"EAX": "DEAD", "ECX": "0000", "EDX": "0000", "EBX": "0000",
                                                "ESP": "0000", "EBP": "0000", "ESI": "0001", "EDI": "0000"})
+
+    def test_a_machine_in_real_mode_says_nothing_of_a_flat_one(self):
+        self.assertNotIn("flat_mode", dump.describe(self.cpu, "x", self.error))
+
+    def test_a_program_in_the_flat_mode_has_its_selectors_and_widths_said_and_its_stack_read_by_esp(self):
+        cpu = self.cpu
+        cpu.use_flat_memory(Bases({0x10: 0, 0x18: 0x30000}))
+        cpu.ip_mask, cpu.stack32, cpu.code32 = 0xFFFFFFFF, True, False
+        cpu.s[CPU.CS], cpu.s[CPU.SS] = 0x18, 0x10
+        cpu.set32(CPU.SP, 0x00123450)
+        cpu.start_ip = 0x20
+        cpu.mem[0x123450:0x123454] = b"\x34\x12\x78\x56"
+        cpu.mem[0x30020:0x30023] = b"\xCD\x21\x90"
+        info = dump.describe(cpu, "x", self.error)
+        self.assertEqual(info["flat_mode"], {"selector_bases": {"0010": "00000000", "0018": "00030000"},
+                                             "eip_mask": "FFFFFFFF", "stack32": True, "code32": False})
+        self.assertEqual((info["stack"][:2], info["code"].split()[:3]), (["1234", "5678"], ["cd", "21", "90"]))
+
+    def test_a_stack_or_a_code_that_cannot_be_read_is_a_question_mark_and_does_not_fail_the_dump(self):
+        cpu = self.cpu
+        cpu.use_flat_memory(Bases({0x10: 0}))
+        cpu.s[CPU.CS], cpu.s[CPU.SS] = 0x47, 0x10  # the code selector is not in the table
+        cpu.stack32 = True
+        cpu.set32(CPU.SP, MEMORY_SIZE - 6)  # the stack runs out of the memory: the first three words are there
+        info = dump.describe(cpu, "x", self.error)
+        self.assertEqual(info["code"], "?")
+        self.assertEqual(info["stack"], ["0000", "0000", "0000"] + ["?"] * 5)
+        cpu.s[CPU.CS] = 0x10  # the code is at an address that is not in the memory: that is an IndexError
+        cpu.start_ip = MEMORY_SIZE - 4
+        self.assertEqual(dump.describe(cpu, "x", self.error)["code"], "?")
 
     def test_the_error_names_its_kind(self):
         self.assertEqual(dump.describe(self.cpu, "x", ValueError("boom"))["error"], "ValueError: boom")

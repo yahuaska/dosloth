@@ -1,8 +1,9 @@
 import mmap
 
 from . import flags, modrm
+from .flat import FlatMemory
 from .ops32 import Ops32, signed
-from .opcodes import Alu, Op
+from .opcodes import ADDRESS_SIZED, PREFIXES, Alu, Op
 
 
 # The memory of the machine: the first megabyte is that of DOS, and what is above it is for the 32-bit programs. It is
@@ -28,17 +29,6 @@ class DivideError(Exception):
 
 # for each byte: does it have an even number of bits set? That is what the parity flag says
 EVEN_PARITY = [bin(n).count("1") % 2 == 0 for n in range(256)]
-# the bytes that come before an opcode and change what it does, not instructions themselves
-PREFIXES = frozenset((Op.ES_PREFIX, Op.CS_PREFIX, Op.SS_PREFIX, Op.DS_PREFIX, Op.FS_PREFIX, Op.GS_PREFIX,
-                      Op.REP_PREFIX, Op.REPNE_PREFIX, Op.OPSIZE_PREFIX, Op.ADDRSIZE_PREFIX))
-
-
-# the opcodes that work with SI, DI, CX or BX as addresses or counters: with 32-bit addresses they work with ESI, EDI,
-# ECX and EBX instead (see address_ops32 in ops32.py); those of this set that it does not have stop the emulator
-ADDRESS_SIZED = frozenset(range(0x6C, 0x70)) | frozenset(range(0xA4, 0xA8)) | frozenset(range(0xAA, 0xB0)) | frozenset(
-    range(0xE0, 0xE4)) | {0xD7}
-
-
 # the flags that the conditions of the conditional jumps look at, and for each combination of them the 16 answers
 CONDITION_FLAGS = flags.CF | flags.PF | flags.ZF | flags.SF | flags.OF
 CONDITION_ROWS = {}
@@ -63,7 +53,7 @@ def condition_holds(flags_value, cc):
     return holds != bool(cc & 1)  # odd numbers are the opposite condition
 
 
-class CPU(Ops32):
+class CPU(Ops32, FlatMemory):
     """A tiny 8086-style CPU running in real mode, with 1 MB of flat memory.
 
     Registers live in two lists: self.r (AX, CX, DX, BX, SP, BP, SI, DI) and self.s (ES, CS, SS, DS, FS, GS).
@@ -98,6 +88,8 @@ class CPU(Ops32):
         self.code32 = False  # the code segment is a 32-bit one: sizes are of 32 bits and 66h and 67h make them 16
         self.ip_mask = 0xFFFF  # where the instruction pointer wraps: 16 bits, or 32 in the flat mode
         self.stack32 = False  # the stack pointer is ESP, of 32 bits, and not SP: the stack segment is a 32-bit one
+        self.flat = False  # the memory is the flat one, with selectors (see flat.py), and not that of real mode
+        self.bases = None  # in the flat mode: selector -> base address
         self.int_handlers = {}  # int number -> fn(cpu)
         self.instructions = 0  # how many instructions have been started: the emulated time
         self.port_readers = {}  # I/O port number -> fn(port): a byte read from the device behind that port
@@ -588,7 +580,16 @@ class CPU(Ops32):
             op = self.video.read_memory(address - self.video_start)
         else:
             op = self.mem[address]
-        while op in PREFIXES:  # prefixes come before the opcode, in any order; the last of a kind counts
+        if op in PREFIXES:
+            op = self.take_prefixes(op)
+        handler = (self.ops32 if self.osize32 else self.ops).get(op)
+        if handler is None or (self.asize32 and op in ADDRESS_SIZED):
+            handler = self.unusual_handler(op, handler)
+        handler(op)
+
+    def take_prefixes(self, op):
+        """Read the prefixes in front of an opcode, in any order (the last of a kind counts), and return the opcode."""
+        while op in PREFIXES:
             if op in self.SEG_PREFIXES:
                 self.seg_override = self.SEG_PREFIXES[op]
             elif op == Op.OPSIZE_PREFIX:
@@ -598,8 +599,13 @@ class CPU(Ops32):
             else:
                 self.rep = op
             op = self.fetch8()
-        handler = (self.ops32 if self.osize32 else self.ops).get(op)
-        if self.asize32 and op in ADDRESS_SIZED:  # these work with SI, DI, CX or BX: with ESI, EDI, ECX, EBX instead
+        return op
+
+    def unusual_handler(self, op, handler):
+        """The handler for an opcode that is not in the table of its size (`handler` is None), or that has 32-bit
+        addresses and works with SI, DI, CX or BX (it works with ESI, EDI, ECX, EBX instead). An opcode that has none
+        stops the emulator, with where it is and what its bytes are."""
+        if self.asize32 and op in ADDRESS_SIZED:
             handler = self.address_ops32.get(op)
             if handler is None:
                 raise NotImplementedError(
@@ -610,7 +616,7 @@ class CPU(Ops32):
             what = f"opcode 66 {op:02X}, the 32-bit form," if self.osize32 else f"opcode {op:02X}"
             raise NotImplementedError(
                 f"{what} at {self.s[self.CS]:04X}:{self.start_ip:04X}: {raw}")
-        handler(op)
+        return handler
 
     # --- instructions: each takes the opcode byte (groups use its low 3 bits) ---
     def nop(self, op):
@@ -1392,7 +1398,7 @@ class CPU(Ops32):
     def int_(self, op):
         """Call an interrupt (opcode CD + the interrupt number).
 
-        The table of vectors at 0000:0000 has 4 bytes for each interrupt, the offset and the segment of its
+        The table of vectors at address 0 has 4 bytes for each interrupt, the offset and the segment of its
         handler. If a program has put an address there (INT 21h AH=25h), the interrupt goes to that code, as on
         the real machine: the flags, CS and IP are pushed, in that order, IF and TF are cleared, and the
         handler starts. It ends with IRET, which takes the three back.
@@ -1401,7 +1407,8 @@ class CPU(Ops32):
         self.int_handlers (see dos.py and bios.py). An interrupt that is neither stops the emulator.
         """
         n = self.fetch8()
-        offset, segment = self.rw(0, n * 4), self.rw(0, n * 4 + 2)
+        vector = int.from_bytes(self.mem[n * 4:n * 4 + 4], "little")  # the table is at address 0 in any mode
+        offset, segment = vector & 0xFFFF, vector >> 16
         if offset or segment:
             self.push16(self.flags)
             self.push16(self.s[self.CS])

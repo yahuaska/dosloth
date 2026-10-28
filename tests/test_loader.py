@@ -82,6 +82,17 @@ class TestAnLeProgramIsRefused(unittest.TestCase):
 
 
 class TestLoad(unittest.TestCase):
+    def test_a_program_of_real_mode_starts_in_real_mode_whatever_the_machine_was_in(self):
+        from mydos.flat import REAL_MODE, Bases
+        for data in (b"\xB8\x00\x4C", exe(b"\xB8\x00\x4C")):
+            cpu = CPU()
+            cpu.use_flat_memory(Bases({0x10: 0}))
+            cpu.ip_mask, cpu.stack32, cpu.code32 = 0xFFFFFFFF, True, True
+            loader.load(cpu, data, 0x3000)
+            self.assertEqual(cpu.get_mode(), REAL_MODE)
+            self.assertEqual(cpu.rb(cpu.s[CPU.CS], cpu.ip), 0xB8)  # the first instruction: a selector is a paragraph
+
+
     def test_a_program_starts_with_zeros_in_fs_and_gs(self):
         cpu = CPU()
         cpu.s[CPU.FS], cpu.s[CPU.GS] = 0x1111, 0x2222

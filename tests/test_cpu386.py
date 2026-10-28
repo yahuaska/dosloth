@@ -2,6 +2,7 @@ import unittest
 
 from mydos import flags, modrm
 from mydos.cpu import CPU, Exit
+from mydos.flat import RealModeBases
 from mydos.regs import AX, BP, BX, CX, DI, DX, SI, SP
 
 # the routine of install.exe that tells the 8086, the 286, the 386 and the 486 from each other: from its memory, as it
@@ -49,8 +50,12 @@ def reference(name, a, b, carry=0):
 class Machine(unittest.TestCase):
     """A CPU with the code at 1000:0000, data at 2000:0100, a stack at 4000:0200."""
 
+    FLAT = False  # a subclass with True runs the same tests on the flat memory (tests/test_flat.py)
+
     def setUp(self):
         self.cpu = CPU()
+        if self.FLAT:
+            self.cpu.use_flat_memory(RealModeBases())
 
     def start(self, code, **registers):
         cpu = self.cpu

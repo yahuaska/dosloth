@@ -28,6 +28,7 @@ class Parent:
     dta: tuple
     handles: HandleTable
     high: list = None  # the high halves of its 32-bit registers (CPU.rh)
+    mode: dict = None  # real mode or the flat one, and what goes with it (CPU.get_mode)
 
 
 def read_environment(cpu, segment):
@@ -142,7 +143,7 @@ def execute(cpu, state, data, dos_path, block=None, tail=b"", null_output=False)
         cpu.mem[child * 16 + 0x80:child * 16 + 0x80 + len(line)] = line
 
     state.parents.append(Parent(parent_psp, list(cpu.r), list(cpu.s), cpu.ip, cpu.flags, state.dta, state.handles,
-                                list(cpu.rh)))
+                                list(cpu.rh), cpu.get_mode()))
     state.psp_seg = child
     state.dta = (child, 0x80)
     state.handles = state.handles.copy()
@@ -173,5 +174,7 @@ def terminate(cpu, state, code):
     cpu.s[:len(parent.segments)] = parent.segments  # one saved before FS and GS has four: they stay as they are
     if parent.high is not None:
         cpu.rh[:] = parent.high
+    if parent.mode is not None:
+        cpu.set_mode(parent.mode)
     cpu.r[CPU.AX] = 0
     cpu.set_flag(flags.CF, False)

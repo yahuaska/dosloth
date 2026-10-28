@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import struct
 import sys
 
 from . import pages
@@ -14,7 +15,7 @@ SEGS = ["ES", "CS", "SS", "DS", "FS", "GS"]                           # order of
 def describe(cpu, prog_path, exc):
     """What a dump says in JSON: the error, the registers, the code at the failed instruction and the stack top."""
     cs, ss = cpu.s[CPU.CS], cpu.s[CPU.SS]
-    sp = cpu.r[CPU.SP]
+    sp = cpu.get_stack(CPU.SP)
     return {
         "program": prog_path,
         "error": f"{type(exc).__name__}: {exc}",
@@ -26,10 +27,23 @@ def describe(cpu, prog_path, exc):
         "start_ip": f"{cpu.start_ip:04X}",  # where the failed instruction began
         "flags": f"{cpu.flags:04X}",
         # 16 bytes of code at CS:start_ip, as hex
-        "code": bytes(cpu.rb(cs, cpu.start_ip + i) for i in range(16)).hex(" "),
+        "code": safely(lambda: bytes(cpu.rb(cs, cpu.start_ip + i) for i in range(16)).hex(" ")),
         # 8 words on top of the stack at SS:SP
-        "stack": [f"{cpu.rw(ss, sp + 2 * i):04X}" for i in range(8)],
+        "stack": [safely(lambda i=i: f"{cpu.rw(ss, sp + 2 * i):04X}") for i in range(8)],
+        # in the flat mode: the selectors, as the dump of a program in it needs to say where they point
+        **({"flat_mode": {"selector_bases": {f"{s:04X}": f"{b:08X}" for s, b in cpu.bases.items()},
+                          "eip_mask": f"{cpu.ip_mask:X}", "stack32": cpu.stack32, "code32": cpu.code32}}
+           if cpu.flat else {}),
     }
+
+
+def safely(read):
+    """What `read()` gives, or "?" if the memory cannot be read: a dump of a program in the flat mode may have a stack
+    pointer that points nowhere, and must not fail for it."""
+    try:
+        return read()
+    except (IndexError, NotImplementedError, struct.error):
+        return "?"
 
 
 def remove(base):

@@ -136,3 +136,14 @@ class Alu(IntEnum):
     SUB = 5
     XOR = 6
     CMP = 7
+
+
+# the bytes that come before an opcode and change what it does, not instructions themselves
+PREFIXES = frozenset((Op.ES_PREFIX, Op.CS_PREFIX, Op.SS_PREFIX, Op.DS_PREFIX, Op.FS_PREFIX, Op.GS_PREFIX,
+                      Op.REP_PREFIX, Op.REPNE_PREFIX, Op.OPSIZE_PREFIX, Op.ADDRSIZE_PREFIX))
+
+
+# the opcodes that work with SI, DI, CX or BX as addresses or counters: with 32-bit addresses they work with ESI, EDI,
+# ECX and EBX instead (see address_ops32 in ops32.py); those of this set that it does not have stop the emulator
+ADDRESS_SIZED = frozenset(range(0x6C, 0x70)) | frozenset(range(0xA4, 0xA8)) | frozenset(range(0xAA, 0xB0)) | frozenset(
+    range(0xE0, 0xE4)) | {0xD7}

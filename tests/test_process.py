@@ -426,6 +426,25 @@ class TestThe32BitRegistersOfAChild(ProcessTest):
         self.assertEqual(self.cpu.rh, before)
         self.assertEqual(self.cpu.get32(0), 0x11110000)  # EAX: the high half of the parent and the AX of the exec
 
+    def test_the_mode_of_the_parent_is_kept_and_comes_back(self):
+        from mydos.flat import REAL_MODE, Bases
+        self.program("CHILD.COM", com(bytes([0xB8, 0x00, 0x4C, 0xCD, 0x21])))
+        self.start("CHILD.COM")
+        self.assertEqual(self.state.parents[-1].mode, REAL_MODE)  # what the parent was in when it started the child
+        flat_mode = {"flat": True, "bases": {0x10: 0, 0x18: 0x30000}, "ip_mask": 0xFFFFFFFF, "stack32": True,
+                     "code32": True}
+        self.state.parents[-1].mode = flat_mode  # a parent in the flat mode
+        self.run_child()
+        self.assertEqual(self.cpu.get_mode(), flat_mode)
+        self.assertEqual(self.cpu.bases, Bases({0x10: 0, 0x18: 0x30000}))
+
+    def test_a_parent_saved_before_the_modes_leaves_the_mode_as_it_is(self):
+        self.program("CHILD.COM", com(bytes([0xB8, 0x00, 0x4C, 0xCD, 0x21])))
+        self.start("CHILD.COM")
+        self.state.parents[-1].mode = None
+        self.run_child()
+        self.assertFalse(self.cpu.flat)
+
     def test_fs_and_gs_of_the_parent_come_back_and_the_child_starts_with_zeros(self):
         child = bytes([0xB8, 0x34, 0x12, 0x8E, 0xE0, 0xB8, 0x00, 0x4C, 0xCD, 0x21])  # mov ax, 1234h ; mov fs, ax ; exit
         self.program("CHILD.COM", com(child))

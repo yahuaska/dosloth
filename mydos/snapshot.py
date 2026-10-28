@@ -23,6 +23,7 @@ from dataclasses import asdict
 from . import machine as machine_module
 from . import pages
 from .filesystem import Entry, FsError, MemFs
+from .flat import REAL_MODE
 from .handles import Console, HandleTable, NullDevice, OpenFile
 from .process import Parent
 from .search import Searches
@@ -153,6 +154,7 @@ def dos_state(state, files):
         "handles": table_state(state.handles, files),
         "parents": [{"psp_seg": parent.psp_seg, "registers": parent.registers, "segments": parent.segments,
                      "ip": parent.ip, "flags": parent.flags, "dta": parent.dta, "high": parent.high,
+                     "mode": parent.mode,
                      "handles": table_state(parent.handles, files)} for parent in state.parents],
     }
 
@@ -173,7 +175,7 @@ def capture(machine, rewind=False):
         "disks": fingerprint(machine.config),
         "cpu": {"mem": {"size": len(cpu.mem), "runs": pages.runs(cpu.mem)}, "r": cpu.r, "rh": cpu.rh, "s": cpu.s,
                 "ip": cpu.start_ip if rewind else cpu.ip, "flags": cpu.flags, "eflags_high": cpu.eflags_high,
-                "instructions": cpu.instructions - bool(rewind)},
+                "instructions": cpu.instructions - bool(rewind), "mode": cpu.get_mode()},
         "vga": dict(vars(machine.card)),
         "timer": [dict(vars(counter)) for counter in machine.timer.counters],
         "keyboard": machine.keyboard.buffer,
@@ -235,6 +237,7 @@ def restore(machine, packed, blobs):
     cpu.s[:len(saved["s"])] = saved["s"]  # a snapshot from before FS and GS has four: those stay 0
     cpu.rh[:] = saved.get("rh", cpu.rh)  # a snapshot of before the 386 has no high halves: they stay 0
     cpu.eflags_high = saved.get("eflags_high", cpu.eflags_high)
+    cpu.set_mode(saved.get("mode", REAL_MODE))  # a snapshot from before the flat mode is one of real mode
     cpu.ip, cpu.flags, cpu.instructions = saved["ip"], saved["flags"], saved["instructions"]
     cpu.start_ip = cpu.ip
     machine_module.install_rom(cpu)  # after the memory: what is ROM comes from the code, not from the snapshot
@@ -271,7 +274,8 @@ def restore(machine, packed, blobs):
     if "handles" in saved_dos:
         state.handles = make_table(saved_dos["handles"], files)
     state.parents = [Parent(parent["psp_seg"], parent["registers"], parent["segments"], parent["ip"], parent["flags"],
-                            parent["dta"], make_table(parent["handles"], files), parent.get("high"))
+                            parent["dta"], make_table(parent["handles"], files), parent.get("high"),
+                            parent.get("mode"))
                      for parent in saved_dos.get("parents", [])]
     count_users([state.handles] + [parent.handles for parent in state.parents])
     machine.program = data.get("program")

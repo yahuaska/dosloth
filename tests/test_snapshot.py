@@ -472,6 +472,46 @@ class TestWhatIsPutBack(SnapshotTest):
         snapshot.load(path, b)
         self.assertEqual((b.cpu.mem[0x400], b.cpu.mem[0x12345]), (0x77, 0x99))
 
+    def test_the_flat_mode_comes_back_with_its_selectors_and_its_widths(self):
+        from mydos.flat import Bases
+        a = self.make()
+        a.cpu.use_flat_memory(Bases({0x10: 0, 0x18: 0x30000}))
+        a.cpu.ip_mask, a.cpu.stack32, a.cpu.code32 = 0xFFFFFFFF, True, True
+        path = str(self.out / "x.state")
+        snapshot.save(path, a)
+        b = self.make()
+        snapshot.load(path, b)
+        self.assertEqual(b.cpu.get_mode(), a.cpu.get_mode())
+        b.cpu.wb(0x18, 5, 0x66)
+        self.assertEqual(b.cpu.mem[0x30005], 0x66)
+        with self.assertRaisesRegex(NotImplementedError, "selector 0047"):
+            b.cpu.rb(0x47, 0)
+
+    def test_a_snapshot_from_before_the_modes_is_one_of_real_mode_even_on_a_machine_that_was_in_another(self):
+        from mydos.flat import REAL_MODE, Bases
+        a = self.make()
+        packed, blobs = self.tampered(a, lambda data: data["cpu"].pop("mode"))
+        b = self.make()
+        b.cpu.use_flat_memory(Bases({0x10: 0}))
+        b.cpu.stack32 = True
+        snapshot.restore(b, packed, blobs)
+        self.assertEqual(b.cpu.get_mode(), REAL_MODE)
+
+    def test_the_mode_of_a_parent_comes_back_too_and_one_without_it_stays_without(self):
+        a = self.make()
+        self.busy(a)
+        mode = {"flat": True, "bases": {0x10: 0}, "ip_mask": 0xFFFFFFFF, "stack32": True, "code32": True}
+        a.state.parents[0].mode = mode
+        path = str(self.out / "x.state")
+        snapshot.save(path, a)
+        b = self.make()
+        snapshot.load(path, b)
+        self.assertEqual(b.state.parents[0].mode, mode)
+        packed, blobs = self.tampered(a, lambda data: data["dos"]["parents"][0].pop("mode"))
+        c = self.make()
+        snapshot.restore(c, packed, blobs)
+        self.assertIsNone(c.state.parents[0].mode)
+
     def test_the_registers_the_flags_and_the_place_come_back(self):
         a = self.make()
         a.cpu.r[:] = [1, 2, 3, 4, 5, 6, 7, 8]

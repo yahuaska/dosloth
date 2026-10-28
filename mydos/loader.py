@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from . import le
 from .cpu import CPU
+from .flat import REAL_MODE
 
 PSP_PARAGRAPHS = 0x10  # the PSP is 256 bytes
 COM_PARAGRAPHS = 0x1000  # a .COM program wants a whole 64 KB segment, the PSP included
@@ -125,6 +126,7 @@ def load_exe(cpu, data, psp_seg):
 def load(cpu, data, psp_seg):
     """Pick the loader by file content, like DOS: MZ/ZM signature means EXE, else COM. An LE program is refused."""
     refuse_le_program(data)
+    cpu.set_mode(REAL_MODE)  # a program of real mode runs in it, whatever the one that started it did
     cpu.rh[:] = [0] * 8  # the high halves of the 32-bit registers: a program starts with nothing in them
     cpu.s[CPU.FS] = cpu.s[CPU.GS] = 0  # nor in FS and GS
     if is_exe(data):
