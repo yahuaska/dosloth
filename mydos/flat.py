@@ -6,8 +6,10 @@ the segment that the selector names, plus the offset, in 32 bits: a 32-bit progr
 says what the base of each selector is, and a selector that is not in it stops the emulator at once.
 
 `CPU.use_flat_memory(bases)` puts the methods of this class in place of those of real mode (the reads and writes of
-memory, the fetch of the program and step()), `use_real_memory()` takes them out again. A program is in one mode or the
-other from its start to its end, so this is done when it starts, and real mode pays nothing for it.
+memory, the fetch of the program and step()), `use_real_memory()` takes them out again. `enter_flat(bases)` does that
+and makes the pointers and the sizes of 32 bits, as a 32-bit program of DOS/4G has them; `leave_flat()` ends it. A
+program is in one mode or the other from its start to its end, so this is done when it starts, and real mode pays
+nothing for it.
 
 Memory is the mmap of the machine, which is 256 MB: an address beyond it stops the emulator (an IndexError for a byte,
 a struct.error for a word or a doubleword).
@@ -51,6 +53,16 @@ class FlatMemory:
         self.flat = True
         for name in FLAT_NAMES:
             setattr(self, name, getattr(self, name + "_flat"))
+
+    def enter_flat(self, bases):
+        """Run a 32-bit program of the flat model from now on: selectors with bases, an instruction pointer and a stack
+        pointer of 32 bits, and code whose sizes are of 32 bits (the prefixes 66h and 67h make them 16)."""
+        self.use_flat_memory(bases)
+        self.ip_mask, self.stack32, self.code32 = 0xFFFFFFFF, True, True
+
+    def leave_flat(self):
+        """Back to real mode, with 16 bits of everything."""
+        self.set_mode(REAL_MODE)
 
     def use_real_memory(self):
         """Back to the memory of real mode, with its methods."""

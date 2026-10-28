@@ -19,9 +19,11 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   FS and GS (`cpu.s` has six segments, prefixes 64h/65h). `cpu.ip_mask` and `cpu.stack32` say how wide IP and the
   stack pointer are (16 bits both, until the flat mode). Not done yet: the flat mode, x87
 - `mydos/flat.py` - the flat memory of a 32-bit program: a segment register holds a selector, `cpu.bases` says its base.
-  `cpu.use_flat_memory(bases)` puts the methods of this module in place of those of real mode (reads, writes, fetch,
-  step) for one program, `use_real_memory()` takes them out; `get_mode`/`set_mode` keep the mode in snapshots and for a
-  child. `tests/test_flat.py` runs the tests of the 386 instructions on it too (a selector is a paragraph there)
+  `cpu.enter_flat(bases)` makes the machine run a 32-bit program (the methods of this module in place of those of
+  real mode, 32-bit EIP and ESP, 32-bit code), `leave_flat()` ends it; `use_flat_memory`/`use_real_memory` do the memory only; `get_mode`/`set_mode` keep the mode in snapshots and for a
+  child. `tests/test_flat.py` runs the tests of the 386 instructions on it too (a selector is a paragraph there);
+  `tests/test_flat32.py` runs 32-bit programs (nasm) and `tests/test_flat32_compiled.py` functions built by gcc -m32
+  (four builds) above the first megabyte, against Python as the oracle
 - `mydos/pages.py` - the memory is a 256 MB private anonymous `mmap` (costs nothing until written); this finds the
   parts that are not zero, for dumps and snapshots. Never copy or iterate all of `cpu.mem`: slice what you need
 - `mydos/dos.py`  - INT 21h and friends (Python-side handlers)
