@@ -706,13 +706,15 @@ class TestThePocketCommandCom(ProcessTest):
         self.state.handles.close(1)  # the last one to have it
         self.assertTrue(file.closed)
 
-    def test_a_program_for_dos_4g_that_the_command_runs_stops_the_emulator_as_when_it_is_started_straight(self):
+    def test_a_program_for_dos_4g_that_the_command_runs_is_started_as_when_it_is_started_straight(self):
         from tests.le_builder import Obj, RW, RX, build_bound, build_program
-        objects = [Obj(b"\x90" * 100, size=0x1000, flags=RX), Obj(b"data", size=0x100, base=0x30000, flags=RW)]
+        objects = [Obj(bytes.fromhex("b8074c0000cd21"), size=0x1000, flags=RX), Obj(b"data", size=0x100, flags=RW)]
         self.program("GAME.EXE", build_bound(build_program(objects)))
-        with self.assertRaisesRegex(NotImplementedError, "LE program"):
-            self.shell("/c game.exe 0 GOFORIT SOUND")
-        self.assertEqual((self.state.parents, self.state.psp_seg), ([], PARENT))
+        self.shell("/c game.exe 0 GOFORIT SOUND")
+        self.assertTrue(self.cpu.flat)
+        self.assertEqual(len(self.state.parents), 1)
+        self.run_child()
+        self.assertEqual((self.state.exit_status, self.state.parents, self.state.psp_seg), (7, [], PARENT))
 
     def test_the_exit_code_of_the_shell_is_what_ah_4dh_gives_afterwards(self):
         from unittest import mock
@@ -750,27 +752,79 @@ class TestThePocketCommandCom(ProcessTest):
 
 
 class TestAnLeProgram(ProcessTest):
-    """A program for DOS/4G is not started in the 16-bit mode, where its extender would say that it wants a 386."""
+    """A program for DOS/4G is started in the flat mode, above 1 MB, and gives the machine back when it ends."""
 
-    def le_program(self, bound=True):
+    EXIT7 = bytes.fromhex("b8074c0000cd21")  # mov eax,4C07h / int 21h
+
+    def le_program(self, bound=True, code=EXIT7, fixups=()):
         from tests.le_builder import Obj, RW, RX, build_bound, build_program
-        objects = [Obj(b"\x90" * 100, size=0x1000, flags=RX), Obj(b"data", size=0x100, base=0x30000, flags=RW)]
-        plain = build_program(objects)
+        objects = [Obj(code, size=0x1000, flags=RX), Obj(b"data", size=0x100, base=0x30000, flags=RW)]
+        plain = build_program(objects, fixups=fixups)
         return build_bound(plain) if bound else plain
 
-    def test_it_stops_the_emulator_with_what_it_is_and_nothing_is_taken(self):
+    def test_it_starts_in_the_flat_mode_with_its_psp_and_the_objects_above_1_mb(self):
+        from mydos.xmem import START
+        self.start("GAME.EXE", self.le_program())
+        self.assertIsNone(self.failed())
+        cpu, child = self.cpu, self.state.psp_seg
+        self.assertGreater(child, FIRST_FREE - 1)
+        self.assertTrue(cpu.flat)
+        self.assertEqual((cpu.ip, cpu.s[CPU.ES], self.state.extended.top), (START, child, START + 2 * 0x1000))
+        self.assertEqual(self.at_psp(0x16), PARENT)
+        self.assertEqual(self.at_psp(0x02), dos.MEMORY_TOP_SEG)  # it has the conventional memory that is free
+        self.assertEqual(self.state.memory.largest(), 0)
+        self.assertEqual(self.state.parents[0].extended, START)
+
+    def test_a_plain_one_is_started_the_same(self):
+        self.start("PLAIN.EXE", self.le_program(bound=False))
+        self.assertTrue(self.cpu.flat)
+
+    def test_it_runs_and_its_exit_code_goes_to_the_parent_which_finds_everything_as_it_was(self):
+        from mydos.flat import REAL_MODE
+        from mydos.xmem import START
+        cpu = self.cpu
+        cpu.r[CPU.SI], cpu.rh[CPU.SI] = 0x1234, 0x5678
         blocks = dict(self.state.memory.blocks)
-        self.program("GAME.EXE", self.le_program())
-        with self.assertRaisesRegex(NotImplementedError, "LE program .*bound to the extender of DOS/4G"):
-            self.start("GAME.EXE")
+        self.start("GAME.EXE", self.le_program())
+        self.run_child()
+        self.assertEqual(self.state.exit_status, 7)
+        self.assertEqual((self.state.psp_seg, self.state.parents, self.state.extended.top), (PARENT, [], START))
+        self.assertEqual(cpu.get_mode(), REAL_MODE)
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.get32(CPU.SI)), (0x0800, 2, 0x56781234))
         self.assertEqual(self.state.memory.blocks, blocks)
-        self.assertEqual((self.state.parents, self.state.psp_seg), ([], PARENT))
 
-    def test_a_plain_one_stops_it_as_well(self):
-        self.program("PLAIN.EXE", self.le_program(bound=False))
-        with self.assertRaisesRegex(NotImplementedError, "LE program"):
-            self.start("PLAIN.EXE")
+    def test_the_child_of_an_le_program_goes_above_it_and_leaves_it_in_the_flat_mode_when_it_ends(self):
+        from mydos.xmem import START
+        self.start("GAME.EXE", self.le_program())
+        self.state.memory.resize(self.state.psp_seg, 0x1000)  # the program gives back what it does not need
+        parent_state = (self.cpu.ip, list(self.cpu.s), self.cpu.get_mode())
+        process.execute(self.cpu, self.state, self.le_program(), "C:\\CHILD.EXE")
+        self.assertEqual((self.cpu.ip, self.state.extended.top), (START + 2 * 0x1000, START + 4 * 0x1000))
+        self.run_child()
+        self.assertEqual((self.cpu.ip, list(self.cpu.s), self.cpu.get_mode()), parent_state)
+        self.assertEqual(self.state.extended.top, START + 2 * 0x1000)
+        self.run_child()
+        self.assertEqual(self.state.extended.top, START)
 
+    def test_a_program_that_cannot_be_loaded_is_error_11_and_nothing_is_taken(self):
+        from tests.le_builder import F
+        blocks = dict(self.state.memory.blocks)
+        self.program("BAD.EXE", self.le_program(fixups=[F(1, 2, 0, obj=1, at=0x10)]))  # a kind that is not done
+        self.start("BAD.EXE")
+        self.assertEqual(self.failed(), 11)
+        self.assertEqual(self.state.memory.blocks, blocks)
+        self.assertEqual((self.state.parents, self.state.psp_seg, self.state.extended.top, self.cpu.flat),
+                         ([], PARENT, self.state.extended.start, False))
+
+    def test_a_program_that_has_not_room_in_the_extended_memory_is_error_8_and_nothing_is_taken(self):
+        from mydos.xmem import START, ExtendedMemory
+        blocks = dict(self.state.memory.blocks)
+        self.state.extended = ExtendedMemory(START, START + 0x1000)  # one page: the code goes in, the data does not
+        self.start("BIG.EXE", self.le_program())
+        self.assertEqual(self.failed(), 8)
+        self.assertEqual(self.state.memory.blocks, blocks)
+        self.assertEqual((self.state.parents, self.state.psp_seg, self.state.extended.top, self.cpu.flat),
+                         ([], PARENT, START, False))
 
 class TestWithoutAParent(unittest.TestCase):
     def test_the_first_program_ends_the_emulator_with_its_code(self):

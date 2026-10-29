@@ -44,7 +44,7 @@ SOURCE_BYTE, SOURCE_SELECTOR, SOURCE_POINTER_16_16, SOURCE_OFFSET_16, SOURCE_POI
 SOURCE_OFFSET_32, SOURCE_RELATIVE_32 = 7, 8
 
 
-class LeError(Exception):
+class LeError(ValueError):
     """The file is not an LE program that can be loaded. The message says why."""
 
 

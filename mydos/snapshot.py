@@ -146,7 +146,7 @@ def dos_state(state, files):
     memory = state.memory
     return {
         "break_checking": state.break_checking, "dta": state.dta, "pending_scan": state.pending_scan,
-        "psp_seg": state.psp_seg, "exit_status": state.exit_status,
+        "psp_seg": state.psp_seg, "exit_status": state.exit_status, "extended_top": state.extended.top,
         "memory": {"blocks": memory.blocks, "owners": memory.owners},
         "searches": {"last": state.searches.last,
                      "rest": {number: [asdict(entry) for entry in entries]
@@ -154,7 +154,7 @@ def dos_state(state, files):
         "handles": table_state(state.handles, files),
         "parents": [{"psp_seg": parent.psp_seg, "registers": parent.registers, "segments": parent.segments,
                      "ip": parent.ip, "flags": parent.flags, "dta": parent.dta, "high": parent.high,
-                     "mode": parent.mode,
+                     "mode": parent.mode, "extended": parent.extended,
                      "handles": table_state(parent.handles, files)} for parent in state.parents],
     }
 
@@ -263,6 +263,7 @@ def restore(machine, packed, blobs):
     saved_dos = data.get("dos", {})
     for name in ("break_checking", "dta", "pending_scan", "psp_seg", "exit_status"):
         setattr(state, name, saved_dos.get(name, getattr(state, name)))
+    state.extended.top = saved_dos.get("extended_top", state.extended.top)
     memory = saved_dos.get("memory", {})
     state.memory.blocks = memory.get("blocks", state.memory.blocks)
     state.memory.owners = memory.get("owners", state.memory.owners)
@@ -275,7 +276,7 @@ def restore(machine, packed, blobs):
         state.handles = make_table(saved_dos["handles"], files)
     state.parents = [Parent(parent["psp_seg"], parent["registers"], parent["segments"], parent["ip"], parent["flags"],
                             parent["dta"], make_table(parent["handles"], files), parent.get("high"),
-                            parent.get("mode"))
+                            parent.get("mode"), parent.get("extended"))
                      for parent in saved_dos.get("parents", [])]
     count_users([state.handles] + [parent.handles for parent in state.parents])
     machine.program = data.get("program")

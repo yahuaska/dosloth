@@ -168,7 +168,7 @@ class TestWhenItCannotBeLoaded(Machine):
 
     def test_not_enough_room_for_the_objects_says_so_and_gives_everything_back(self):
         self.extended = ExtendedMemory(START, START + 3 * PAGE)  # the code goes in, the data does not
-        with self.assertRaisesRegex(le.LeError, "no room for the object 2"):
+        with self.assertRaisesRegex(MemoryError, "no room for the object 2"):
             self.load()
         self.assert_untouched(START)
 

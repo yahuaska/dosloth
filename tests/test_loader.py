@@ -37,8 +37,8 @@ class TestMemoryNeeded(unittest.TestCase):
         loader.memory_needed(b"MZ" + bytes(26))
 
 
-class TestAnLeProgramIsRefused(unittest.TestCase):
-    """A program in the LE format, bound to DOS/4G or not, is stopped, and the message says what it is."""
+class TestAnLeProgram(unittest.TestCase):
+    """A program in the LE format, bound to DOS/4G or not, is loaded above 1 MB; the memory it asks of DOS is its PSP."""
 
     def programs(self):
         from tests.le_builder import Obj, RW, RX, build_bound, build_program
@@ -46,39 +46,43 @@ class TestAnLeProgramIsRefused(unittest.TestCase):
         plain = build_program(objects, entry=(1, 0x20))
         return {"plain": plain, "bound": build_bound(plain)}
 
-    def test_memory_needed_stops_for_both_with_what_the_program_is(self):
+    def test_memory_needed_is_the_psp_at_the_least_and_all_there_is_at_the_most(self):
         for kind, data in self.programs().items():
-            with self.assertRaises(NotImplementedError) as caught:
-                loader.memory_needed(data)
-            message = str(caught.exception)
-            self.assertIn("LE program", message, kind)
-            self.assertIn("2 objects, 5 pages, entry in the object 1 at 0x20", message, kind)
-            self.assertIn("32-bit mode is not done yet", message, kind)
+            self.assertEqual(loader.memory_needed(data), (0x10, 0xFFFF), kind)
 
-    def test_the_message_says_whether_it_is_bound_to_the_extender(self):
-        programs = self.programs()
-        with self.assertRaisesRegex(NotImplementedError, "bound to the extender of DOS/4G"):
-            loader.memory_needed(programs["bound"])
-        with self.assertRaisesRegex(NotImplementedError, "plain"):
-            loader.memory_needed(programs["plain"])
-
-    def test_load_stops_too_and_puts_nothing_in_memory(self):
-        for data in self.programs().values():
-            cpu = CPU()
-            with self.assertRaises(NotImplementedError):
-                loader.load(cpu, data, 0x1000)
-            self.assertFalse(any(cpu.mem[0x10000:0x20000]))
-
-    def test_a_program_that_looks_like_one_but_cannot_be_loaded_is_said_to_be_one_that_cannot(self):
+    def test_one_that_cannot_be_loaded_is_an_error_of_the_format_that_says_why(self):
         data = bytearray(self.programs()["plain"])
         header = int.from_bytes(data[0x3C:0x40], "little")
         data[header + 8:header + 10] = (1).to_bytes(2, "little")  # for the 286
-        with self.assertRaisesRegex(NotImplementedError, "one that cannot be loaded: the program is for the cpu 1"):
+        with self.assertRaisesRegex(ValueError, "the program is for the cpu 1"):
             loader.memory_needed(bytes(data))
+
+    def test_load_puts_it_in_the_extended_memory_and_starts_it_in_the_flat_mode(self):
+        from mydos.xmem import START, ExtendedMemory
+        for kind, data in self.programs().items():
+            cpu, extended = CPU(), ExtendedMemory()
+            loader.load(cpu, data, 0x3000, extended)
+            self.assertTrue(cpu.flat, kind)
+            self.assertEqual((cpu.ip, extended.top), (START + 0x20, START + 5 * 0x1000), kind)
+            self.assertEqual(bytes(cpu.mem[START + 0x20:START + 0x23]), b"\x90" * 3, kind)
+
+    def test_load_without_the_extended_memory_to_put_it_in_stops_and_puts_nothing_in_memory(self):
+        for data in self.programs().values():
+            cpu = CPU()
+            with self.assertRaisesRegex(ValueError, "extended memory"):
+                loader.load(cpu, data, 0x1000)
+            self.assertFalse(any(cpu.mem[0x10000:0x20000]))
+            self.assertFalse(cpu.flat)
 
     def test_the_other_programs_are_not_touched_by_it(self):
         self.assertEqual(loader.memory_needed(b"\xB8\x00\x4C\xCD\x21"), (0x1000, 0xFFFF))
         self.assertEqual(loader.memory_needed(exe(b"", minalloc=0x10, maxalloc=0x20)), (0x12 + 0x10, 0x12 + 0x20))
+
+    def test_a_program_of_real_mode_does_not_need_the_extended_memory_given_nor_uses_it(self):
+        from mydos.xmem import ExtendedMemory
+        extended = ExtendedMemory()
+        loader.load(CPU(), exe(b"\xB8\x00\x4C"), 0x4000, extended)
+        self.assertEqual(extended.top, extended.start)
 
 
 class TestLoad(unittest.TestCase):

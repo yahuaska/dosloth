@@ -13,14 +13,14 @@ from .volumes import Volumes
 TICK_EVERY = 20_000  # the displays are looked after this often, in instructions: some 20 times a second
 
 
-def load(cpu, data, dos_path):
+def load(cpu, data, dos_path, extended):
     """Put the program on the command line in memory at the PSP segment, with its PSP and environment.
 
     `data` is the program file and `dos_path` its full DOS name (`C:\\SETUP\\ESETUP.EXE`), which goes to the program
     in its environment.
     """
     psp.build(cpu, PSP_SEG, ENV_SEG, dos.MEMORY_TOP_SEG, dos_path)
-    loader.load(cpu, data, PSP_SEG)
+    loader.load(cpu, data, PSP_SEG, extended)
 
 
 def make_trace(log):
@@ -105,7 +105,7 @@ def main():
     if args.w:  # only a window has keys to give, so only with one can a program wait for a key
         computer.keyboard.waiter = lambda: monitor.wait_for_key(computer.keyboard)
     if not args.r:
-        load(cpu, data, where.dos_path())
+        load(cpu, data, where.dos_path(), computer.state.extended)
     log = open(args.d, "w") if args.d else None
     if log:
         cpu.trace = make_trace(log)

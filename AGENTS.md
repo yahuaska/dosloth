@@ -53,7 +53,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   DOS/4G extender. The loader stops them with a message until the 32-bit mode is there
 - `mydos/loader.py` - a .COM or .EXE put in memory at a PSP segment (the first program and the children of EXEC),
   and how much memory it asks for; `load_le` puts an LE program (DOS/4G) in the extended memory and starts it in the
-  flat mode (`tests/test_load_le.py`; not yet reached by EXEC, which still refuses such a program)
+  flat mode (`tests/test_load_le.py`); the first run and EXEC (`process.py`) send an LE program there, and the memory
+  above 1 MB (`state.extended`) goes back when it ends
 - `mydos/process.py` - INT 21h AH=4Bh (EXEC): the parent put aside, the child loaded; the end of a program
   (AH=4Ch, INT 20h) gives the machine back to the parent
 - `mydos/country.py` - the country of INT 21h AH=38h: the United States, with the table of formats

@@ -1,7 +1,9 @@
-"""Putting a program into memory: the .COM and .EXE loaders, the same for the first program and for one started by EXEC.
+"""Putting a program into memory: the .COM, .EXE and LE loaders, the same for the first program and for one started by
+EXEC.
 
-The program goes right after its PSP (at `psp_seg:0100`, in the segment `psp_seg + 10h` for a .EXE); the PSP itself is
-not written here (see psp.py). The registers are set the way DOS leaves them at the start of a program.
+A .COM or a .EXE goes right after its PSP (at `psp_seg:0100`, in the segment `psp_seg + 10h` for a .EXE); the PSP
+itself is not written here (see psp.py). The registers are set the way DOS leaves them at the start of a program. An LE
+program (a DOS/4G one) goes to the memory above 1 MB, and starts in the flat mode.
 """
 import struct
 from dataclasses import dataclass
@@ -61,31 +63,18 @@ def _image_paragraphs(data, header):
     return (len(data[header.header_size:header.file_size]) + 15) // 16
 
 
-def refuse_le_program(data):
-    """A program in the LE format, bound to the extender of DOS/4G or not, is for a 32-bit mode that is not done yet
-    (see PLAN.md). If `data` is one, stop with a message that says what it is, and does not let it run its DOS
-    stub: that would be the extender, which says it needs a 386."""
-    start = le.locate(data)
-    if start is None:
-        return
-    try:
-        image = le.LeImage(data, start)
-        what = (f"{len(image.objects)} objects, {image.page_count} pages, entry in the object {image.entry_object} "
-                f"at {image.entry_offset:#x}")
-    except le.LeError as error:
-        what = f"one that cannot be loaded: {error}"
-    kind = "bound to the extender of DOS/4G" if start else "plain"
-    raise NotImplementedError(f"this is an LE program ({kind}; {what}): the 32-bit mode is not done yet")
-
-
 def memory_needed(data):
     """How many paragraphs a program wants, as (the least it can run in, the most it asks for), the PSP counted.
 
     A .COM takes what there is, 64 KB at the least. A .EXE has its image and the `minalloc` and `maxalloc` of its header
-    on top of that. Raises ValueError for a .EXE whose header is not all there, and NotImplementedError for an LE
-    program (see refuse_le_program).
+    on top of that. An LE program wants its PSP and what is left of the memory (the program itself goes above 1 MB,
+    see load_le). Raises ValueError for a .EXE whose header is not all there, and a le.LeError (a ValueError too) for
+    an LE program that cannot be loaded.
     """
-    refuse_le_program(data)
+    start = le.locate(data)
+    if start is not None:
+        le.LeImage(data, start)  # to see that it can be read at all
+        return PSP_PARAGRAPHS, MAX_PARAGRAPHS
     if not is_exe(data):
         return COM_PARAGRAPHS, MAX_PARAGRAPHS
     if len(data) < struct.calcsize("<2s13H"):
@@ -136,8 +125,8 @@ def load_le(cpu, data, psp_seg, extended):
     (so is the one of the environment, that PSP:002C holds), SS and DS are the data and FS and GS are 0. The program
     starts at its entry, with its stack where the header says, and all the registers but ESP are 0.
 
-    Raises a le.LeError for a program that cannot be loaded, or that has not room in `extended`, and leaves
-    `extended` as it was.
+    Raises a le.LeError for a program that cannot be loaded, and a MemoryError if there is not room for it in
+    `extended`; both leave `extended` and the machine as they were.
     """
     start = le.locate(data)
     if start is None:
@@ -149,12 +138,12 @@ def load_le(cpu, data, psp_seg, extended):
         for obj in image.objects:
             bases[obj.number] = extended.allocate(obj.size)
             if bases[obj.number] is None:
-                raise le.LeError(f"no room for the object {obj.number} of {obj.size:X}h bytes in the extended memory")
+                raise MemoryError(f"no room for the object {obj.number} of {obj.size:X}h bytes in the extended memory")
         code = {obj.number for obj in image.objects if obj.executable}
         loaded = image.load(bases, lambda number: CODE_SELECTOR if number in code else DATA_SELECTOR)
         entry = bases[image.entry_object] + image.entry_offset
         esp = bases[image.stack_object] + image.stack_offset
-    except le.LeError:
+    except (le.LeError, MemoryError):
         extended.release_from(mark)
         raise
     for number, bytes_ in loaded.items():
@@ -170,9 +159,14 @@ def load_le(cpu, data, psp_seg, extended):
     cpu.ip = entry
 
 
-def load(cpu, data, psp_seg):
-    """Pick the loader by file content, like DOS: MZ/ZM signature means EXE, else COM. An LE program is refused."""
-    refuse_le_program(data)
+def load(cpu, data, psp_seg, extended=None):
+    """Pick the loader by file content, like DOS: an LE program (see load_le, it needs the `extended` memory), else
+    MZ/ZM signature means EXE, else COM."""
+    if le.locate(data) is not None:
+        if extended is None:
+            raise ValueError("an LE program is loaded into the extended memory, and none was given")
+        load_le(cpu, data, psp_seg, extended)
+        return
     cpu.set_mode(REAL_MODE)  # a program of real mode runs in it, whatever the one that started it did
     cpu.rh[:] = [0] * 8  # the high halves of the 32-bit registers: a program starts with nothing in them
     cpu.s[CPU.FS] = cpu.s[CPU.GS] = 0  # nor in FS and GS

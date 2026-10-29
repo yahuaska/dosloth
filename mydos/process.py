@@ -6,7 +6,7 @@ child ends (AH=4Ch, INT 20h), the registers of the parent come back and it goes 
 """
 from dataclasses import dataclass
 
-from . import command, flags, loader, psp
+from . import command, flags, le, loader, psp
 from .cpu import CPU, Exit
 from .filesystem import FILE_NOT_FOUND, PATH_NOT_FOUND, FsError
 from .handles import HandleTable, NullDevice
@@ -29,6 +29,7 @@ class Parent:
     handles: HandleTable
     high: list = None  # the high halves of its 32-bit registers (CPU.rh)
     mode: dict = None  # real mode or the flat one, and what goes with it (CPU.get_mode)
+    extended: int = None  # the mark of the extended memory when the child started: what is above it is the child's
 
 
 def read_environment(cpu, segment):
@@ -142,15 +143,21 @@ def execute(cpu, state, data, dos_path, block=None, tail=b"", null_output=False)
         line = bytes([len(tail)]) + tail + b"\r"
         cpu.mem[child * 16 + 0x80:child * 16 + 0x80 + len(line)] = line
 
-    state.parents.append(Parent(parent_psp, list(cpu.r), list(cpu.s), cpu.ip, cpu.flags, state.dta, state.handles,
-                                list(cpu.rh), cpu.get_mode()))
+    parent = Parent(parent_psp, list(cpu.r), list(cpu.s), cpu.ip, cpu.flags, state.dta, state.handles, list(cpu.rh),
+                    cpu.get_mode(), state.extended.top)
+    try:
+        loader.load(cpu, data, child, state.extended)  # only an LE program can fail, and it has changed nothing
+    except (le.LeError, MemoryError) as error:
+        state.memory.free_owned(child)
+        code = INSUFFICIENT_MEMORY if isinstance(error, MemoryError) else BAD_FORMAT
+        raise FsError(code, str(error)) from None
+    state.parents.append(parent)
     state.psp_seg = child
     state.dta = (child, 0x80)
     state.handles = state.handles.copy()
     if null_output:
         state.handles.close(1)
         state.handles.slots[1] = NullDevice("NUL")
-    loader.load(cpu, data, child)
     cpu.r[CPU.AX] = 0
     cpu.flags = flags.ALWAYS_ONE | flags.IF
 
@@ -168,6 +175,8 @@ def terminate(cpu, state, code):
     parent = state.parents.pop()
     state.handles.close_all()  # what the child shares with its parent stays open for the parent
     state.memory.free_owned(state.psp_seg)
+    if parent.extended is not None:
+        state.extended.release_from(parent.extended)  # the objects of a child that is an LE program
     state.handles, state.dta, state.psp_seg = parent.handles, parent.dta, parent.psp_seg
     state.exit_status = code
     cpu.r[:], cpu.ip, cpu.flags = parent.registers, parent.ip, parent.flags

@@ -496,14 +496,22 @@ class TestGoingOnFromAState(CommandLineTest):
 
 
 class TestAnLeProgram(CommandLineTest):
-    def test_a_program_for_dos_4g_is_said_to_be_one_and_not_run_as_its_extender(self):
+    def test_a_program_for_dos_4g_is_run_in_the_flat_mode_and_its_exit_code_is_the_exit_code(self):
         from tests.le_builder import Obj, RW, RX, build_bound, build_program
-        objects = [Obj(b"\x90" * 100, size=0x1000, flags=RX), Obj(b"data", size=0x100, base=0x30000, flags=RW)]
+        code = bytes.fromhex("b8074c0000cd21")  # mov eax,4C07h / int 21h
+        objects = [Obj(code, size=0x1000, flags=RX), Obj(b"data", size=0x100, base=0x30000, flags=RW)]
         (self.dir / "GAME.EXE").write_bytes(build_bound(build_program(objects)))
         result = self.run_emulator("GAME.EXE")
+        self.assertEqual(result.returncode, 7)
+
+    def test_one_that_cannot_be_loaded_says_why(self):
+        from tests.le_builder import Obj, RW, RX, build_program
+        objects = [Obj(b"\x90", size=0x1000, flags=RX), Obj(b"data", size=0x100, base=0x30000, flags=RW)]
+        data = bytearray(build_program(objects, cpu=1))  # for the 286
+        (self.dir / "OLD.EXE").write_bytes(bytes(data))
+        result = self.run_emulator("OLD.EXE")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("NotImplementedError: this is an LE program (bound to the extender of DOS/4G", result.stderr)
-        self.assertIn("the 32-bit mode is not done yet", result.stderr)
+        self.assertIn("the program is for the cpu 1", result.stderr)
 
 
 class TestTheLogOfDosCalls(CommandLineTest):

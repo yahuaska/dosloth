@@ -15,6 +15,7 @@ from . import sysvars
 from .psp import DTA_OFFSET, PSP_SEG
 from .search import Searches, find, record
 from .volumes import Volumes
+from .xmem import ExtendedMemory
 
 DOS_VERSION = (7, 1)  # (major, minor) reported by INT 21h AH=30h
 OEM_MICROSOFT = 0xFF
@@ -138,6 +139,7 @@ class DosState:
         self.searches = Searches()  # the file searches that AH=4Eh began and AH=4Fh goes on with
         self.memory = Blocks(MEMORY_TOP_SEG, PSP_SEG, MEMORY_TOP_SEG - PSP_SEG)  # the blocks AH=48h-4Ah deal in
         self.psp_seg = PSP_SEG  # the PSP of the program that runs: the one of the last program started by EXEC
+        self.extended = ExtendedMemory()  # the memory above 1 MB, which the programs of the flat mode live in
         self.parents = []  # the programs that wait for a child to end, the last one first to come back
         self.exit_status = 0  # how the last child ended, for AH=4Dh
         self.pending_scan = None  # the scan code of a key with no character, to be given by the next read of a key
