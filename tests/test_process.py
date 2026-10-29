@@ -769,11 +769,12 @@ class TestAnLeProgram(ProcessTest):
         cpu, child = self.cpu, self.state.psp_seg
         self.assertGreater(child, FIRST_FREE - 1)
         self.assertTrue(cpu.flat)
-        self.assertEqual((cpu.ip, cpu.s[CPU.ES], self.state.extended.top), (START, child, START + 2 * 0x1000))
+        self.assertEqual((cpu.ip, cpu.s[CPU.ES]), (START, child))
+        self.assertEqual(self.state.extended.blocks, {START: 0x1000, START + 0x1000: 0x1000})
+        self.assertEqual(set(self.state.extended.owners.values()), {child})
         self.assertEqual(self.at_psp(0x16), PARENT)
         self.assertEqual(self.at_psp(0x02), dos.MEMORY_TOP_SEG)  # it has the conventional memory that is free
         self.assertEqual(self.state.memory.largest(), 0)
-        self.assertEqual(self.state.parents[0].extended, START)
 
     def test_a_plain_one_is_started_the_same(self):
         self.start("PLAIN.EXE", self.le_program(bound=False))
@@ -781,14 +782,13 @@ class TestAnLeProgram(ProcessTest):
 
     def test_it_runs_and_its_exit_code_goes_to_the_parent_which_finds_everything_as_it_was(self):
         from mydos.flat import REAL_MODE
-        from mydos.xmem import START
         cpu = self.cpu
         cpu.r[CPU.SI], cpu.rh[CPU.SI] = 0x1234, 0x5678
         blocks = dict(self.state.memory.blocks)
         self.start("GAME.EXE", self.le_program())
         self.run_child()
         self.assertEqual(self.state.exit_status, 7)
-        self.assertEqual((self.state.psp_seg, self.state.parents, self.state.extended.top), (PARENT, [], START))
+        self.assertEqual((self.state.psp_seg, self.state.parents, self.state.extended.blocks), (PARENT, [], {}))
         self.assertEqual(cpu.get_mode(), REAL_MODE)
         self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.get32(CPU.SI)), (0x0800, 2, 0x56781234))
         self.assertEqual(self.state.memory.blocks, blocks)
@@ -799,12 +799,12 @@ class TestAnLeProgram(ProcessTest):
         self.state.memory.resize(self.state.psp_seg, 0x1000)  # the program gives back what it does not need
         parent_state = (self.cpu.ip, list(self.cpu.s), self.cpu.get_mode())
         process.execute(self.cpu, self.state, self.le_program(), "C:\\CHILD.EXE")
-        self.assertEqual((self.cpu.ip, self.state.extended.top), (START + 2 * 0x1000, START + 4 * 0x1000))
+        self.assertEqual((self.cpu.ip, len(self.state.extended.blocks)), (START + 2 * 0x1000, 4))
         self.run_child()
         self.assertEqual((self.cpu.ip, list(self.cpu.s), self.cpu.get_mode()), parent_state)
-        self.assertEqual(self.state.extended.top, START + 2 * 0x1000)
+        self.assertEqual(sorted(self.state.extended.blocks), [START, START + 0x1000])  # the parent has its own still
         self.run_child()
-        self.assertEqual(self.state.extended.top, START)
+        self.assertEqual(self.state.extended.blocks, {})
 
     def test_a_program_that_cannot_be_loaded_is_error_11_and_nothing_is_taken(self):
         from tests.le_builder import F
@@ -813,8 +813,8 @@ class TestAnLeProgram(ProcessTest):
         self.start("BAD.EXE")
         self.assertEqual(self.failed(), 11)
         self.assertEqual(self.state.memory.blocks, blocks)
-        self.assertEqual((self.state.parents, self.state.psp_seg, self.state.extended.top, self.cpu.flat),
-                         ([], PARENT, self.state.extended.start, False))
+        self.assertEqual((self.state.parents, self.state.psp_seg, self.state.extended.blocks, self.cpu.flat),
+                         ([], PARENT, {}, False))
 
     def test_a_program_that_has_not_room_in_the_extended_memory_is_error_8_and_nothing_is_taken(self):
         from mydos.xmem import START, ExtendedMemory
@@ -823,8 +823,9 @@ class TestAnLeProgram(ProcessTest):
         self.start("BIG.EXE", self.le_program())
         self.assertEqual(self.failed(), 8)
         self.assertEqual(self.state.memory.blocks, blocks)
-        self.assertEqual((self.state.parents, self.state.psp_seg, self.state.extended.top, self.cpu.flat),
-                         ([], PARENT, START, False))
+        self.assertEqual((self.state.parents, self.state.psp_seg, self.state.extended.blocks, self.cpu.flat),
+                         ([], PARENT, {}, False))
+
 
 class TestWithoutAParent(unittest.TestCase):
     def test_the_first_program_ends_the_emulator_with_its_code(self):

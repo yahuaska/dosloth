@@ -7,11 +7,15 @@ that the program asks for (AX=0000h) are put in it, and what the program does to
 by the CPU at once, because it is the same table. The limits and the rights of a descriptor are taken and not kept:
 nothing looks at them.
 
+The memory that the program asks for is that above the first megabyte (AX=0501h, with the state of DOS' `extended`,
+see xmem.py) and that below it (AX=0100h, from the blocks of DOS, with a selector made for it).
+
 The selectors that the program is given look like those of a local table: the number of the descriptor shifted by 3, and
 the bits 111 (the local table, the privilege 3), as 0Fh and 17h of the loader are. The first free number is 3.
 """
 from . import flags
 from .cpu import CPU
+from .xmem import PAGE
 
 SELECTOR_BITS = 0x07  # the local descriptor table, privilege level 3
 FIRST_INDEX = 3  # 1 and 2 are the code and the data of the program (see loader.py), 0 is no selector
@@ -19,8 +23,12 @@ LAST_INDEX = 8191  # a table of descriptors has 8192 of them
 INCREMENT = 8  # between the selectors of descriptors that were got together
 
 UNAVAILABLE_DESCRIPTOR = 0x8011
+UNAVAILABLE_MEMORY = 0x8012
 INVALID_VALUE = 0x8021
 INVALID_SELECTOR = 0x8022
+INVALID_HANDLE = 0x8023
+INSUFFICIENT_DOS_MEMORY = 0x0008
+UNKNOWN = 0xFFFFFFFF  # what the call for the memory says of what it does not know
 
 VERSION = 0x0009  # DPMI 0.9: the major number in AH, the minor one in AL
 PIC_BASES = 0x0870  # where the interrupts of the two interrupt controllers begin: 08h and 70h
@@ -60,12 +68,35 @@ def refuse(cpu, code):
     cpu.set_flag(flags.CF, True)
 
 
-def int31(cpu):
+def pair(cpu, high, low):
+    """The 32-bit number that a program keeps in two registers, as the high one and the low one."""
+    return cpu.r[high] << 16 | cpu.r[low]
+
+
+def put_pair(cpu, high, low, value):
+    cpu.r[high], cpu.r[low] = value >> 16 & 0xFFFF, value & 0xFFFF
+
+
+def memory_information(cpu, state):
+    """AX=0500h: the facts about the memory, in the 48 bytes at ES:EDI. The size of the biggest block is the first;
+    then the pages, as many as can be had of one kind and another, and the totals (-1 where it is not known)."""
+    extended = state.extended
+    pages = extended.free_bytes() // PAGE
+    fields = (extended.largest(), extended.largest() // PAGE, extended.largest() // PAGE,
+              (extended.end - extended.start) // PAGE, pages, pages, (extended.end - extended.start) // PAGE,
+              pages, UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN)
+    for i, value in enumerate(fields):
+        cpu.wd(cpu.s[CPU.ES], cpu.get32(CPU.DI) + 4 * i, value)
+
+
+def int31(cpu, state):
     """INT 31h: the calls to the DPMI host. AX picks the call, and CF is 1 when it failed, and AX is the error.
 
     The descriptors: 0000h (CX of them, from the selector in AX), 0001h (free the one in BX), 0006h and 0007h (the
     base of BX in CX:DX, get and set), 0008h and 0009h (the limit in CX:DX and the rights in CX: taken and not kept);
-    and 0400h, the version. A call that is not here stops the emulator.
+    0400h, the version; the memory: 0500h (what there is), 0501h and 0502h (a block above 1 MB, and its return),
+    0100h and 0101h (a block below it, with its selector, and its return), 0600h and 0601h (locking: nothing to lock),
+    0800h (a device's memory: the physical address is the linear one). A call that is not here stops the emulator.
     """
     if not cpu.flat:
         raise NotImplementedError("INT 31h from real mode")
@@ -79,6 +110,39 @@ def int31(cpu):
         if first is None:
             return refuse(cpu, UNAVAILABLE_DESCRIPTOR)
         cpu.r[CPU.AX] = first
+    elif ax == 0x0500:
+        memory_information(cpu, state)
+    elif ax == 0x0501:
+        size = pair(cpu, CPU.BX, CPU.CX)
+        if size == 0:
+            return refuse(cpu, INVALID_VALUE)
+        address = state.extended.allocate(size, state.psp_seg)
+        if address is None:
+            return refuse(cpu, UNAVAILABLE_MEMORY)
+        put_pair(cpu, CPU.BX, CPU.CX, address)
+        put_pair(cpu, CPU.SI, CPU.DI, address)  # the handle is the address: nothing else is asked of it
+    elif ax == 0x0502:
+        if not state.extended.free(pair(cpu, CPU.SI, CPU.DI)):
+            return refuse(cpu, INVALID_HANDLE)
+    elif ax in (0x0600, 0x0601):
+        pass
+    elif ax == 0x0800:
+        put_pair(cpu, CPU.BX, CPU.CX, pair(cpu, CPU.BX, CPU.CX))
+    elif ax == 0x0100:
+        segment = state.memory.allocate(cpu.r[CPU.BX], state.psp_seg)
+        if segment is None:
+            cpu.r[CPU.BX] = state.memory.largest()
+            return refuse(cpu, INSUFFICIENT_DOS_MEMORY)
+        selector = new_descriptors(cpu.bases, 1)
+        if selector is None:
+            state.memory.free(segment)
+            return refuse(cpu, UNAVAILABLE_DESCRIPTOR)
+        cpu.bases[selector] = segment * 16
+        cpu.r[CPU.AX], cpu.r[CPU.DX] = segment, selector
+    elif ax == 0x0101:
+        if cpu.r[CPU.DX] not in cpu.bases or not state.memory.free(cpu.bases[cpu.r[CPU.DX]] // 16):
+            return refuse(cpu, INVALID_SELECTOR)
+        del cpu.bases[cpu.r[CPU.DX]]
     elif ax == 0x0400:
         cpu.r[CPU.AX], cpu.r[CPU.BX] = VERSION, FLAGS_386
         cpu.r[CPU.CX], cpu.r[CPU.DX] = PROCESSOR_486, PIC_BASES

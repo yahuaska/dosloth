@@ -62,7 +62,8 @@ class Machine(unittest.TestCase):
 class TestTheObjects(Machine):
     def test_they_go_one_after_another_from_the_first_megabyte_each_in_whole_pages(self):
         self.load()
-        self.assertEqual(self.extended.top, START + 4 * PAGE)
+        self.assertEqual(self.extended.blocks, {START: 2 * PAGE, START + 2 * PAGE: 2 * PAGE})
+        self.assertEqual(self.extended.owners, {START: PSP, START + 2 * PAGE: PSP})  # the program has them
         self.assertEqual((self.cpu.mem[START], self.cpu.mem[START + 0x10]), (0xF4, 0xA1))
         self.assertEqual(self.dword(START + 2 * PAGE), DATA_AT)
         self.assertEqual(bytes(self.cpu.mem[START + 2 * PAGE + 4:START + 2 * PAGE + 0x20]), b"\xCC" * 0x1C)
@@ -87,14 +88,20 @@ class TestTheObjects(Machine):
 
     def test_the_next_program_goes_after_it_and_one_that_is_taken_back_leaves_its_room(self):
         self.load()
-        mark = self.extended.top
+        loader.load_le(self.cpu, make_program(), 0x2000, self.extended)  # another program, with another PSP
+        self.assertEqual(self.cpu.ip, START + 4 * PAGE + 0x10)
+        self.assertEqual(len(self.extended.blocks), 4)
+        self.extended.free_owned(0x2000)
+        self.assertEqual(sorted(self.extended.blocks), [START, START + 2 * PAGE])
+        loader.load_le(self.cpu, make_program(), 0x2000, self.extended)
+        self.assertEqual(self.cpu.ip, START + 4 * PAGE + 0x10)
+
+    def test_a_room_that_was_given_back_in_the_middle_is_used_again(self):
         self.load()
-        self.assertEqual(self.extended.top, mark + 4 * PAGE)
-        self.assertEqual(self.cpu.ip, mark + 0x10)
-        self.extended.release_from(mark)
-        self.load()
-        self.assertEqual(self.cpu.ip, mark + 0x10)
-        self.assertEqual(self.extended.top, mark + 4 * PAGE)
+        loader.load_le(self.cpu, make_program(), 0x2000, self.extended)
+        self.extended.free_owned(PSP)  # the first one ended: its room is in front of the second
+        loader.load_le(self.cpu, make_program(), 0x3000, self.extended)
+        self.assertEqual(self.cpu.ip, START + 0x10)
 
 
 class TestTheFixups(Machine):
@@ -161,8 +168,8 @@ class TestTheStart(Machine):
 
 
 class TestWhenItCannotBeLoaded(Machine):
-    def assert_untouched(self, top):
-        self.assertEqual(self.extended.top, top)
+    def assert_untouched(self, blocks):
+        self.assertEqual(self.extended.blocks, blocks)
         self.assertEqual(bytes(self.cpu.mem[START:START + 4 * PAGE]), bytes(4 * PAGE))
         self.assertEqual(self.cpu.get_mode(), REAL_MODE)
 
@@ -170,7 +177,7 @@ class TestWhenItCannotBeLoaded(Machine):
         self.extended = ExtendedMemory(START, START + 3 * PAGE)  # the code goes in, the data does not
         with self.assertRaisesRegex(MemoryError, "no room for the object 2"):
             self.load()
-        self.assert_untouched(START)
+        self.assert_untouched({})
 
     def test_a_fixup_that_is_not_done_leaves_the_memory_and_the_pointer_as_they_were(self):
         objects = [Obj(CODE, size=0x1800, flags=RX), Obj(DATA, size=0x1800, base=0x30000, flags=RW)]
@@ -178,7 +185,7 @@ class TestWhenItCannotBeLoaded(Machine):
         self.extended.allocate(PAGE)  # something is already there
         with self.assertRaisesRegex(le.LeError, "kind 1"):
             self.load(data)
-        self.assertEqual(self.extended.top, START + PAGE)
+        self.assertEqual(self.extended.blocks, {START: PAGE})
         self.assertEqual(bytes(self.cpu.mem[START + PAGE:START + 5 * PAGE]), bytes(4 * PAGE))
 
     def test_a_file_that_is_not_an_le_program_is_an_error_of_the_format(self):
@@ -196,7 +203,7 @@ class TestTheGame(Machine):
         for obj in image.objects:
             bases[obj.number] = top
             top += (obj.size + PAGE - 1) // PAGE * PAGE
-        self.assertEqual(self.extended.top, top)
+        self.assertEqual(max(address + size for address, size in self.extended.blocks.items()), top)
         owner = {}
         for obj in image.objects:
             for index in range(obj.page_count):

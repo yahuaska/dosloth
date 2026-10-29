@@ -119,8 +119,8 @@ def load_exe(cpu, data, psp_seg):
 def load_le(cpu, data, psp_seg, extended):
     """Load the LE program in `data` (bound to the extender or not) the way DOS/4G does, and start it in the flat mode.
 
-    Each object goes to a block of `extended` (see xmem.py), in the order of the objects, and the fixups are made for
-    where they went. The code has the selector CODE_SELECTOR and the data DATA_SELECTOR, and both have the base 0:
+    Each object goes to a block of `extended` (see xmem.py), which the program owns, and the fixups are made for where
+    they went. The code has the selector CODE_SELECTOR and the data DATA_SELECTOR, and both have the base 0:
     what the linker wrote as an offset in an object is the address. ES is the PSP, whose selector is its segment
     (so is the one of the environment, that PSP:002C holds), SS and DS are the data and FS and GS are 0. The program
     starts at its entry, with its stack where the header says, and all the registers but ESP are 0.
@@ -132,11 +132,10 @@ def load_le(cpu, data, psp_seg, extended):
     if start is None:
         raise le.LeError("this file has no LE program in it")
     image = le.LeImage(data, start)
-    mark = extended.top
     bases = {}
     try:
         for obj in image.objects:
-            bases[obj.number] = extended.allocate(obj.size)
+            bases[obj.number] = extended.allocate(obj.size, psp_seg)
             if bases[obj.number] is None:
                 raise MemoryError(f"no room for the object {obj.number} of {obj.size:X}h bytes in the extended memory")
         code = {obj.number for obj in image.objects if obj.executable}
@@ -144,7 +143,7 @@ def load_le(cpu, data, psp_seg, extended):
         entry = bases[image.entry_object] + image.entry_offset
         esp = bases[image.stack_object] + image.stack_offset
     except (le.LeError, MemoryError):
-        extended.release_from(mark)
+        extended.free_owned(psp_seg)
         raise
     for number, bytes_ in loaded.items():
         pages = (len(bytes_) + 4095) // 4096 * 4096

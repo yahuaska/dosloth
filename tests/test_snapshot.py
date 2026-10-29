@@ -512,24 +512,25 @@ class TestWhatIsPutBack(SnapshotTest):
         snapshot.restore(c, packed, blobs)
         self.assertIsNone(c.state.parents[0].mode)
 
-    def test_the_extended_memory_given_out_comes_back_with_the_mark_of_a_parent_and_older_ones_have_none(self):
+    def test_the_extended_memory_given_out_comes_back_with_its_owners_and_older_snapshots_have_none(self):
         a = self.make()
         self.busy(a)
-        a.state.extended.allocate(5 * 4096)
-        a.state.parents[0].extended = 0x100000 + 4096
+        first = a.state.extended.allocate(5 * 4096, 0x1000)
+        second = a.state.extended.allocate(4096, 0x2000)
+        a.state.extended.free(first)
+        a.state.extended.allocate(4096, 0x2000)  # in the room that was given back
         path = str(self.out / "x.state")
         snapshot.save(path, a)
         b = self.make()
         snapshot.load(path, b)
-        self.assertEqual((b.state.extended.top, b.state.parents[0].extended), (0x100000 + 5 * 4096, 0x101000))
+        self.assertEqual((b.state.extended.blocks, b.state.extended.owners),
+                         (a.state.extended.blocks, a.state.extended.owners))
+        self.assertEqual(sorted(b.state.extended.blocks), [first, second])
 
-        def edit(data):
-            del data["dos"]["extended_top"]
-            del data["dos"]["parents"][0]["extended"]
-        packed, blobs = self.tampered(a, edit)
+        packed, blobs = self.tampered(a, lambda data: data["dos"].pop("extended"))
         c = self.make()
         snapshot.restore(c, packed, blobs)
-        self.assertEqual((c.state.extended.top, c.state.parents[0].extended), (0x100000, None))
+        self.assertEqual(c.state.extended.blocks, {})
 
     def test_the_registers_the_flags_and_the_place_come_back(self):
         a = self.make()

@@ -29,7 +29,6 @@ class Parent:
     handles: HandleTable
     high: list = None  # the high halves of its 32-bit registers (CPU.rh)
     mode: dict = None  # real mode or the flat one, and what goes with it (CPU.get_mode)
-    extended: int = None  # the mark of the extended memory when the child started: what is above it is the child's
 
 
 def read_environment(cpu, segment):
@@ -144,7 +143,7 @@ def execute(cpu, state, data, dos_path, block=None, tail=b"", null_output=False)
         cpu.mem[child * 16 + 0x80:child * 16 + 0x80 + len(line)] = line
 
     parent = Parent(parent_psp, list(cpu.r), list(cpu.s), cpu.ip, cpu.flags, state.dta, state.handles, list(cpu.rh),
-                    cpu.get_mode(), state.extended.top)
+                    cpu.get_mode())
     try:
         loader.load(cpu, data, child, state.extended)  # only an LE program can fail, and it has changed nothing
     except (le.LeError, MemoryError) as error:
@@ -175,8 +174,7 @@ def terminate(cpu, state, code):
     parent = state.parents.pop()
     state.handles.close_all()  # what the child shares with its parent stays open for the parent
     state.memory.free_owned(state.psp_seg)
-    if parent.extended is not None:
-        state.extended.release_from(parent.extended)  # the objects of a child that is an LE program
+    state.extended.free_owned(state.psp_seg)  # the objects of a child that is an LE program, and what it asked for
     state.handles, state.dta, state.psp_seg = parent.handles, parent.dta, parent.psp_seg
     state.exit_status = code
     cpu.r[:], cpu.ip, cpu.flags = parent.registers, parent.ip, parent.flags

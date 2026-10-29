@@ -38,7 +38,7 @@ class TestMemoryNeeded(unittest.TestCase):
 
 
 class TestAnLeProgram(unittest.TestCase):
-    """A program in the LE format, bound to DOS/4G or not, is loaded above 1 MB; the memory it asks of DOS is its PSP."""
+    """A program in the LE format, bound to DOS/4G or not, is loaded above 1 MB: what it asks of DOS is its PSP."""
 
     def programs(self):
         from tests.le_builder import Obj, RW, RX, build_bound, build_program
@@ -63,7 +63,7 @@ class TestAnLeProgram(unittest.TestCase):
             cpu, extended = CPU(), ExtendedMemory()
             loader.load(cpu, data, 0x3000, extended)
             self.assertTrue(cpu.flat, kind)
-            self.assertEqual((cpu.ip, extended.top), (START + 0x20, START + 5 * 0x1000), kind)
+            self.assertEqual((cpu.ip, sum(extended.blocks.values())), (START + 0x20, 5 * 0x1000), kind)
             self.assertEqual(bytes(cpu.mem[START + 0x20:START + 0x23]), b"\x90" * 3, kind)
 
     def test_load_without_the_extended_memory_to_put_it_in_stops_and_puts_nothing_in_memory(self):
@@ -82,7 +82,7 @@ class TestAnLeProgram(unittest.TestCase):
         from mydos.xmem import ExtendedMemory
         extended = ExtendedMemory()
         loader.load(CPU(), exe(b"\xB8\x00\x4C"), 0x4000, extended)
-        self.assertEqual(extended.top, extended.start)
+        self.assertEqual(extended.blocks, {})
 
 
 class TestLoad(unittest.TestCase):

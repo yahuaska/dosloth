@@ -630,5 +630,5 @@ def install(cpu, volumes=None):
     cpu.int_handlers[0x21] = lambda cpu: dos32.int21(cpu, state, int21) if cpu.flat else int21(cpu, state)
     cpu.int_handlers[0x25] = lambda cpu: int25(cpu, state)
     cpu.int_handlers[0x2F] = lambda cpu: dpmi.int2f(cpu, state, int2f) if cpu.flat else int2f(cpu, state)
-    cpu.int_handlers[0x31] = dpmi.int31
+    cpu.int_handlers[0x31] = lambda cpu: dpmi.int31(cpu, state)
     return state  # for whoever wants to look at what DOS holds, the tests in particular

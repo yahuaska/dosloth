@@ -3,6 +3,7 @@ asks if DOS/4G is there, and the answers of INT 2Fh in the flat mode."""
 import unittest
 
 from mydos import dos, dpmi, flags
+from mydos.xmem import PAGE, START, ExtendedMemory
 from mydos.cpu import CPU, Exit
 from mydos.loader import CODE_SELECTOR, DATA_SELECTOR
 
@@ -18,12 +19,16 @@ class FlatMachine(unittest.TestCase):
         self.cpu.enter_flat({CODE_SELECTOR: 0, DATA_SELECTOR: 0})
         self.bases = self.cpu.bases
 
-    def call(self, number, ax, bx=0, cx=0, dx=0):
+    def call(self, number, ax, bx=0, cx=0, dx=0, si=None, di=None):
         cpu = self.cpu
         cpu.mem[CODE_AT:CODE_AT + 2] = bytes([0xCD, number])
         cpu.s[CPU.CS] = CODE_SELECTOR
         cpu.ip = CODE_AT
         cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX] = ax, bx, cx, dx
+        if si is not None:
+            cpu.r[CPU.SI] = si
+        if di is not None:
+            cpu.r[CPU.DI] = di
         cpu.step()
 
     def failed(self):
@@ -159,6 +164,160 @@ class TestTheBase(FlatMachine):
         self.assertEqual(self.bases[selector], 0xFFFFFFFF)
 
 
+class TestExtendedMemory(FlatMachine):
+    def allocate(self, size):
+        """AX=0501h for `size` bytes: the address, the handle, and the error if there was one."""
+        self.call(0x31, 0x0501, bx=size >> 16, cx=size & 0xFFFF)
+        cpu = self.cpu
+        return cpu.r[CPU.BX] << 16 | cpu.r[CPU.CX], cpu.r[CPU.SI] << 16 | cpu.r[CPU.DI], self.failed()
+
+    def test_a_block_is_given_from_the_first_megabyte_and_the_handle_is_its_address(self):
+        address, handle, error = self.allocate(0x2000)
+        self.assertEqual((address, handle, error), (START, START, None))
+        self.cpu.mem[address + 0x1FFF] = 0x5A  # all of it is there
+        self.assertEqual(self.cpu.rb(DATA_SELECTOR, address + 0x1FFF), 0x5A)
+
+    def test_the_next_block_is_after_it_and_a_size_is_cut_to_whole_pages(self):
+        first = self.allocate(0x1001)[0]
+        second = self.allocate(1)[0]
+        self.assertEqual((first, second), (START, START + 2 * PAGE))
+
+    def test_a_size_of_more_than_64_kb_is_in_bx_and_cx_the_high_half_first(self):
+        address, _, error = self.allocate(0x00123456)
+        self.assertIsNone(error)
+        self.assertEqual(self.state.extended.blocks, {address: 0x124000})
+        self.assertEqual(self.allocate(0x00010000)[0], address + 0x124000)
+
+    def test_a_size_of_nothing_is_error_8021(self):
+        self.assertEqual(self.allocate(0)[2], 0x8021)
+        self.assertEqual(self.state.extended.blocks, {})
+
+    def test_when_there_is_not_room_it_is_error_8012_and_nothing_is_taken(self):
+        self.state.extended = ExtendedMemory(START, START + 4 * PAGE)
+        self.assertEqual(self.allocate(4 * PAGE)[2], None)
+        self.state.extended.free(START)
+        self.assertEqual(self.allocate(4 * PAGE + 1)[2], 0x8012)
+        self.assertEqual(self.state.extended.blocks, {})
+
+    def test_the_block_is_the_property_of_the_running_program(self):
+        self.state.psp_seg = 0x1234
+        address = self.allocate(PAGE)[0]
+        self.assertEqual(self.state.extended.owners, {address: 0x1234})
+
+    def test_a_block_that_is_freed_is_free_and_is_given_again(self):
+        address, handle, _ = self.allocate(2 * PAGE)
+        self.allocate(PAGE)
+        self.call(0x31, 0x0502, si=handle >> 16, di=handle & 0xFFFF)
+        self.assertIsNone(self.failed())
+        self.assertEqual(sorted(self.state.extended.blocks), [START + 2 * PAGE])
+        self.assertEqual(self.allocate(PAGE)[0], address)
+
+    def test_a_handle_that_is_not_one_is_error_8023(self):
+        self.allocate(PAGE)
+        for handle in (START + PAGE, START + 1, 0x00010000):
+            self.call(0x31, 0x0502, si=handle >> 16, di=handle & 0xFFFF)
+            self.assertEqual(self.failed(), 0x8023, hex(handle))
+        self.assertEqual(len(self.state.extended.blocks), 1)
+
+    def test_what_the_call_does_not_answer_is_left_as_it_was(self):
+        self.cpu.set32(CPU.BP, 0x11223344)
+        self.cpu.rh[CPU.CX] = 0xBEEF
+        self.allocate(PAGE)
+        self.assertEqual(self.cpu.get32(CPU.BP), 0x11223344)
+
+    def test_the_facts_about_the_memory_are_48_bytes_at_es_edi_with_the_biggest_block_first(self):
+        self.allocate(10 * PAGE)
+        self.cpu.s[CPU.ES] = DATA_SELECTOR
+        self.cpu.set32(CPU.DI, 0x300000)
+        self.cpu.mem[0x300000 + 48:0x300000 + 52] = b"\xAA\xAA\xAA\xAA"
+        self.call(0x31, 0x0500)
+        self.assertIsNone(self.failed())
+        extended = self.state.extended
+        words = [self.cpu.rd(DATA_SELECTOR, 0x300000 + 4 * i) for i in range(13)]
+        free = extended.free_bytes()
+        total = (extended.end - extended.start) // PAGE
+        self.assertEqual(words[:8], [free, free // PAGE, free // PAGE, total, free // PAGE, free // PAGE, total,
+                                     free // PAGE])
+        self.assertEqual(words[8:12], [0xFFFFFFFF] * 4)  # not known
+        self.assertEqual(words[12], 0xAAAAAAAA)  # nothing beyond the 48 bytes
+
+    def test_the_biggest_block_is_the_biggest_gap_and_not_all_that_is_free(self):
+        self.allocate(PAGE)
+        self.allocate(PAGE)
+        self.allocate(PAGE)
+        self.state.extended.free(START + PAGE)  # a gap of a page in front of the rest
+        self.cpu.s[CPU.ES] = DATA_SELECTOR
+        self.cpu.set32(CPU.DI, 0x300000)
+        self.call(0x31, 0x0500)
+        self.assertEqual(self.cpu.rd(DATA_SELECTOR, 0x300000), self.state.extended.largest())
+        self.assertGreater(self.state.extended.largest(), PAGE)  # it is the one at the end
+
+    def test_locking_and_unlocking_do_nothing_and_say_so(self):
+        for ax in (0x0600, 0x0601):
+            self.cpu.set_flag(flags.CF, True)
+            self.call(0x31, ax, bx=0x0012, cx=0x3456, si=0, di=0x1000)
+            self.assertEqual((self.failed(), self.cpu.r[CPU.BX], self.cpu.r[CPU.CX]), (None, 0x0012, 0x3456))
+
+    def test_the_memory_of_a_device_is_at_the_linear_address_of_its_physical_one(self):
+        self.call(0x31, 0x0800, bx=0xE000, cx=0x0000, si=0, di=0x1000)
+        self.assertEqual((self.failed(), self.cpu.r[CPU.BX], self.cpu.r[CPU.CX]), (None, 0xE000, 0x0000))
+        self.call(0x31, 0x0800, bx=0x000A, cx=0x0000, si=0, di=0x1000)
+        self.assertEqual((self.cpu.r[CPU.BX], self.cpu.r[CPU.CX]), (0x000A, 0x0000))
+
+
+class TestMemoryBelowTheMegabyte(FlatMachine):
+    def setUp(self):
+        super().setUp()
+        self.state.memory.resize(self.state.psp_seg, 0x100)  # the program has given back what it did not need
+
+    def test_a_block_of_paragraphs_has_a_segment_and_a_selector_with_its_base(self):
+        self.call(0x31, 0x0100, bx=0x20)
+        cpu = self.cpu
+        segment, selector = cpu.r[CPU.AX], cpu.r[CPU.DX]
+        self.assertIsNone(self.failed())
+        self.assertEqual(self.state.memory.blocks[segment], 0x20)
+        self.assertEqual(self.state.memory.owners[segment], self.state.psp_seg)
+        self.assertEqual(self.bases[selector], segment * 16)
+        self.assertEqual(selector & 7, 7)
+        cpu.mem[segment * 16 + 5] = 0x77
+        self.assertEqual(cpu.rb(selector, 5), 0x77)
+
+    def test_when_there_is_not_room_it_is_error_8_with_the_biggest_block_in_bx(self):
+        largest = self.state.memory.largest()
+        before = dict(self.bases)
+        self.call(0x31, 0x0100, bx=largest + 1)
+        self.assertEqual((self.failed(), self.cpu.r[CPU.BX]), (0x0008, largest))
+        self.assertEqual(self.bases, before)
+
+    def test_without_a_descriptor_left_the_block_is_not_kept_either(self):
+        for index in range(3, 8192):
+            self.bases[index << 3 | 7] = 0
+        blocks = dict(self.state.memory.blocks)
+        self.call(0x31, 0x0100, bx=0x20)
+        self.assertEqual(self.failed(), 0x8011)
+        self.assertEqual(self.state.memory.blocks, blocks)
+
+    def test_a_block_is_freed_by_its_selector_and_the_selector_goes_with_it(self):
+        self.call(0x31, 0x0100, bx=0x20)
+        segment, selector = self.cpu.r[CPU.AX], self.cpu.r[CPU.DX]
+        self.call(0x31, 0x0101, dx=selector)
+        self.assertIsNone(self.failed())
+        self.assertNotIn(segment, self.state.memory.blocks)
+        self.assertNotIn(selector, self.bases)
+
+    def test_a_selector_that_is_not_of_a_block_is_error_8022_and_is_left_alone(self):
+        for selector in (0x77, CODE_SELECTOR):
+            self.call(0x31, 0x0101, dx=selector)
+            self.assertEqual(self.failed(), 0x8022, hex(selector))
+        self.assertIn(CODE_SELECTOR, self.bases)
+        self.call(0x31, 0x0000, cx=1)  # a descriptor with the base 0: that is not the base of a block of DOS
+        selector = self.cpu.r[CPU.AX]
+        self.call(0x31, 0x0101, dx=selector)
+        self.assertEqual(self.failed(), 0x8022)
+        self.assertIn(selector, self.bases)
+        self.assertIn(self.state.psp_seg, self.state.memory.blocks)  # the program's own block is not freed by it
+
+
 class TestTheCall(FlatMachine):
     def test_the_version_is_dpmi_0_9_for_a_32_bit_program_on_a_486_with_the_pics_at_08_and_70(self):
         self.call(0x31, 0x0400)
@@ -167,8 +326,8 @@ class TestTheCall(FlatMachine):
         self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (0x0009, 0x0001, 4, 0x0870))
 
     def test_a_call_that_is_not_done_stops_the_emulator_with_its_number(self):
-        with self.assertRaisesRegex(NotImplementedError, "INT 31h AX=0501"):
-            self.call(0x31, 0x0501)
+        with self.assertRaisesRegex(NotImplementedError, "INT 31h AX=0300"):
+            self.call(0x31, 0x0300)
 
     def test_a_successful_call_clears_the_carry_and_leaves_the_other_registers(self):
         cpu = self.cpu
