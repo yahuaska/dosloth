@@ -4,7 +4,7 @@ import struct
 import unittest
 from pathlib import Path
 
-from mydos import le, loader, psp
+from mydos import flags, le, loader, psp
 from mydos.cpu import CPU, Exit
 from mydos.flat import REAL_MODE, Bases
 from mydos.xmem import PAGE, START, ExtendedMemory
@@ -212,6 +212,33 @@ class TestTheGame(Machine):
         self.assertGreater(checked, 1000)
         self.assertEqual(self.cpu.ip, bases[image.entry_object] + image.entry_offset)
         self.assertEqual(self.cpu.get32(CPU.SP), bases[image.stack_object] + image.stack_offset)
+
+    def test_the_start_code_is_answered_by_the_extender_that_the_machine_plays(self):
+        from mydos import dos
+        dos.install(self.cpu)
+        answers = []
+
+        def watch(number):
+            handler = self.cpu.int_handlers[number]
+
+            def watched(cpu):
+                asked = cpu.get32(CPU.AX)
+                handler(cpu)
+                answers.append((number, asked, cpu.get32(CPU.AX), cpu.get_flag(flags.CF)))
+            self.cpu.int_handlers[number] = watched
+        watch(0x21)
+        watch(0x31)
+        self.load(SMKP.read_bytes())
+        for _ in range(10000):
+            if len(answers) == 3:
+                break
+            self.cpu.step()
+        self.assertEqual([call[:2] for call in answers], [(0x21, 0x3000), (0x21, 0xFF00), (0x31, 0x0006)])
+        self.assertNotEqual(answers[1][2] & 0xFF, 0)  # DOS/4G is here
+        self.assertEqual([call[3] for call in answers], [False] * 3)
+        gs = self.cpu.s[CPU.GS]
+        self.assertEqual(self.cpu.bases[gs], 0)
+        self.assertEqual(self.cpu.bases[loader.DATA_SELECTOR], 0)  # the base of the data, which the 0006 was asked of
 
     def test_it_runs_to_its_first_call_of_dos_asking_who_is_there(self):
         calls = []

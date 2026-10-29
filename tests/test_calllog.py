@@ -150,6 +150,69 @@ class TestNames(LoggedTest):
         self.assertNotIn('"', self.lines()[1])
 
 
+class TestTheFlatMode(unittest.TestCase):
+    """A program of 32 bits: the registers are shown whole, and so are the addresses and the pointers."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        dos.install(self.cpu)
+        self.out = io.StringIO()
+        calllog.install(self.cpu, self.out)
+        self.cpu.enter_flat({0x0F: 0, 0x17: 0})
+        self.cpu.s[:] = [0x17, 0x0F, 0x17, 0x17, 0, 0]
+
+    def call(self, number, **registers):
+        cpu = self.cpu
+        cpu.mem[0x200000:0x200002] = bytes([0xCD, number])
+        cpu.ip = 0x200000
+        for name, value in registers.items():
+            cpu.set32(getattr(CPU, name.upper()), value)
+        cpu.step()
+
+    def lines(self):
+        return self.out.getvalue().splitlines()
+
+    def test_the_registers_of_the_call_and_of_the_answer_are_of_32_bits_and_so_is_the_address(self):
+        self.call(0x21, ax=0x3000, bx=0x50484152, si=0x12345678)
+        first, second = self.lines()
+        self.assertRegex(first, r"^ +1  000F:00200000  INT 21h EAX=00003000 EBX=50484152 ECX=00000000 EDX=00000000 "
+                                r"ESI=12345678 EDI=00000000 DS=0017 ES=0017$")
+        self.assertEqual(second, ARROW + "CF=0 EAX=00000107 EBX=5048FF00 ECX=00000000 EDX=00000000")
+
+    def test_the_calls_of_the_dpmi_host_are_in_the_log_too(self):
+        self.call(0x31, ax=0x0006, bx=0x0F)
+        first, second = self.lines()
+        self.assertIn("INT 31h EAX=00000006 EBX=0000000F", first)
+        self.assertEqual(second, ARROW + "CF=0 EAX=00000006 EBX=0000000F ECX=00000000 EDX=00000000")
+
+    def test_a_name_that_is_above_64_kb_is_shown_and_the_call_that_is_not_done_is_said_so(self):
+        self.cpu.mem[0x301000:0x301006] = b"A.DAT\0"
+        with self.assertRaises(NotImplementedError):
+            self.call(0x21, ax=0x3D00, dx=0x301000)
+        first, second = self.lines()
+        self.assertTrue(first.endswith(' "A.DAT"'), first)
+        self.assertEqual(second, ARROW + "NOT IMPLEMENTED")
+
+    def test_the_bytes_to_write_are_read_with_a_count_and_a_pointer_of_32_bits(self):
+        self.cpu.mem[0x302000:0x302003] = b"abc"
+        with self.assertRaises(NotImplementedError):
+            self.call(0x21, ax=0x4000, bx=1, cx=0x10003, dx=0x302000)  # a count of more than 64 KB: cut as a long text
+        first = self.lines()[0]
+        self.assertIn(' "abc\\x00\\x00', first)
+        self.assertTrue(first.endswith('..."'), first)
+
+    def test_real_mode_is_shown_as_before(self):
+        cpu = CPU()
+        dos.install(cpu)
+        out = io.StringIO()
+        calllog.install(cpu, out)
+        cpu.s[CPU.CS] = 0x1000
+        cpu.mem[0x10000:0x10002] = b"\xCD\x21"
+        cpu.r[CPU.AX] = 0x3000
+        cpu.step()
+        self.assertRegex(out.getvalue().splitlines()[0], r"1000:0000  INT 21h AX=3000 BX=0000 ")
+
+
 class TestFolding(test_dos.FileFunctionsTest):
     """A run of calls that are the same in every way is written once, and counted."""
 

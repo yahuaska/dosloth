@@ -10,7 +10,7 @@ from .filesystem import (ACCESS_DENIED, ATTR_DIRECTORY, ATTR_READONLY, ATTR_VOLU
                          INVALID_DRIVE, PATH_NOT_FOUND, FsError)
 from .handles import Console, HandleTable, NullDevice, OpenFile
 from .memory import Blocks
-from . import process
+from . import dos32, dpmi, process
 from . import sysvars
 from .psp import DTA_OFFSET, PSP_SEG
 from .search import Searches, find, record
@@ -627,7 +627,8 @@ def install(cpu, volumes=None):
     country.install(cpu)
     sysvars.write(cpu, state.config, MEMORY_TOP_SEG)  # the tables of DOS, which a program finds with AH=52h
     cpu.int_handlers[0x20] = lambda cpu: process.terminate(cpu, state, 0)
-    cpu.int_handlers[0x21] = lambda cpu: int21(cpu, state)
+    cpu.int_handlers[0x21] = lambda cpu: dos32.int21(cpu, state, int21) if cpu.flat else int21(cpu, state)
     cpu.int_handlers[0x25] = lambda cpu: int25(cpu, state)
-    cpu.int_handlers[0x2F] = lambda cpu: int2f(cpu, state)
+    cpu.int_handlers[0x2F] = lambda cpu: dpmi.int2f(cpu, state, int2f) if cpu.flat else int2f(cpu, state)
+    cpu.int_handlers[0x31] = dpmi.int31
     return state  # for whoever wants to look at what DOS holds, the tests in particular
