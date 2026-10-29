@@ -1,14 +1,15 @@
 """INT 21h of a 32-bit program in the flat mode: the registers are of 32 bits and the pointers are of the flat model.
 
-So far the questions that the extender answers by itself (AX=FF00h, who is the extender) and the functions that take
-no pointer and no count, which the 16-bit handler does as it is. Any other function stops the emulator, with its
-number, and is done here when a program asks for it.
+So far the questions that the extender answers by itself (AX=FF00h, who is the extender) and the functions that the
+16-bit handler does for both: they take a pointer or a count of 32 bits when the program is of 32 bits (EDX, ECX,
+and the answer in all of EAX), see `CPU.wide` and `CPU.address_mask`. Any other function stops the emulator, with its
+number, and is done when a program asks for it.
 """
 from . import dpmi, flags
 from .cpu import CPU
 
 EXTENDER_QUESTION = 0xFF00  # AX, with 0078h in DX: is DOS/4G here?
-SAME_AS_REAL_MODE = (0x30, 0x4C)  # the version of DOS, and the end of the program
+SHARED_WITH_REAL_MODE = (0x1A, 0x30, 0x3D, 0x3E, 0x3F, 0x40, 0x42, 0x44, 0x4C, 0x4E, 0x4F)
 
 
 def int21(cpu, state, real):
@@ -20,7 +21,7 @@ def int21(cpu, state, real):
         cpu.r[CPU.AX] = 1
         cpu.set_flag(flags.CF, False)
         dpmi.zero_based_selector(cpu)
-    elif ax >> 8 in SAME_AS_REAL_MODE:
+    elif ax >> 8 in SHARED_WITH_REAL_MODE:
         real(cpu, state)
     else:
         raise NotImplementedError(f"INT 21h AX={ax:04X} in the flat mode")

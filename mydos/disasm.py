@@ -229,6 +229,8 @@ def _decode_opcode32(r, op, seg_override):
         return f"{name} {dst}, {src}"
     if op in fpu.OPCODES:
         return _esc(r, op, seg_override, done_only=True)
+    if Op.IO_IMM <= op < Op.IO_IMM + 4 or Op.IO_DX <= op < Op.IO_DX + 4:
+        return _decode_opcode(r, op, seg_override)  # the register is EAX with the size of 32 bits
     if Op.INC_R16 <= op < Op.INC_R16 + 8:
         return f"inc {REG32[op - Op.INC_R16]}"
     if Op.DEC_R16 <= op < Op.DEC_R16 + 8:
@@ -470,7 +472,7 @@ def _decode_opcode(r, op, seg_override):
             return None
         return f"{'les' if op == Op.LES else 'lds'} {REGS_BY_BITS[32 if r.osize32 else 16][reg]}, {rm}"
     if Op.IO_IMM <= op < Op.IO_IMM + 4 or Op.IO_DX <= op < Op.IO_DX + 4:
-        reg = "ax" if op & 1 else "al"
+        reg = ("eax" if r.osize32 else "ax") if op & 1 else "al"
         port = "dx" if op & 8 else f"{r.u8():02X}"
         return f"out {port}, {reg}" if op & 2 else f"in {reg}, {port}"
     if op in (Op.RET_NEAR_POP, Op.RETF_POP):

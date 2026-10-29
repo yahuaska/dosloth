@@ -188,18 +188,18 @@ class TestTheFlatMode(unittest.TestCase):
     def test_a_name_that_is_above_64_kb_is_shown_and_the_call_that_is_not_done_is_said_so(self):
         self.cpu.mem[0x301000:0x301006] = b"A.DAT\0"
         with self.assertRaises(NotImplementedError):
-            self.call(0x21, ax=0x3D00, dx=0x301000)
+            self.call(0x21, ax=0x3C00, dx=0x301000)
         first, second = self.lines()
         self.assertTrue(first.endswith(' "A.DAT"'), first)
         self.assertEqual(second, ARROW + "NOT IMPLEMENTED")
 
     def test_the_bytes_to_write_are_read_with_a_count_and_a_pointer_of_32_bits(self):
         self.cpu.mem[0x302000:0x302003] = b"abc"
-        with self.assertRaises(NotImplementedError):
-            self.call(0x21, ax=0x4000, bx=1, cx=0x10003, dx=0x302000)  # a count of more than 64 KB: cut as a long text
-        first = self.lines()[0]
+        self.call(0x21, ax=0x4000, bx=9, cx=0x10003, dx=0x302000)  # a count of more than 64 KB, to a handle not open
+        first, second = self.lines()
         self.assertIn(' "abc\\x00\\x00', first)
         self.assertTrue(first.endswith('..."'), first)
+        self.assertIn("CF=1 EAX=00000006", second)  # error 6: the handle is not open; nothing was written
 
     def test_real_mode_is_shown_as_before(self):
         cpu = CPU()

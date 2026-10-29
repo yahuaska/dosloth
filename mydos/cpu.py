@@ -1599,23 +1599,23 @@ class CPU(Ops32, Fpu, FlatMemory):
         Ports are a second address space, apart from memory, with numbers 0000-FFFF; each belongs to a
         device (timer, keyboard, ...), and only these instructions reach it. Three bits of the opcode
         say which of the eight it is:
-            bit 0: the size, 0 = a byte (AL), 1 = a word (AX)
+            bit 0: the size, 0 = a byte (AL), 1 = a word (AX), or a doubleword (EAX) with the operand size of 32 bits
             bit 1: the direction, 0 = IN (the port into AL or AX), 1 = OUT (AL or AX to the port)
             bit 3: where the port number is, 0 = in the byte after the opcode, 1 = in DX
         The devices are Python functions listed in self.port_readers and self.port_writers. A word goes
         to two neighbouring ports, the low byte to the port and the high byte to the next one, which is
-        what an 8-bit device sees on the bus. Flags are not changed.
+        what an 8-bit device sees on the bus (a doubleword goes to four). Flags are not changed.
         """
         port = self.r[self.DX] if op & 8 else self.fetch8()
-        bits = 16 if op & 1 else 8
+        bits = (32 if self.osize32 else 16) if op & 1 else 8  # EAX with the size of 32 bits: it goes to four ports
         if op & 2:  # OUT
-            self.port_out(port, self.get_reg(0, bits))  # register 0 is AL or AX
-            if bits == 16:
-                self.port_out((port + 1) & 0xFFFF, self.r[self.AX] >> 8)
+            value = self.get_reg(0, bits)  # register 0 is AL, AX or EAX
+            for i in range(bits // 8):
+                self.port_out((port + i) & 0xFFFF, value >> 8 * i)
         else:  # IN
-            value = self.port_in(port)
-            if bits == 16:
-                value |= self.port_in((port + 1) & 0xFFFF) << 8
+            value = 0
+            for i in range(bits // 8):
+                value |= self.port_in((port + i) & 0xFFFF) << 8 * i
             self.set_reg(0, bits, value)
 
     def cmc(self, op):

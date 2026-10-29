@@ -64,6 +64,15 @@ class FlatMemory:
         """Back to real mode, with 16 bits of everything."""
         self.set_mode(REAL_MODE)
 
+    def wide(self, n):
+        """Register number n as a program has it for a pointer or a count: of 32 bits in the flat mode, of 16 in
+        real mode."""
+        return self.rh[n] << 16 | self.r[n] if self.flat else self.r[n]
+
+    def address_mask(self):
+        """Where an offset wraps: at 4 GB in the flat mode, at 64 KB in real mode."""
+        return 0xFFFFFFFF if self.flat else 0xFFFF
+
     def use_real_memory(self):
         """Back to the memory of real mode, with its methods."""
         self.flat = False

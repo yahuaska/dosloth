@@ -32,7 +32,9 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   asked for so far; real mode has none (`tests/test_fpu.py`: status words from a real chip, run on the host)
 - `mydos/dpmi.py`, `mydos/dos32.py` - what the machine plays of DOS/4G for a program in the flat mode: INT 31h (the
   descriptors in `cpu.bases`, the version, the memory above and below 1 MB), INT 21h AX=FF00h, INT 2Fh AX=1686h;
-  INT 21h of the flat mode (only the functions done so far; the others stop the emulator) (`tests/test_dpmi.py`)
+  INT 21h of the flat mode: the functions that dos.py does for both modes (EDX/ECX pointers and counts of 32 bits via
+  `cpu.wide`, `cpu.address_mask`), the others stop the emulator (`tests/test_dpmi.py`, `tests/test_dos32.py`); IN/OUT
+  with EAX are in `tests/test_cpu386_io.py`
 - `mydos/dos.py`  - INT 21h and friends (Python-side handlers)
 - `mydos/bios.py` - BIOS interrupts (INT 1Ah time of day, INT 16h keyboard, INT 10h video: modes 03h/12h, the
   colors AH=10h, the VGA check; INT 11h equipment, INT 12h memory size), also Python-side handlers

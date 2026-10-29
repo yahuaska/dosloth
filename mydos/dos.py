@@ -39,15 +39,24 @@ MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands o
 
 
 def read_path(cpu):
-    """The path in the zero-ended string at DS:DX, which is how DOS functions are given a file name."""
-    segment, offset = cpu.s[CPU.DS], cpu.r[CPU.DX]
+    """The path in the zero-ended string at DS:DX (DS:EDX of a 32-bit program), which is how DOS functions are given a
+    file name."""
+    segment, offset, mask = cpu.s[CPU.DS], cpu.wide(CPU.DX), cpu.address_mask()
     characters = bytearray()
     for i in range(MAX_PATH):
-        byte = cpu.rb(segment, (offset + i) & 0xFFFF)
+        byte = cpu.rb(segment, (offset + i) & mask)
         if byte == 0:
             return characters.decode("cp437")
         characters.append(byte)
     raise FsError(PATH_NOT_FOUND, "the path is too long, or has no end")
+
+
+def put_count(cpu, count):
+    """The answer that is a number of bytes: all of EAX for a 32-bit program (it can be more than 64 KB), else AX."""
+    if cpu.flat:
+        cpu.set32(CPU.AX, count)
+    else:
+        cpu.r[CPU.AX] = count
 
 
 def now():
@@ -93,7 +102,7 @@ def put_record(cpu, state, number, entry):
     """Write what a search found into the DTA, for a program to read."""
     segment, offset = state.dta
     for i, byte in enumerate(record(number, entry)):
-        cpu.wb(segment, (offset + i) & 0xFFFF, byte)
+        cpu.wb(segment, (offset + i) & cpu.address_mask(), byte)
 
 
 def find_first(cpu, state):
@@ -202,8 +211,8 @@ def int21(cpu, state):
         n = cpu.get8(0)
         cpu.r[CPU.BX] = cpu.rw(0, n * 4)
         cpu.s[CPU.ES] = cpu.rw(0, n * 4 + 2)
-    elif ah == 0x1A:  # set the disk transfer area to DS:DX: where the results of a file search are put
-        state.dta = (cpu.s[CPU.DS], cpu.r[CPU.DX])
+    elif ah == 0x1A:  # set the disk transfer area to DS:DX (EDX): where the results of a file search are put
+        state.dta = (cpu.s[CPU.DS], cpu.wide(CPU.DX))
     elif ah == 0x2F:  # get the disk transfer area into ES:BX
         cpu.s[CPU.ES], cpu.r[CPU.BX] = state.dta
     elif ah == 0x29:  # take apart the file name at DS:SI into the FCB at ES:DI; AL = what it was (see fcb.parse)
@@ -327,7 +336,7 @@ def int21(cpu, state):
             cpu.set_flag(flags.CF, True)
             cpu.r[CPU.AX] = 6
     elif ah == 0x3F:  # read CX bytes from the file handle in BX to DS:DX; AX = how many were read
-        handle, count = cpu.r[CPU.BX], cpu.r[CPU.CX]
+        handle, count = cpu.r[CPU.BX], cpu.wide(CPU.CX)
         entry = state.handles.get(handle)
         if entry is None:
             cpu.set_flag(flags.CF, True)
@@ -347,11 +356,11 @@ def int21(cpu, state):
                 cpu.r[CPU.AX] = ACCESS_DENIED
             else:
                 for i, byte in enumerate(data):
-                    cpu.wb(cpu.s[CPU.DS], (cpu.r[CPU.DX] + i) & 0xFFFF, byte)
-                cpu.r[CPU.AX] = len(data)
+                    cpu.wb(cpu.s[CPU.DS], (cpu.wide(CPU.DX) + i) & cpu.address_mask(), byte)
+                put_count(cpu, len(data))
                 cpu.set_flag(flags.CF, False)
     elif ah == 0x40:  # write CX bytes from DS:DX to the file handle in BX; AX = how many were written
-        handle, count = cpu.r[CPU.BX], cpu.r[CPU.CX]
+        handle, count = cpu.r[CPU.BX], cpu.wide(CPU.CX)
         entry = state.handles.get(handle)
         if entry is None:  # error 06: invalid handle: not open
             cpu.set_flag(flags.CF, True)
@@ -362,24 +371,24 @@ def int21(cpu, state):
         elif isinstance(entry, OpenFile):
             # A file takes the bytes at its current position. CX = 0 is not an empty write: it cuts the file
             # off at that position.
-            data = bytes(cpu.rb(cpu.s[CPU.DS], (cpu.r[CPU.DX] + i) & 0xFFFF) for i in range(count))
+            data = bytes(cpu.rb(cpu.s[CPU.DS], (cpu.wide(CPU.DX) + i) & cpu.address_mask()) for i in range(count))
             try:
                 if count == 0:
                     entry.file.truncate()
                 else:
                     entry.file.write(data)
-                cpu.r[CPU.AX] = count
+                put_count(cpu, count)
                 cpu.set_flag(flags.CF, False)
             except (OSError, ValueError):  # error 05: access denied: the file was not opened for writing
                 cpu.set_flag(flags.CF, True)
                 cpu.r[CPU.AX] = ACCESS_DENIED
         else:
             if isinstance(entry, Console):  # the screen; error output goes to ours. The devices just swallow it.
-                data = bytes(cpu.rb(cpu.s[CPU.DS], (cpu.r[CPU.DX] + i) & 0xFFFF) for i in range(count))
+                data = bytes(cpu.rb(cpu.s[CPU.DS], (cpu.wide(CPU.DX) + i) & cpu.address_mask()) for i in range(count))
                 stream = sys.stderr if entry.stream == "stderr" else sys.stdout
                 stream.write(data.decode("cp437"))
                 stream.flush()
-            cpu.r[CPU.AX] = count
+            put_count(cpu, count)
             cpu.set_flag(flags.CF, False)
     elif ah == 0x41:  # delete the file named at DS:DX: no wildcards, and not a directory or a read-only file
         try:

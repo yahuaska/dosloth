@@ -400,7 +400,7 @@ class TestDosInTheFlatMode(FlatMachine):
         self.assertEqual(stop.exception.code, 7)
 
     def test_a_function_that_is_not_done_for_the_flat_mode_stops_with_its_number_and_the_mode(self):
-        for ax in (0x3D00, 0x4800, 0x0900):
+        for ax in (0x3C00, 0x4800, 0x0900):
             with self.assertRaisesRegex(NotImplementedError, f"INT 21h AX={ax:04X} in the flat mode"):
                 self.call(0x21, ax)
 

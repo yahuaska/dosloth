@@ -547,6 +547,8 @@ class Ops32:
             base = operation << 3
             same(*range(base, base + 5))
             table[base + 5] = self.alu_acc32
+        for form in range(4):  # IN and OUT: the size is that of the operands, and in_out knows it
+            same(Op.IO_IMM + form, Op.IO_DX + form)
         same(Op.NOP, Op.CLC, Op.STC, Op.CLI, Op.STI, Op.CLD, Op.STD, Op.CMC, Op.HLT, Op.WAIT, Op.SAHF, Op.LAHF,
              Op.JMP_SHORT, Op.INT, Op.ALU_RM8_IMM8, Op.MOV_RM_REG, Op.MOV_RM_REG + 2, Op.TEST_RM_REG, Op.XCHG_RM_REG,
              Op.MOV_AL_MOFFS8, Op.MOV_MOFFS8_AL, Op.TEST_ACC_IMM, Op.MOV_RM_IMM, *range(Op.JCC, Op.JCC + 16),
