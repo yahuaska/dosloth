@@ -2,6 +2,7 @@ import mmap
 
 from . import flags, modrm
 from .flat import FlatMemory
+from .fpu import Fpu
 from .ops32 import Ops32, signed
 from .opcodes import ADDRESS_SIZED, PREFIXES, Alu, Op
 
@@ -53,7 +54,7 @@ def condition_holds(flags_value, cc):
     return holds != bool(cc & 1)  # odd numbers are the opposite condition
 
 
-class CPU(Ops32, FlatMemory):
+class CPU(Ops32, Fpu, FlatMemory):
     """A tiny 8086-style CPU running in real mode, with 1 MB of flat memory.
 
     Registers live in two lists: self.r (AX, CX, DX, BX, SP, BP, SI, DI) and self.s (ES, CS, SS, DS, FS, GS).
@@ -79,6 +80,7 @@ class CPU(Ops32, FlatMemory):
         self.video_start = self.video_end = 0
         self.r = [0] * 8
         self.rh = [0] * 8  # the high halves of the 32-bit registers of a 386: see ops32.py
+        self.init_fpu()  # the coprocessor, for the 32-bit programs: see fpu.py
         self.s = [0] * 6  # ES, CS, SS, DS, and the FS and GS of the 386
         self.ip = 0
         self.flags = 0x0002
@@ -613,7 +615,10 @@ class CPU(Ops32, FlatMemory):
                     f"{self.code_bytes().hex(' ')}")
         if handler is None:
             raw = self.code_bytes().hex(" ")
-            what = f"opcode 66 {op:02X}, the 32-bit form," if self.osize32 else f"opcode {op:02X}"
+            if self.osize32 != self.code32:  # the prefix 66h: it makes the size the other one
+                what = f"opcode 66 {op:02X}, the {'32' if self.osize32 else '16'}-bit form,"
+            else:
+                what = f"opcode {op:02X}"
             raise NotImplementedError(
                 f"{what} at {self.s[self.CS]:04X}:{self.start_ip:04X}: {raw}")
         return handler

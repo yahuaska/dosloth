@@ -22,6 +22,7 @@ GS with their prefixes (64h, 65h), PUSH and POP, LFS, LGS and LSS. Not yet: what
 pointer and the stack pointer are still of 16 bits, so a near jump is cut to 16 bits.
 """
 from . import flags, modrm
+from .fpu import OPCODES as FPU_OPCODES
 from .opcodes import Alu, Op
 
 # the alignment check flag, bit 18 of EFLAGS, as it is kept in CPU.eflags_high (the bits from the 16th up, shifted down)
@@ -590,6 +591,8 @@ class Ops32:
         table[Op.RET_NEAR], table[Op.RET_NEAR_POP] = self.ret_near32, self.ret_near_pop32
         for code in (*range(0xA4, 0xA8), *range(0xAA, 0xB0)):
             table[code] = self.string32
+        for code in FPU_OPCODES:  # the coprocessor is there for a 32-bit program (see fpu.py)
+            table[code] = self.fpu_instruction
         return table
 
     def build_address_ops32(self):

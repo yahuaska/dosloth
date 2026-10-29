@@ -27,6 +27,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/pages.py` - the memory is a 256 MB private anonymous `mmap` (costs nothing until written); this finds the
   parts that are not zero, for dumps and snapshots. Never copy or iterate all of `cpu.mem`: slice what you need
 - `mydos/xmem.py` - the memory above 1 MB, given out in pages by a mark that goes up and down (`tests/test_xmem.py`)
+- `mydos/fpu.py` - the coprocessor (x87) of a 32-bit program, in floats of Python, the forms that the programs have
+  asked for so far; real mode has none (`tests/test_fpu.py`: status words from a real chip, run on the host)
 - `mydos/dpmi.py`, `mydos/dos32.py` - what the machine plays of DOS/4G for a program in the flat mode: INT 31h (the
   descriptors in `cpu.bases`, the version), INT 21h AX=FF00h, INT 2Fh AX=1686h; INT 21h of the flat mode (only the
   functions done so far; the others stop the emulator) (`tests/test_dpmi.py`)

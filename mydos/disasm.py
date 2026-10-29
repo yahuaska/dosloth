@@ -7,6 +7,7 @@ length of every opcode the CPU knows.
 
 Numbers are printed in hex without a prefix: bytes as 2 digits, words and addresses as 4.
 """
+from . import fpu
 from .opcodes import Alu, Op
 
 REG16 = ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"]
@@ -204,6 +205,16 @@ def _decode(r):
     return text
 
 
+def _esc(r, op, seg_override, done_only=False):
+    """An instruction of the coprocessor: its name if it is one that is done (see fpu.py), else `esc` and the six
+    bits that say which one of the 8087 it is. With `done_only` (the 32-bit forms, where the CPU stops at the ones
+    that are not done) None for those."""
+    byte = r.cpu.rb(r.seg, r.pos)  # the ModRM byte, which _modrm reads: what the coprocessor does depends on all of it
+    reg, rm, is_mem = _modrm(r, seg_override, 16)
+    done = fpu.describe(op, byte, reg, rm if is_mem else None)
+    return done or (None if done_only else f"esc {(op & 7) << 3 | reg:02X}, {rm}")
+
+
 def _decode_opcode32(r, op, seg_override):
     """The text of an instruction that the prefix 66h is in front of, or None if it has no 32-bit form we know. The ones
     that the prefix does not change are those of the 16-bit table."""
@@ -216,6 +227,8 @@ def _decode_opcode32(r, op, seg_override):
             return f"{name} eax, {r.u32():08X}"
         dst, src = _operands(r, op, seg_override, True)
         return f"{name} {dst}, {src}"
+    if op in fpu.OPCODES:
+        return _esc(r, op, seg_override, done_only=True)
     if Op.INC_R16 <= op < Op.INC_R16 + 8:
         return f"inc {REG32[op - Op.INC_R16]}"
     if Op.DEC_R16 <= op < Op.DEC_R16 + 8:
@@ -373,8 +386,7 @@ def _decode_opcode(r, op, seg_override):
         base = r.u8()
         return f"{'aam' if op == Op.AAM else 'aad'}{'' if base == 10 else f' {base:02X}'}"
     if Op.ESC <= op < Op.ESC + 8:
-        reg, rm, _ = _modrm(r, seg_override, 16)
-        return f"esc {(op & 7) << 3 | reg:02X}, {rm}"  # the six bits that say which instruction of the 8087 it is
+        return _esc(r, op, seg_override)
     if op == Op.LEA:
         reg, rm, is_mem = _modrm(r, None, 16)  # a segment prefix does nothing to LEA, so it is not shown
         return f"lea {REG16[reg]}, {rm}" if is_mem else None

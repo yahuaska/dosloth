@@ -1,5 +1,6 @@
 import unittest
 
+from mydos import fpu
 from mydos.cpu import ADDRESS_SIZED, CPU
 from mydos.disasm import disasm
 
@@ -8,7 +9,11 @@ from mydos.disasm import disasm
 # Most opcodes accept any; the groups below only know some operations (8F, C6 and C7 /0 = POP and MOV,
 # FE and FF /0 = INC),
 # and LEA, LES and LDS need a memory operand ([bx]); 0F is followed by an opcode of its own, 84 is a jump.
-MODRM_FOR = {0x0F: 0x84, 0x8D: 0x1F, 0x8F: 0xC0, 0xC6: 0xC0, 0xC7: 0xC0, 0xFE: 0xC0, 0xFF: 0xC0, 0xC4: 0x1F, 0xC5: 0x1F}
+MODRM_FOR = {0x0F: 0x84, 0x8D: 0x1F, 0x8F: 0xC0, 0xC6: 0xC0, 0xC7: 0xC0, 0xFE: 0xC0, 0xFF: 0xC0, 0xC4: 0x1F, 0xC5: 0x1F,
+             0xD9: 0xE8, 0xDB: 0xE3, 0xDD: 0x3D, 0xDE: 0xD9, 0xDF: 0xE0}  # the coprocessor: a form that is done
+
+# the opcodes of the coprocessor whose forms that are done have no memory operand: no SIB byte to give them
+NO_MEMORY_FORM = {op for op in fpu.OPCODES if not any(o == op for o, _ in fpu.MEMORY)}
 
 
 def machine(code):
@@ -123,8 +128,8 @@ class TestText(unittest.TestCase):
             (b"\xD4\x08", "aam 08"),
             (b"\xD5\x0A", "aad"),
             (b"\xD5\x10", "aad 10"),
-            (b"\xDB\xE3", "esc 1C, bx"),   # fninit, from install.exe
-            (b"\xDD\x7E\x00", "esc 2F, [bp]"),   # fnstsw [bp]
+            (b"\xDB\xE3", "fninit"),   # from install.exe
+            (b"\xDD\x7E\x00", "fnstsw word [bp]"),
             (b"\xD9\x06\x34\x12", "esc 08, [1234]"),
             (b"\x60", "pusha"),   # from esetup.exe
             (b"\x6A\x02", "push 2"),   # from esetup.exe
@@ -528,7 +533,7 @@ class TestAgreesWithCpuOn32BitAddresses(unittest.TestCase):
     def test_every_opcode_has_the_same_length_with_a_sib_byte_and_a_32_bit_displacement(self):
         for prefix, ops in ((b"\x67", CPU().ops), (b"\x66\x67", CPU().ops32)):
             for op in ops:
-                if op in ADDRESS_SIZED:
+                if op in ADDRESS_SIZED or op in NO_MEMORY_FORM:
                     continue
                 with self.subTest(op=f"{prefix.hex()} {op:02X}"):
                     modrm = (MODRM_FOR.get(op, 0xD8) & 0x38) | 0x84  # mod 10, r/m 100: a SIB byte and a 32-bit disp.
