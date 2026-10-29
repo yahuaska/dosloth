@@ -13,13 +13,13 @@ from .volumes import Volumes
 TICK_EVERY = 20_000  # the displays are looked after this often, in instructions: some 20 times a second
 
 
-def load(cpu, data, dos_path, extended):
+def load(cpu, data, dos_path, extended, tail=b""):
     """Put the program on the command line in memory at the PSP segment, with its PSP and environment.
 
     `data` is the program file and `dos_path` its full DOS name (`C:\\SETUP\\ESETUP.EXE`), which goes to the program
-    in its environment.
+    in its environment; `tail` is its command line (see psp.tail_of).
     """
-    psp.build(cpu, PSP_SEG, ENV_SEG, dos.MEMORY_TOP_SEG, dos_path)
+    psp.build(cpu, PSP_SEG, ENV_SEG, dos.MEMORY_TOP_SEG, dos_path, tail=tail)
     loader.load(cpu, data, PSP_SEG, extended)
 
 
@@ -56,9 +56,16 @@ def main():
     parser.add_argument("program", nargs="?", help="the .COM or .EXE file to run, named as DOS names it: "
                         "`ESETUP.EXE`, `C:\\SETUP\\ESETUP.EXE`, `setup/esetup.exe`; relative to the current directory "
                         "of the starting drive (the `cwd` of the configuration)")
+    parser.add_argument("arguments", nargs=argparse.REMAINDER, help="what comes after the name is the command line "
+                        "of the program, as typed after its name in DOS; put `--` before it if it has words that "
+                        "look like options of this program: `smkp.exe -- 0 GOFORIT -w`")
     args = parser.parse_args()
     if bool(args.program) == bool(args.r):
         parser.error("name a program to run, or a state to go on from (-r), and not both")
+    try:
+        tail = psp.tail_of(args.arguments)
+    except ValueError as error:
+        parser.error(str(error))
     try:
         settings = config.load(args.c) if args.c else config.default(Path.cwd())
     except config.ConfigError as error:
@@ -105,7 +112,7 @@ def main():
     if args.w:  # only a window has keys to give, so only with one can a program wait for a key
         computer.keyboard.waiter = lambda: monitor.wait_for_key(computer.keyboard)
     if not args.r:
-        load(cpu, data, where.dos_path(), computer.state.extended)
+        load(cpu, data, where.dos_path(), computer.state.extended, tail)
     log = open(args.d, "w") if args.d else None
     if log:
         cpu.trace = make_trace(log)

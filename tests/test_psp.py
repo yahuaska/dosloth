@@ -22,9 +22,9 @@ class TestPlaces(unittest.TestCase):
 
 
 class TestBuild(unittest.TestCase):
-    def build(self, dos_path="C:\\ESETUP.EXE"):
+    def build(self, dos_path="C:\\ESETUP.EXE", **keywords):
         cpu = CPU()
-        psp.build(cpu, 0x1000, 0x0FF0, 0xA000, dos_path)
+        psp.build(cpu, 0x1000, 0x0FF0, 0xA000, dos_path, **keywords)
         return cpu
 
     def test_the_fields_programs_read(self):
@@ -45,6 +45,16 @@ class TestBuild(unittest.TestCase):
     def test_the_command_line_is_empty(self):
         cpu = self.build()
         self.assertEqual(bytes(cpu.mem[0x10080:0x10082]), b"\x00\x0D")  # length 0, then a carriage return
+
+    def test_the_command_tail_is_after_the_length_and_before_the_carriage_return(self):
+        cpu = self.build(tail=b" 0 GOFORIT SOUND")
+        self.assertEqual(bytes(cpu.mem[0x10080:0x10092]), b"\x10 0 GOFORIT SOUND\x0D")
+        self.assertEqual(bytes(cpu.mem[0x10092:0x10100]), bytes(0x6E))  # nothing after it: the rest of the PSP is zeros
+
+    def test_the_longest_tail_ends_with_the_carriage_return_in_the_last_byte_of_the_psp(self):
+        cpu = self.build(tail=b" " + b"x" * 125)
+        self.assertEqual((cpu.mem[0x10080], cpu.mem[0x100FF]), (126, 0x0D))
+        self.assertEqual(bytes(cpu.mem[0x10081:0x100FF]), b" " + b"x" * 125)
 
     def test_the_default_file_control_blocks_are_blank(self):
         cpu = self.build()
@@ -71,6 +81,33 @@ class TestBuild(unittest.TestCase):
 
     def test_the_name_is_shown_in_capitals(self):
         self.assertIn(b"\x01\x00D:\\DIR\\PROG.EXE\0", psp.environment("d:\\dir\\prog.exe"))
+
+
+class TestTheTail(unittest.TestCase):
+    def test_no_arguments_are_no_tail(self):
+        self.assertEqual(psp.tail_of([]), b"")
+
+    def test_the_arguments_are_after_a_space_and_with_one_between_them_as_they_are(self):
+        self.assertEqual(psp.tail_of(["0", "GOFORIT", "SOUND"]), b" 0 GOFORIT SOUND")
+        self.assertEqual(psp.tail_of(["a/B", "-w", "c d"]), b" a/B -w c d")  # no case change, no quotes
+        self.assertEqual(psp.tail_of([""]), b" ")  # an argument that is empty is still a space
+
+    def test_the_characters_are_those_of_the_dos_set(self):
+        # e acute and a light shade block, in code page 437
+        self.assertEqual(psp.tail_of(["\u00e9\u2591"]), b" \x82\xb0")
+
+    def test_a_character_it_has_not_is_a_value_error_that_names_it(self):
+        with self.assertRaisesRegex(ValueError, "has not: '\\u4e2d'"):
+            psp.tail_of(["a", "\u4e2d"])
+
+    def test_the_longest_is_126_characters_and_one_more_is_a_value_error_that_says_how_many(self):
+        self.assertEqual(len(psp.tail_of(["x" * 125])), 126)
+        with self.assertRaisesRegex(ValueError, "127 characters, and DOS takes 126 at most"):
+            psp.tail_of(["x" * 126])
+
+    def test_the_command_line_of_the_psp_is_the_length_the_tail_and_a_carriage_return(self):
+        self.assertEqual(psp.command_line(b""), b"\x00\r")
+        self.assertEqual(psp.command_line(b" ab"), b"\x03 ab\r")
 
 
 class TestAProgramSeesIt(unittest.TestCase):

@@ -139,7 +139,7 @@ def execute(cpu, state, data, dos_path, block=None, tail=b"", null_output=False)
         for target, at in ((0x5C, fcb1_at), (0x6C, fcb2_at)):
             cpu.mem[child * 16 + target:child * 16 + target + 16] = read_bytes(cpu, *at, 16)
     else:
-        line = bytes([len(tail)]) + tail + b"\r"
+        line = psp.command_line(tail)
         cpu.mem[child * 16 + 0x80:child * 16 + 0x80 + len(line)] = line
 
     parent = Parent(parent_psp, list(cpu.r), list(cpu.s), cpu.ip, cpu.flags, state.dta, state.handles, list(cpu.rh),

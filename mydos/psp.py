@@ -13,6 +13,26 @@ ENV_SEG = PSP_SEG - 0x10  # the environment block sits in the 256 bytes just bel
 DTA_OFFSET = 0x80  # the last 128 bytes of the PSP, which hold the command line, are also the first DTA
 JFT_OFFSET = 0x18  # the table of file handles that starts at PSP:0018
 JFT_SIZE = 20  # how many handles a program may have open
+MAX_TAIL = 126  # the longest command tail: the length byte, the text and the carriage return fill the last 128 bytes
+
+
+def tail_of(arguments):
+    """The command tail that DOS gives a program that was started with these arguments, as bytes: a space and the
+    arguments with a space between them (nothing at all for none), as they would be typed, with no quoting: DOS knows
+    none. Raises a ValueError, with what is wrong in it, for a tail that is too long (more than MAX_TAIL) or that
+    has a character the DOS character set does not have."""
+    try:
+        tail = (" " + " ".join(arguments)).encode("cp437") if arguments else b""
+    except UnicodeEncodeError as error:
+        raise ValueError(f"the arguments have a character that DOS has not: {error.object[error.start]!r}") from None
+    if len(tail) > MAX_TAIL:
+        raise ValueError(f"the arguments are {len(tail)} characters, and DOS takes {MAX_TAIL} at most")
+    return tail
+
+
+def command_line(tail):
+    """The bytes at PSP:0080: the length of the tail, the tail, and the carriage return that ends it."""
+    return bytes([len(tail)]) + tail + b"\r"
 
 
 def environment(dos_path, strings=None):
@@ -29,12 +49,13 @@ def environment(dos_path, strings=None):
     return b"\0".join(strings) + b"\0\0" + (1).to_bytes(2, "little") + name + b"\0"
 
 
-def build(cpu, psp_seg, env_seg, top_seg, dos_path, strings=None, parent_seg=0):
+def build(cpu, psp_seg, env_seg, top_seg, dos_path, strings=None, parent_seg=0, tail=b""):
     """Write the PSP at psp_seg:0000 and the environment block at env_seg:0000.
 
     `top_seg` is the segment just above the memory the program may use; it goes to PSP:0002, and the
     program works out from it how much room it has. `strings` are the strings of the environment (see
-    `environment`), `parent_seg` the PSP of the program that started this one (0 if none).
+    `environment`), `parent_seg` the PSP of the program that started this one (0 if none), `tail` the command tail
+    that is after the name of the program (see tail_of; the default is none).
     """
     psp = bytearray(256)
     psp[0x00:0x02] = b"\xCD\x20"  # INT 20h: the old way to end a program
@@ -50,7 +71,8 @@ def build(cpu, psp_seg, env_seg, top_seg, dos_path, strings=None, parent_seg=0):
     for fcb in (0x5C, 0x6C):  # the two file control blocks made from the first two words of the command line
         psp[fcb] = 0  # the current drive
         psp[fcb + 1:fcb + 12] = b" " * 11  # a blank file name
-    psp[0x80:0x82] = b"\x00\x0D"  # the command line: no characters, and the carriage return that ends it
+    line = command_line(tail)
+    psp[0x80:0x80 + len(line)] = line  # the command line: its length, the tail, and the carriage return that ends it
     cpu.mem[psp_seg * 16:psp_seg * 16 + 256] = psp
     env = environment(dos_path, strings)
     cpu.mem[env_seg * 16:env_seg * 16 + len(env)] = env

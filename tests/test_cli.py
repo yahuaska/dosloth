@@ -495,6 +495,65 @@ class TestGoingOnFromAState(CommandLineTest):
         self.assertIn("cannot open C:\\DATA.TXT again", result.stderr)
 
 
+class TestArguments(CommandLineTest):
+    """What comes after the name of the program is its command line (PSP:0080)."""
+
+    LENGTH = bytes.fromhex("a08000b44ccd21")  # mov al,[0080] / mov ah,4Ch / int 21h: the exit code is the length
+    FIRST = bytes.fromhex("a08200b44ccd21")  # the same with the first character after the space, at 0082
+
+    def run_program(self, code, *arguments, **keywords):
+        self.program(code, "ARG.COM")
+        return self.run_emulator("ARG.COM", *arguments, **keywords)
+
+    def test_without_arguments_the_tail_is_empty(self):
+        self.assertEqual(self.run_program(self.LENGTH).returncode, 0)
+
+    def test_the_arguments_after_two_dashes_are_the_tail_with_the_space_in_front_of_them(self):
+        self.assertEqual(self.run_program(self.LENGTH, "--", "0", "GOFORIT", "SOUND").returncode, 16)
+        self.assertEqual(self.run_program(self.FIRST, "--", "0", "GOFORIT", "SOUND").returncode, ord("0"))
+
+    def test_the_two_dashes_are_not_needed_for_words_that_are_not_options(self):
+        self.assertEqual(self.run_program(self.LENGTH, "0", "GOFORIT").returncode, 10)
+
+    def test_a_word_that_looks_like_an_option_of_the_emulator_goes_to_the_program_after_the_two_dashes(self):
+        result = self.run_program(self.FIRST, "--", "-w", "-s")
+        self.assertEqual(result.returncode, ord("-"))
+        self.assertEqual(self.run_program(self.LENGTH, "--", "-w", "-s").returncode, 6)
+
+    def test_everything_after_the_name_is_the_programs_even_without_the_two_dashes(self):
+        self.assertEqual(self.run_program(self.LENGTH, "0", "-s").returncode, 5)  # " 0 -s"
+
+    def test_the_options_of_the_emulator_before_the_name_are_still_its_own(self):
+        shot = self.dir / "shot.png"
+        self.program(self.LENGTH, "ARG.COM")
+        result = self.run_emulator("-s", shot, "ARG.COM", "--", "ab")
+        self.assertEqual(result.returncode, 3)
+        self.assertTrue(shot.exists())
+
+    def test_a_tail_that_is_too_long_is_refused_before_the_program_runs(self):
+        result = self.run_program(self.LENGTH, "--", "x" * 126)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("127 characters, and DOS takes 126 at most", result.stderr)
+
+    def test_a_character_that_dos_has_not_is_refused_too(self):
+        result = self.run_program(self.LENGTH, "--", "\u4e2d")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("a character that DOS has not", result.stderr)
+
+    def test_a_state_that_is_gone_on_from_has_no_program_to_give_arguments_to(self):
+        result = self.run_emulator("-r", "none.state", "--", "a")  # the first word is taken for the name of a program
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not both", result.stderr)
+
+    def test_a_program_for_dos_4g_gets_its_tail_at_es_0081_in_the_flat_mode(self):
+        from tests.le_builder import Obj, RW, RX, build_bound, build_program
+        code = bytes.fromhex("26a082000000b44ccd21")  # mov al,es:[00000082] / mov ah,4Ch / int 21h
+        objects = [Obj(code, size=0x1000, flags=RX), Obj(b"data", size=0x100, base=0x30000, flags=RW)]
+        (self.dir / "GAME.EXE").write_bytes(build_bound(build_program(objects)))
+        result = self.run_emulator("GAME.EXE", "--", "0", "GOFORIT", "SOUND")
+        self.assertEqual(result.returncode, ord("0"))
+
+
 class TestAnLeProgram(CommandLineTest):
     def test_a_program_for_dos_4g_is_run_in_the_flat_mode_and_its_exit_code_is_the_exit_code(self):
         from tests.le_builder import Obj, RW, RX, build_bound, build_program
