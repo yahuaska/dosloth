@@ -95,8 +95,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/keys.py` - a key of Tk (`Return`, `a`, `F1`) -> the BIOS scan code and ASCII code, for a US keyboard
 - `mydos/disasm.py` - bytes -> text like `mov ax, bx`, only used for the trace. Teach it every opcode the CPU learns
   (`tests/test_disasm.py` fails if it is out of step)
-- `mydos/__main__.py` - loads a .COM/.EXE and runs it: `python -m mydos tests/hello.com`; what is after the name is
-  the command line of the program (`-- ` before it for words that look like options);
+- `mydos/__main__.py` - loads a .COM/.EXE and runs it: `python -m mydos tests/hello.com`; what is after the first
+  `--` is the command line of the program (the options and the name come before it);
   `-d LOGFILE` writes every executed instruction to LOGFILE, e.g. `1773:0880  8B C3  mov ax, bx`;
   `-s PNGFILE` keeps the screen in a PNG file, written again when the picture changes and at the end;
   `-t LOGFILE` writes the calls of the program to DOS (see calllog.py);
@@ -108,5 +108,5 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 1 MB flat bytearray, address = seg*16 + off (no A20 wrap yet).
 .COM loads at PSP:0100, CS=DS=ES=SS=PSP segment, SP=FFFE.
 The PSP is at segment 1000 (psp.py fills in the fields programs read: top of memory at PSP:0002, the
-environment segment at PSP:002C, the handle table, the command line: what comes after the program's name on the
+environment segment at PSP:002C, the handle table, the command line: what comes after `--` on the
 command line of the emulator, `python -m mydos smkp.exe -- 0 GOFORIT`); the environment is at 0FF0.

@@ -38,7 +38,11 @@ def make_trace(log):
 
 def main():
     """Run the program named on the command line; exit with the program's exit code."""
-    parser = argparse.ArgumentParser(prog="python -m mydos", description="Run a DOS .COM or .EXE program.")
+    parser = argparse.ArgumentParser(
+        prog="python -m mydos", description="Run a DOS .COM or .EXE program.",
+        epilog="The options and the name of the program come first, in any order. After `--` is the command line of "
+               "the program, as it would be typed after its name in DOS, whatever the words are: "
+               "python -m mydos -w smkp.exe -d trace.log -- 0 GOFORIT -w")
     parser.add_argument("-c", metavar="FILE", help="the configuration (TOML): drives, mounts, starting directory; "
                         "without it the current directory is the hard disk C:")
     parser.add_argument("-d", metavar="LOGFILE", help="write every executed instruction to LOGFILE")
@@ -56,14 +60,15 @@ def main():
     parser.add_argument("program", nargs="?", help="the .COM or .EXE file to run, named as DOS names it: "
                         "`ESETUP.EXE`, `C:\\SETUP\\ESETUP.EXE`, `setup/esetup.exe`; relative to the current directory "
                         "of the starting drive (the `cwd` of the configuration)")
-    parser.add_argument("arguments", nargs=argparse.REMAINDER, help="what comes after the name is the command line "
-                        "of the program, as typed after its name in DOS; put `--` before it if it has words that "
-                        "look like options of this program: `smkp.exe -- 0 GOFORIT -w`")
-    args = parser.parse_args()
+    argv = sys.argv[1:]
+    cut = argv.index("--") if "--" in argv else len(argv)  # the options end at the first `--`
+    args = parser.parse_args(argv[:cut])
     if bool(args.program) == bool(args.r):
         parser.error("name a program to run, or a state to go on from (-r), and not both")
+    if args.r and cut < len(argv) - 1:
+        parser.error("a state that is gone on from (-r) has its program started already: no arguments for it")
     try:
-        tail = psp.tail_of(args.arguments)
+        tail = psp.tail_of(argv[cut + 1:])  # what follows it is the command line of the program, as it is
     except ValueError as error:
         parser.error(str(error))
     try:

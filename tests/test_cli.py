@@ -512,23 +512,39 @@ class TestArguments(CommandLineTest):
         self.assertEqual(self.run_program(self.LENGTH, "--", "0", "GOFORIT", "SOUND").returncode, 16)
         self.assertEqual(self.run_program(self.FIRST, "--", "0", "GOFORIT", "SOUND").returncode, ord("0"))
 
-    def test_the_two_dashes_are_not_needed_for_words_that_are_not_options(self):
-        self.assertEqual(self.run_program(self.LENGTH, "0", "GOFORIT").returncode, 10)
+    def test_words_after_the_name_with_no_two_dashes_are_not_arguments_of_the_program(self):
+        result = self.run_program(self.LENGTH, "0", "GOFORIT")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unrecognized arguments: 0 GOFORIT", result.stderr)
 
     def test_a_word_that_looks_like_an_option_of_the_emulator_goes_to_the_program_after_the_two_dashes(self):
         result = self.run_program(self.FIRST, "--", "-w", "-s")
         self.assertEqual(result.returncode, ord("-"))
         self.assertEqual(self.run_program(self.LENGTH, "--", "-w", "-s").returncode, 6)
 
-    def test_everything_after_the_name_is_the_programs_even_without_the_two_dashes(self):
-        self.assertEqual(self.run_program(self.LENGTH, "0", "-s").returncode, 5)  # " 0 -s"
+    def test_the_options_of_the_emulator_may_be_after_the_name_when_they_are_before_the_two_dashes(self):
+        shot, trace = self.dir / "shot.png", self.dir / "trace.log"
+        self.program(self.LENGTH, "ARG.COM")
+        result = self.run_emulator("-s", shot, "ARG.COM", "-d", trace, "--", "0", "GOFORIT")  # how the game was run
+        self.assertEqual(result.returncode, 10)  # " 0 GOFORIT": nothing of the options is in it
+        self.assertTrue(shot.exists())
+        self.assertIn("mov ah, 4C", trace.read_text())
 
-    def test_the_options_of_the_emulator_before_the_name_are_still_its_own(self):
+    def test_the_options_before_the_name_are_the_emulators_too(self):
         shot = self.dir / "shot.png"
         self.program(self.LENGTH, "ARG.COM")
         result = self.run_emulator("-s", shot, "ARG.COM", "--", "ab")
         self.assertEqual(result.returncode, 3)
         self.assertTrue(shot.exists())
+
+    def test_the_second_two_dashes_are_part_of_the_tail(self):
+        self.assertEqual(self.run_program(self.LENGTH, "--", "a", "--", "b").returncode, 7)  # " a -- b"
+
+    def test_two_dashes_in_front_of_the_name_leave_no_program_to_run(self):
+        self.program(self.LENGTH, "ARG.COM")
+        result = self.run_emulator("--", "ARG.COM", "a")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("name a program to run", result.stderr)
 
     def test_a_tail_that_is_too_long_is_refused_before_the_program_runs(self):
         result = self.run_program(self.LENGTH, "--", "x" * 126)
@@ -540,10 +556,15 @@ class TestArguments(CommandLineTest):
         self.assertEqual(result.returncode, 2)
         self.assertIn("a character that DOS has not", result.stderr)
 
-    def test_a_state_that_is_gone_on_from_has_no_program_to_give_arguments_to(self):
-        result = self.run_emulator("-r", "none.state", "--", "a")  # the first word is taken for the name of a program
+    def test_a_state_that_is_gone_on_from_takes_no_arguments(self):
+        result = self.run_emulator("-r", "none.state", "--", "a")
         self.assertEqual(result.returncode, 2)
-        self.assertIn("not both", result.stderr)
+        self.assertIn("no arguments for it", result.stderr)
+
+    def test_two_dashes_with_nothing_after_them_are_no_arguments_at_all(self):
+        self.assertEqual(self.run_program(self.LENGTH, "--").returncode, 0)
+        result = self.run_emulator("-r", "none.state", "--")
+        self.assertNotIn("no arguments for it", result.stderr)  # it is refused for the state that is not there
 
     def test_a_program_for_dos_4g_gets_its_tail_at_es_0081_in_the_flat_mode(self):
         from tests.le_builder import Obj, RW, RX, build_bound, build_program
