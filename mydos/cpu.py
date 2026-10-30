@@ -1,6 +1,7 @@
 import mmap
 
 from . import flags, modrm
+from .breakpoints import BreakpointHit
 from .flat import FlatMemory
 from .fpu import Fpu
 from .ops32 import Ops32, signed
@@ -99,6 +100,7 @@ class CPU(Ops32, Fpu, FlatMemory):
         self.start_ip = 0  # set by step(): IP of the instruction being executed
         self.seg_override = None  # set by step(): segment register from a prefix, or None
         self.trace = None  # optional fn(cpu), called before every instruction (for the -d log)
+        self.breakpoints = {}  # offset -> True (at any selector) or the set of the selectors that run() stops at
         self.rep = None  # set by step(): the repeat prefix in front of this instruction (F3 or F2), or None
 
         # opcode byte -> handler(op). Groups get one entry per opcode value.
@@ -1653,13 +1655,47 @@ class CPU(Ops32, Fpu, FlatMemory):
         """Set the direction flag (opcode FD): string instructions will walk backward through memory."""
         self.set_flag(flags.DF, True)
 
+    def add_breakpoint(self, segment, offset):
+        """Make run() stop before the instruction at segment:offset (at any segment, if it is None)."""
+        if segment is None:
+            self.breakpoints[offset] = True
+        elif self.breakpoints.get(offset) is not True:
+            self.breakpoints.setdefault(offset, set()).add(segment)
+
+    def run_to_breakpoints(self, every, tick):
+        """The loop of run() for a machine that has breakpoints: before each instruction, is it at one of them?
+
+        Not before the first: that is where the program stood when it was stopped at a breakpoint the last time, and
+        it has to be let go from there. The `tick` is called as run() calls it. Ends with an Exit or a BreakpointHit.
+        """
+        breakpoints, steps, first = self.breakpoints, 0, True
+        while True:
+            if not first:
+                found = breakpoints.get(self.ip)
+                if found is not None and (found is True or self.s[self.CS] in found):
+                    self.start_ip = self.ip  # where the dump looks for the code
+                    digits = 8 if self.ip_mask > 0xFFFF else 4
+                    raise BreakpointHit(f"breakpoint at {self.s[self.CS]:04X}:{self.ip:0{digits}X} "
+                                        f"(instruction {self.instructions})")
+            first = False
+            self.step()
+            if tick is not None:
+                steps += 1
+                if steps == every:
+                    tick()
+                    steps = 0
+
     def run(self, every=None, tick=None):
         """Keep executing instructions until the program exits, then return its exit code.
 
         With `tick` (a function without arguments) and `every` (a number of instructions) it calls `tick` after
         every `every` instructions, for whoever wants to look at the machine while the program runs.
+
+        With breakpoints (see add_breakpoint) it raises a BreakpointHit before the instruction at one of them.
         """
         try:
+            if self.breakpoints:
+                self.run_to_breakpoints(every, tick)
             if tick is None:
                 while True:
                     self.step()

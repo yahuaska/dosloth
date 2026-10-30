@@ -2,7 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import calllog, config, disasm, dos, dump, loader, machine, psp, screen, snapshot
+from . import breakpoints, calllog, config, disasm, dos, dump, loader, machine, psp, screen, snapshot
 from .cpu import CPU
 from .display import PngFile
 from .window import TkWindow, WindowError
@@ -11,6 +11,7 @@ from .psp import ENV_SEG, PSP_SEG
 from .volumes import Volumes
 
 TICK_EVERY = 20_000  # the displays are looked after this often, in instructions: some 20 times a second
+BREAKPOINT_EXIT = 3  # the code that the emulator ends with when a program is stopped at a breakpoint (2 is for usage)
 
 
 def load(cpu, data, dos_path, extended, tail=b""):
@@ -46,6 +47,10 @@ def main():
     parser.add_argument("-c", metavar="FILE", help="the configuration (TOML): drives, mounts, starting directory; "
                         "without it the current directory is the hard disk C:")
     parser.add_argument("-d", metavar="LOGFILE", help="write every executed instruction to LOGFILE")
+    parser.add_argument("-b", metavar="ADDRESS", action="append", default=[], help="stop before the instruction at "
+                        "ADDRESS, as `000F:0010E060` (a selector or segment, and an offset, in hex; the addresses of "
+                        "the logs) or just the offset (at any selector), and write a dump as a crash does, with a "
+                        "state to go on from (-r); more than one -b are all breakpoints")
     parser.add_argument("-t", metavar="LOGFILE", help="write every call of the program to DOS (INT 21h, 2Fh, 25h, 20h) "
                         "to LOGFILE: what it asked, the names, and what DOS answered; to see what a program does "
                         "when it fails")
@@ -67,6 +72,10 @@ def main():
         parser.error("name a program to run, or a state to go on from (-r), and not both")
     if args.r and cut < len(argv) - 1:
         parser.error("a state that is gone on from (-r) has its program started already: no arguments for it")
+    try:
+        stops = {text: breakpoints.parse(text) for text in args.b}
+    except ValueError as error:
+        parser.error(str(error))
     try:
         tail = psp.tail_of(argv[cut + 1:])  # what follows it is the command line of the program, as it is
     except ValueError as error:
@@ -118,6 +127,8 @@ def main():
         computer.keyboard.waiter = lambda: monitor.wait_for_key(computer.keyboard)
     if not args.r:
         load(cpu, data, where.dos_path(), computer.state.extended, tail)
+    for text in args.b:
+        cpu.add_breakpoint(*stops[text])
     log = open(args.d, "w") if args.d else None
     if log:
         cpu.trace = make_trace(log)
@@ -131,6 +142,11 @@ def main():
         call_log = calllog.install(cpu, dos_log)
     try:
         code = cpu.run(TICK_EVERY, monitor.tick) if monitor else cpu.run()
+    except breakpoints.BreakpointHit as stop:
+        dump.write(cpu, host_path, stop)  # as for a crash: the dump, and a state to go on from, where it stands
+        snapshot.save_near(computer, host_path, ".crash.state")
+        print(stop, file=sys.stderr)
+        code = BREAKPOINT_EXIT
     except Exception as e:
         dump.write(cpu, host_path, e)  # leave something to debug with, then fail as usual
         snapshot.save_near(computer, host_path, ".crash.state", rewind=True)  # and a state to go on from, once fixed

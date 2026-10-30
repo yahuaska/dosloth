@@ -495,6 +495,72 @@ class TestGoingOnFromAState(CommandLineTest):
         self.assertIn("cannot open C:\\DATA.TXT again", result.stderr)
 
 
+class TestBreakpoints(CommandLineTest):
+    """-b ADDRESS: stop before the instruction there, with the dump and the state of a crash."""
+
+    # nop / nop / nop / mov ah,4Ch / mov al,7 / int 21h: a .COM at 1000:0100, which ends with 7
+    CODE = bytes.fromhex("90 90 90 b4 4c b0 07 cd 21")
+
+    def run_stopped(self, *arguments):
+        self.program(self.CODE, "BP.COM")
+        return self.run_emulator(*arguments, "BP.COM")
+
+    def test_the_program_is_stopped_before_the_instruction_and_the_dump_is_a_crash_dump(self):
+        import json
+        result = self.run_stopped("-b", "1000:0103")
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("breakpoint at 1000:0103 (instruction 3)", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        info = json.loads((self.dir / "BP.COM.crash.json").read_text())
+        self.assertEqual((info["ip"], info["start_ip"]), ("0103", "0103"))
+        self.assertEqual(info["code"].split()[:3], ["b4", "4c", "b0"])  # the instruction that was to run
+        self.assertTrue(info["error"].startswith("BreakpointHit: breakpoint at 1000:0103"))
+        self.assertEqual((self.dir / "BP.COM.crash.mem").stat().st_size, 256 * 1024 * 1024)
+        self.assertTrue((self.dir / "BP.COM.crash.state").exists())
+
+    def test_the_offset_alone_is_any_segment(self):
+        result = self.run_stopped("-b", "0103")
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("breakpoint at 1000:0103", result.stderr)
+
+    def test_a_breakpoint_that_is_not_come_to_does_not_stop_the_program(self):
+        self.assertEqual(self.run_stopped("-b", "2000:0103").returncode, 7)
+        self.assertEqual(self.run_stopped("-b", "0104").returncode, 7)  # the middle of an instruction
+        self.assertFalse((self.dir / "BP.COM.crash.json").exists())
+
+    def test_the_first_breakpoint_that_is_come_to_stops_the_program_and_there_may_be_many(self):
+        result = self.run_stopped("-b", "0106", "-b", "0101", "-b", "9999")
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("breakpoint at 1000:0101 (instruction 1)", result.stderr)
+
+    def test_the_program_goes_on_from_the_state_of_the_stop_and_is_not_stopped_at_once(self):
+        self.run_stopped("-b", "0103")
+        resumed = self.run_emulator("-r", "BP.COM.crash.state", "-b", "0103")  # the same breakpoint
+        self.assertEqual(resumed.returncode, 7)
+        self.assertNotIn("breakpoint", resumed.stderr)
+
+    def test_a_program_that_is_gone_on_from_may_be_stopped_further_on(self):
+        self.run_stopped("-b", "0102")
+        resumed = self.run_emulator("-r", "BP.COM.crash.state", "-b", "0105")
+        self.assertEqual(resumed.returncode, 3)
+        self.assertIn("breakpoint at 1000:0105 (instruction 4)", resumed.stderr)  # the count goes on: 2 before, 2 now
+
+    def test_what_is_not_an_address_is_refused_before_the_program_runs(self):
+        result = self.run_stopped("-b", "xyz")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("'xyz' is not an address", result.stderr)
+        self.assertFalse((self.dir / "BP.COM.crash.json").exists())
+
+    def test_a_program_for_dos_4g_is_stopped_by_the_address_of_the_logs(self):
+        from tests.le_builder import Obj, RW, RX, build_bound, build_program
+        code = bytes.fromhex("b8074c0000cd21")  # mov eax,4C07h / int 21h
+        objects = [Obj(code, size=0x1000, flags=RX), Obj(b"data", size=0x100, base=0x30000, flags=RW)]
+        (self.dir / "GAME.EXE").write_bytes(build_bound(build_program(objects)))
+        result = self.run_emulator("-b", "000F:00100005", "GAME.EXE")  # the int 21h: the entry is at 100000h
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("breakpoint at 000F:00100005 (instruction 1)", result.stderr)
+
+
 class TestArguments(CommandLineTest):
     """What comes after the name of the program is its command line (PSP:0080)."""
 
