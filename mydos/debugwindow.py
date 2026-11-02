@@ -194,8 +194,8 @@ class DebugWindow(Display):
         bar = tk.Frame(self.root)
         bar.grid(row=0, column=0, columnspan=2, sticky="w")
         self.buttons = {}
-        for name, text, command in (("step", "Step F7", self.on_step), ("over", "Over F8", self.on_over),
-                                    ("go", "Go F9", self.on_go), ("stop", "Stop F6", self.on_stop)):
+        for name, text, command in (("step", "Step into F7", self.on_step), ("over", "Step over F8", self.on_over),
+                                    ("go", "Continue F9", self.on_go), ("stop", "Stop F6", self.on_stop)):
             self.buttons[name] = tk.Button(bar, text=text, command=command)
             self.buttons[name].pack(side="left")
         self.buttons["stop"].configure(state="disabled")
