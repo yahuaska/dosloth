@@ -3,7 +3,8 @@ import unittest
 
 from mydos.cpu import CPU
 from mydos.debugger import Debugger
-from mydos.debugwindow import DebugWindow, breakpoint_text, hexdump, listing, register_lines
+from mydos.debugwindow import (DebugWindow, breakpoint_text, changed_registers, hexdump, listing, register_lines,
+                               register_values, set_register, write_memory)
 from mydos.window import WindowError
 from tests.test_breakpoints import machine
 
@@ -50,6 +51,67 @@ class TestViews(unittest.TestCase):
     def test_how_a_breakpoint_is_written(self):
         self.assertEqual(breakpoint_text(None, 0x10E04B), "10E04B")
         self.assertEqual(breakpoint_text(0x0F, 0x10E04B), "000F:10E04B")
+
+
+class TestEditing(unittest.TestCase):
+    def test_a_register_is_set_in_hex(self):
+        cpu = machine()
+        set_register(cpu, "ax=1234")
+        set_register(cpu, " DI = ffff ")
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.DI]), (0x1234, 0xFFFF))
+
+    def test_a_32_bit_name_sets_the_high_half_as_well(self):
+        cpu = machine()
+        set_register(cpu, "EBX=DEADBEEF")
+        self.assertEqual((cpu.r[CPU.BX], cpu.rh[CPU.BX]), (0xBEEF, 0xDEAD))
+
+    def test_segments_ip_and_flags(self):
+        cpu = machine()
+        set_register(cpu, "ES=2000")
+        set_register(cpu, "IP=0005")
+        set_register(cpu, "FLAGS=FFFF")
+        self.assertEqual((cpu.s[CPU.ES], cpu.ip), (0x2000, 5))
+        self.assertEqual(cpu.flags & 0x0002, 0x0002)  # the bit that is always there
+        self.assertEqual(cpu.flags & 0x8000, 0)  # and not the one that real mode never has
+        set_register(cpu, "EIP=7")
+        self.assertEqual(cpu.ip, 7)
+        set_register(cpu, "IP=10005")  # an offset wraps where the machine's offsets do
+        self.assertEqual(cpu.ip, 5)
+
+    def test_what_cannot_be_set_is_said_and_nothing_changes(self):
+        cpu = machine()
+        for text in ("", "AX", "AX=", "AX=zz", "AX=10000", "EAX=100000000", "XX=1", "ES=10000", "FLAGS=10000", "AX=-1"):
+            with self.assertRaisesRegex(ValueError, "cannot set|not a register to set"):
+                set_register(cpu, text)
+        self.assertEqual(cpu.r[CPU.AX], 0)
+
+    def test_what_changed_is_found_by_name(self):
+        cpu = machine()
+        before = register_values(cpu)
+        cpu.r[CPU.CX] = 1
+        cpu.ip = 3
+        cpu.flags |= 1
+        self.assertEqual(changed_registers(before, register_values(cpu)), {"CX", "IP", "FLAGS"})
+        self.assertEqual(changed_registers(before, before), set())
+
+    def test_bytes_are_written(self):
+        cpu = machine()
+        write_memory(cpu, "1000:20 90 cc 1")
+        self.assertEqual(bytes(cpu.mem[0x10020:0x10024]), bytes((0x90, 0xCC, 0x01, 0)))
+        cpu.s[CPU.DS] = 0x2000
+        write_memory(cpu, "30 FF")  # the offset alone is in the segment DS
+        self.assertEqual((cpu.mem[0x20030], cpu.mem[0x10030]), (0xFF, 0))
+
+    def test_what_cannot_be_written_is_said_before_anything_is(self):
+        cpu = machine()
+        for text in ("", "1000:20", "1000:20 zz", "1000:20 90 100", "1000:20 -1", "zz 90", "10000:0 90"):
+            with self.assertRaises(ValueError):
+                write_memory(cpu, text)
+        self.assertEqual(cpu.mem[0x10020], 0)
+
+    def test_the_listing_can_start_anywhere(self):
+        found = listing(machine(), 2, where=(0x1000, 3))
+        self.assertEqual([off for _, off, _ in found], [3, 6])
 
 
 @unittest.skipIf(tkinter is None, "this Python has no tkinter")
@@ -126,6 +188,61 @@ class TestWindow(unittest.TestCase):
         self.window.close()
         with self.assertRaises(Exception):
             self.window.run()
+
+    def test_the_registers_a_step_changes_are_marked(self):
+        self.assertEqual(self.window.registers.tag_ranges("changed"), ())
+        self.window.on_step()
+        self.assertEqual(self.marked(), ["IP=0001"])
+        self.window.on_step()
+        self.window.on_step()
+        self.window.on_step()  # mov ax, 4C07h
+        self.assertEqual(self.marked(), ["AX=4C07", "IP=0006"])
+
+    def marked(self):
+        """The pieces of the register panel that are marked as changed."""
+        ranges = self.window.registers.tag_ranges("changed")
+        return [self.window.registers.get(ranges[i], ranges[i + 1]) for i in range(0, len(ranges), 2)]
+
+    def test_a_register_is_set_from_its_entry(self):
+        self.window.register_entry.insert(0, "CX=00FF")
+        self.window.on_set_register()
+        self.assertEqual(self.cpu.r[CPU.CX], 0xFF)
+        self.assertEqual(self.marked(), ["CX=00FF"])
+        self.window.register_entry.delete(0, "end")
+        self.window.register_entry.insert(0, "CX=")
+        self.window.on_set_register()
+        self.assertIn("not a register to set", self.window.status.cget("text"))
+
+    def test_nothing_is_edited_in_a_program_that_has_ended(self):
+        self.window.on_go()
+        self.window.register_entry.insert(0, "CX=5")
+        self.window.on_set_register()
+        self.assertEqual(self.cpu.r[CPU.CX], 0)
+
+    def test_memory_is_written_from_its_entry(self):
+        self.window.write_entry.insert(0, "1000:0 40")
+        self.window.on_write_memory()
+        self.assertEqual(self.cpu.mem[0x10000], 0x40)
+        self.assertIn("1000:00000000  40 90 90", self.text(self.window.memory))
+        self.assertIn("inc ax", self.text(self.window.code))
+
+    def test_the_code_from_an_address_and_back_to_the_next_instruction(self):
+        self.window.code_entry.insert(0, "1000:3")
+        self.window.on_code_at()
+        self.assertTrue(self.text(self.window.code).startswith("   1000:0003"))
+        self.assertNotIn(">", self.text(self.window.code)[:3])
+        self.window.on_follow()
+        self.assertTrue(self.text(self.window.code).startswith(" > 1000:0000"))
+        self.window.code_entry.delete(0, "end")
+        self.window.code_entry.insert(0, "5")  # the offset alone: the segment of the code
+        self.window.on_code_at()
+        self.assertTrue(self.text(self.window.code).startswith("   1000:0005"))
+
+    def test_a_step_brings_the_listing_back_to_the_program(self):
+        self.window.code_entry.insert(0, "3")
+        self.window.on_code_at()
+        self.window.on_step()
+        self.assertTrue(self.text(self.window.code).startswith(" > 1000:0001"))
 
     def test_the_memory_follows_the_address_typed(self):
         self.window.memory_entry.delete(0, "end")
