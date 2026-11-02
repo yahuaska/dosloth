@@ -1662,6 +1662,25 @@ class CPU(Ops32, Fpu, FlatMemory):
         elif self.breakpoints.get(offset) is not True:
             self.breakpoints.setdefault(offset, set()).add(segment)
 
+    def remove_breakpoint(self, segment, offset):
+        """Take away what add_breakpoint put at segment:offset (a breakpoint at any segment is another one than at a
+        segment). Returns whether there was one."""
+        found = self.breakpoints.get(offset)
+        if segment is None and found is True:
+            del self.breakpoints[offset]
+        elif segment is not None and found is not None and found is not True and segment in found:
+            found.discard(segment)
+            if not found:
+                del self.breakpoints[offset]
+        else:
+            return False
+        return True
+
+    def at_breakpoint(self):
+        """Whether the next instruction is at a breakpoint."""
+        found = self.breakpoints.get(self.ip)
+        return found is not None and (found is True or self.s[self.CS] in found)
+
     def run_to_breakpoints(self, every, tick):
         """The loop of run() for a machine that has breakpoints: before each instruction, is it at one of them?
 
