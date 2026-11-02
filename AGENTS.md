@@ -101,6 +101,10 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/debugger.py` - `Debugger(cpu)`: step, step_over (a CALL or INT runs whole), go (to a breakpoint, the end, or a
   `Pause` raised by the tick) and the list of breakpoints; every command answers with a `Stop`. No window yet: that is
   what the tkinter one will stand on (`tests/test_debugger.py`)
+- `mydos/debugwindow.py` - `--debug`: the Tk window of the debugger (code from the next instruction, registers, the
+  breakpoints, memory; F7 step, F8 over, F9 go, F6 stop, double click on a line of the code puts a breakpoint). It is a
+  `Display` in the monitor, so it is looked after while the program runs; the plain functions that make its text are
+  tested without Tk (`tests/test_debugwindow.py`)
 - `mydos/__main__.py` - loads a .COM/.EXE and runs it: `python -m mydos tests/hello.com`; what is after the first
   `--` is the command line of the program (the options and the name come before it);
   `-d LOGFILE` writes every executed instruction to LOGFILE, e.g. `1773:0880  8B C3  mov ax, bx`;

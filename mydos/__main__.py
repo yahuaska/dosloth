@@ -4,6 +4,8 @@ from pathlib import Path
 
 from . import breakpoints, calllog, config, disasm, dos, dump, loader, machine, psp, screen, snapshot
 from .cpu import CPU
+from .debugger import Debugger
+from .debugwindow import DebugWindow
 from .display import PngFile
 from .window import TkWindow, WindowError
 from .filesystem import FsError
@@ -51,6 +53,9 @@ def main():
                         "ADDRESS, as `000F:0010E060` (a selector or segment, and an offset, in hex; the addresses of "
                         "the logs) or just the offset (at any selector), and write a dump as a crash does, with a "
                         "state to go on from (-r); more than one -b are all breakpoints")
+    parser.add_argument("--debug", action="store_true", help="open the window of the debugger: the program waits there "
+                        "before its first instruction, and goes on by a step (F7), over a call (F8) or up to a "
+                        "breakpoint (F9); the breakpoints of -b are in it")
     parser.add_argument("-t", metavar="LOGFILE", help="write every call of the program to DOS (INT 21h, 2Fh, 25h, 20h) "
                         "to LOGFILE: what it asked, the names, and what DOS answered; to see what a program does "
                         "when it fails")
@@ -129,6 +134,15 @@ def main():
         load(cpu, data, where.dos_path(), computer.state.extended, tail)
     for text in args.b:
         cpu.add_breakpoint(*stops[text])
+    debug_window = None
+    if args.debug:
+        try:
+            debug_window = DebugWindow(Debugger(cpu))
+        except WindowError as error:
+            parser.error(f"cannot open a window: {error}")
+        monitor = monitor or screen.Monitor(computer.card, [])
+        monitor.displays.append(debug_window)
+        debug_window.tick_others = monitor.tick
     log = open(args.d, "w") if args.d else None
     if log:
         cpu.trace = make_trace(log)
@@ -141,7 +155,10 @@ def main():
     if dos_log:
         call_log = calllog.install(cpu, dos_log)
     try:
-        code = cpu.run(TICK_EVERY, monitor.tick) if monitor else cpu.run()
+        if debug_window:
+            code = debug_window.run()
+        else:
+            code = cpu.run(TICK_EVERY, monitor.tick) if monitor else cpu.run()
     except breakpoints.BreakpointHit as stop:
         dump.write(cpu, host_path, stop)  # as for a crash: the dump, and a state to go on from, where it stands
         snapshot.save_near(computer, host_path, ".crash.state")
