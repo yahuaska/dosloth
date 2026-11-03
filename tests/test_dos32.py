@@ -221,6 +221,19 @@ class TestFiles(FlatFiles):
         with self.assertRaisesRegex(NotImplementedError, "function of the emulator"):
             self.call32(0x3521)
 
+    def test_every_question_whether_a_key_waits_lets_the_time_go_on(self):
+        from types import SimpleNamespace
+        from mydos import dos32
+        self.cpu.keyboard = SimpleNamespace(buffer=[])
+        before = self.cpu.instructions
+        self.call32(0x0B00)
+        self.assertEqual(self.cpu.instructions - before, 1 + dos32.IDLE_INSTRUCTIONS)
+
+    def test_the_other_calls_do_not(self):
+        before = self.cpu.instructions
+        self.call32(0x3000)
+        self.assertEqual(self.cpu.instructions - before, 1)
+
     def test_the_end_of_the_program_still_ends_the_emulator(self):
         with self.assertRaises(Exit) as stop:
             self.call32(0x4C07)

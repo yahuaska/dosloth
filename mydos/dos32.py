@@ -8,6 +8,12 @@ number, and is done when a program asks for it.
 from . import dpmi, flags
 from .cpu import CPU
 
+# A program that asks whether a key was pressed (INT 21h AH=0Bh) again and again has nothing to do but wait for the time
+# to come: a player that waits for the next frame, a game that waits for a tick. The machine is as slow as the emulator
+# is, so the wait would take as long as a real machine's wait times the number of times that the emulator is slower, and the
+# time that the wait takes is only the count of instructions (see timer.py). Each of these questions lets the time go on
+# by this many instructions, as if the program had spent them in its loop.
+IDLE_INSTRUCTIONS = 20_000
 EXTENDER_QUESTION = 0xFF00  # AX, with 0078h in DX: is DOS/4G here?
 SHARED_WITH_REAL_MODE = (0x0B, 0x1A, 0x30, 0x3D, 0x3E, 0x3F, 0x40, 0x42, 0x44, 0x4C, 0x4E, 0x4F)
 
@@ -29,6 +35,8 @@ def int21(cpu, state, real):
         cpu.set32(CPU.BX, offset)
         cpu.set_flag(flags.CF, False)
     elif ax >> 8 in SHARED_WITH_REAL_MODE:
+        if ax >> 8 == 0x0B:
+            cpu.instructions += IDLE_INSTRUCTIONS
         real(cpu, state)
     else:
         raise NotImplementedError(f"INT 21h AX={ax:04X} in the flat mode")
