@@ -3,11 +3,12 @@ Smacker player does what that code does (the real code is run beside it, on the 
 import hashlib
 import random
 import struct
+import tempfile
 import unittest
 from pathlib import Path
 
-from mydos import loader, patches, psp
-from mydos.cpu import CPU, Exit
+from mydos import dos, loader, patches, psp
+from mydos.cpu import CPU, Exit, NEVER
 from mydos.patches import PATCH_BYTES, Patch
 from mydos.xmem import ExtendedMemory
 
@@ -323,3 +324,98 @@ class TestTheLoopOfTheSound(unittest.TestCase):
                                  bytes(patched.mem[SOUND_RING:SOUND_RING + 0x100]))
                 self.assertEqual(original.mem[0x114960], patched.mem[0x114960])
                 self.assertEqual(original.instructions, patched.instructions)
+
+
+# --- the blocks of a frame of Smacker
+
+BLOCKS_AT = 0x10F7B5  # where the INT of the patch is: the second instruction of the loop, `cmp al, 8`
+FRAME_CALL, FRAME_RETURN = 0x10F680, 0x103F2D  # the procedure that draws a frame, and where it returns to
+CONFIG = Path(__file__).resolve().parent.parent / "config_xcomapoc.toml"  # the machine with the disc of the game
+
+
+@unittest.skipUnless(SMKP.exists(), "the game is not here")
+class TestTheRowsOfAMonoBlock(unittest.TestCase):
+    def test_the_sixteen_ways_to_put_the_two_colors_are_those_of_the_code(self):
+        rng = random.Random(5)
+        for way in range(16):
+            for _ in range(20):
+                colors = rng.randrange(1 << 32)
+                cpu = game_machine(patch=False)
+                cpu.mem[0x10FB80] = 0xF4  # a HLT where the ways end
+                run_scenario(cpu, {}, {"edx": colors, "eax": rng.randrange(1 << 32)}, 0x10FA80 + 16 * way)
+                with self.subTest(way=way, colors=hex(colors)):
+                    self.assertEqual(cpu.wide(CPU.AX), patches.row_of_colors(way, colors))
+                    self.assertEqual(cpu.instructions, patches.ROW_COUNTS[way] + 1)  # (and the HLT)
+
+
+class TestTheBlocksOfAFrame(unittest.TestCase):
+    """The frame of a video (SMKP.EXE plays the video 2 of the disc) is drawn by the code and by the patch, from the same
+    state of the machine (the entry of the procedure for the third frame, put in a file and taken out again): the
+    registers, the flags, the count of instructions, the memory and the picture have to be the same. It plays the
+    first frames of a video, so it takes some time."""
+
+    @classmethod
+    def setUpClass(cls):
+        from mydos import config, machine, snapshot
+        from mydos.volumes import Volumes
+        cls.modules = (config, machine, snapshot)
+        if not SMKP.exists() or not CONFIG.exists():
+            raise unittest.SkipTest("the game and the machine for it are not here")
+        try:
+            cls.volumes = Volumes(config.load(CONFIG))
+            cls.volumes.resolve("d:\\xcom3\\smk\\wingame2.smk")
+        except Exception as error:  # no disc, no video
+            raise unittest.SkipTest(f"the disc of the game is not here: {error}")
+        cls.directory = tempfile.TemporaryDirectory()
+        cls.state = Path(cls.directory.name) / "frame.state"
+        cls.take_state(3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.directory.cleanup()
+
+    @classmethod
+    def take_state(cls, number):
+        """Play the video 2 up to the entry of the procedure for the `number`th time, and save the machine."""
+        config, machine, snapshot = cls.modules
+        where = cls.volumes.resolve("ufoexe/smkp.exe")
+        computer = machine.build(cls.volumes)
+        cpu = computer.cpu
+        psp.build(cpu, psp.PSP_SEG, psp.ENV_SEG, dos.MEMORY_TOP_SEG, where.dos_path(), tail=b" 2 GOFORIT SOUND")
+        loader.load(cpu, SMKP.read_bytes(), psp.PSP_SEG, computer.state.extended)
+        entries = [0]
+
+        def trace(cpu):
+            if cpu.ip == FRAME_CALL and cpu.s[CPU.CS] == 0x0F:
+                entries[0] += 1
+                if entries[0] == number:
+                    snapshot.save(str(cls.state), computer)
+                    raise Exit(0)
+        cpu.trace = trace
+        cpu.run(20000, lambda: None)
+
+    def draw_frame(self, patched):
+        config, machine, snapshot = self.modules
+        computer = machine.build(self.volumes)
+        cpu = computer.cpu
+        snapshot.load(str(self.state), computer)
+        patches.install(cpu)
+        if not patched:  # the code as it is: what the patch stood in the place of goes back
+            cpu.mem[BLOCKS_AT:BLOCKS_AT + 2] = bytes((0x3C, 0x08))  # cmp al, 8
+        cpu.event_sources, cpu.next_event = [], NEVER  # nothing of the devices comes in the middle
+        stack = cpu.wide(CPU.SP)
+        start = cpu.instructions
+
+        def trace(cpu):
+            if cpu.s[CPU.CS] == 0x0F and cpu.ip == FRAME_RETURN and cpu.wide(CPU.SP) == stack + 4:
+                raise Exit(0)
+        cpu.trace = trace
+        cpu.run(1 << 30, lambda: None)
+        cpu.mem[BLOCKS_AT:BLOCKS_AT + 2] = bytes(2)
+        picture = hashlib.sha1(b"".join(bytes(plane) for plane in computer.card.planes)).hexdigest()
+        return (cpu.r, cpu.rh, cpu.flags, cpu.ip, cpu.instructions - start, hashlib.sha1(cpu.mem).hexdigest(), picture)
+
+    def test_the_frame_is_the_one_the_code_draws(self):
+        original, patched = self.draw_frame(False), self.draw_frame(True)
+        self.assertGreater(original[4], 100_000)  # it is a frame with blocks in it
+        self.assertEqual(original, patched)

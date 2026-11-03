@@ -353,6 +353,346 @@ def sound_loop(cpu):
     cpu.ip = SOUND_EXIT
 
 
+# The loop of the blocks of a frame of Smacker, in the procedure at 10F680. A frame is cut in blocks of 4 by 4 pixels,
+# and the stream says, run by run, of what kind the blocks are: a mono block (two colors and a mask of 16 bits), a full
+# one (all 16 pixels, as 8 values), a void one (what was there stays) or a solid one (one color). A value is read from
+# the stream by a table of its first bits and, if that is not enough, down the tree bit by bit (the trees that the
+# procedures above make); the last values are kept in a cache of three.
+TREE_DEFAULT = 0x114970  # the 16-bit value of a node that is not a leaf
+TREE_AREA = 0x114940  # the start of the trees: the tables give the places counted from it
+CACHE_SWAP = 0x114910  # where the code puts a value for a while
+RUN = 0x114900  # the blocks that are left of the run
+BLOCKS_IN_ROW = 0x114908  # the blocks that are left in the row of blocks of the strip
+BLOCKS_PER_ROW = 0x114904  # how many a row of blocks has
+ROWS_LEFT = 0x11490C  # the rows of blocks that are left in the strip
+ROW_STEP = 0x114920  # what is added to the place, for the next row of blocks
+BLOCK_STEP = 0x114924  # what is taken from the place after the four rows of a block, for the next block
+SOLID_STEP = 0x11491C
+RUN_LENGTHS = 0x114980  # the lengths of a run, by the number that the stream says
+# for each kind of value: the pointer to the table of the first bits, the pointers to the three places of the cache,
+# how few bits the code wants more for (it is 16 more then), and the mask of the table
+KIND_TYPE = (0x1148BC, 0x1148F4, 0x1148F8, 0x1148FC, 8, 0xFF)  # of a run: the kind of its blocks and its length
+KIND_COLORS = (0x1148B4, 0x1148D4, 0x1148D8, 0x1148DC, 0x0A, 0x3FF)  # the two colors of a mono block
+KIND_MASK = (0x1148B0, 0x1148C4, 0x1148C8, 0x1148CC, 0x0B, 0x7FF)  # the mask of a mono block
+KIND_FULL = (0x1148B8, 0x1148E4, 0x1148E8, 0x1148EC, 0x0C, 0xFFF)  # two pixels of a full block
+# the code of a row of a mono block has 16 ways, one for each four bits of the mask, that make EAX of the colors in EDX
+# (DL and DH): they are at 10FA80 and 16 bytes on; this says how many instructions each is, with its last jump
+ROW_COUNTS = (6, 4, 4, 4, 4, 3, 4, 4, 3, 3, 2, 3, 4, 4, 4, 6)
+# where the code goes on when the strip is over (it reads the next strip), for each kind of block
+STRIP_ENDS = (0x10FF40, 0x1106F0, 0x1107E0, 0x110920)
+
+
+def row_of_colors(way, colors):
+    """What the way `way` of the code of a row makes of EAX, of the colors in `colors` (EDX)."""
+    low, high = colors & 0xFF, colors >> 8 & 0xFF
+
+    def rol(value, count):
+        return (value << count | value >> 32 - count) & MASK
+
+    def swap_bytes(value):  # xchg ah, al
+        return value & 0xFFFF0000 | (value & 0xFF) << 8 | value >> 8 & 0xFF
+
+    if way == 0:
+        return low * 0x01010101
+    if way == 15:
+        return high * 0x01010101
+    if way == 1:
+        return rol(colors & 0xFFFF00FF | low << 8, 8)
+    if way == 2:
+        return rol(colors & 0xFFFF00FF | low << 8, 16)
+    if way == 3:
+        return rol(swap_bytes(colors), 8)
+    if way == 4:
+        return rol(colors & 0xFFFF00FF | low << 8, 24)
+    if way == 5:
+        return rol(colors, 8)
+    if way == 6:
+        return swap_bytes(rol(colors, 8))
+    if way == 7:
+        return rol(colors & 0xFFFFFF00 | high, 8)
+    if way == 8:
+        return colors & 0xFFFF00FF | low << 8
+    if way == 9:
+        return swap_bytes(colors)
+    if way == 10:
+        return colors
+    if way == 11:
+        return colors & 0xFFFFFF00 | high
+    if way == 12:
+        return rol(swap_bytes(colors), 24)
+    if way == 13:
+        return rol(colors & 0xFFFFFF00 | high, 24)
+    return rol(colors & 0xFFFFFF00 | high, 16)  # 14
+
+
+def frame_blocks(cpu):
+    """What the loop that begins at 10F7B0 does (the patch is in the second instruction of it, for the first one has
+    an address that the loading of the program changes, and the INT would have been in the place of that): for every run of blocks that the stream says, reads the blocks and draws them (four
+    rows of a dword, EBP apart), goes on to the next row of blocks, and then to the next run, until the strip is over: then
+    the code goes on at the place that reads the next strip (STRIP_ENDS, one for each kind of block). The registers, the
+    flags and the variables are as the code leaves them, and the instructions are counted as the code would have run them."""
+    mem = cpu.mem
+    base = cpu.bases[cpu.s[CPU.DS]]
+    unpack, pack = DWORD.unpack_from, DWORD.pack_into
+    eax, ecx, edx, ebx = cpu.wide(CPU.AX), cpu.wide(CPU.CX), cpu.wide(CPU.DX), cpu.wide(CPU.BX)
+    esi, edi, ebp = cpu.wide(CPU.SI), cpu.wide(CPU.DI), cpu.wide(CPU.BP)
+    default = WORD.unpack_from(mem, base + TREE_DEFAULT)[0]
+    area = unpack(mem, base + TREE_AREA)[0]
+    executed = 0
+
+    def rd(address):
+        return unpack(mem, base + address)[0]
+
+    def wr(address, value):
+        pack(mem, base + (address & MASK), value & MASK)
+
+    video, window_start, window_end = cpu.video, cpu.video_start, cpu.video_end
+    chain_4 = None  # whether the card is in the mode in which a byte is a pixel (it does not change while the loop goes)
+
+    def draw(address, dword):
+        """A dword of the picture: in the memory, or in the window of the video card (where the program draws it)."""
+        nonlocal chain_4
+        address = (base + address) & MASK
+        if address + 4 <= window_start or address >= window_end:
+            pack(mem, address, dword)
+            return
+        if chain_4 is None:
+            video.check_mode()
+            chain_4 = video.chain_4()
+        if chain_4 and window_start <= address and address + 4 <= window_end:
+            offset = address - window_start
+            planes = video.planes
+            for number in range(4):
+                at = offset + number
+                planes[at & 3][at >> 2] = dword >> 8 * number & 0xFF
+            video.changed = True
+            return
+        for number in range(4):
+            if window_start <= address + number < window_end:
+                video.write_memory(address + number - window_start, dword >> 8 * number & 0xFF)
+            else:
+                mem[address + number] = dword >> 8 * number & 0xFF
+
+    def value(kind, ror):
+        """What the code that reads a value does. The value is in the upper 16 bits of the leaf: with `ror` it goes to AX,
+        else the leaf is the whole EAX."""
+        nonlocal eax, ecx, edx, ebx, esi, executed
+        table, cache0, cache1, cache2, limit, mask = kind
+        left = mem[base + BITS_LEFT]
+        refill = left <= limit  # fewer bits than the table looks at: 16 more from the stream
+        if refill:
+            edx = (rd(esi) << ((left - 1) & 31)) & MASK | ebx
+            ebx = edx
+            esi = (esi + 2) & MASK
+            left = (left + 16) & 0xFF
+            executed += 20
+        else:
+            edx = ebx & mask
+            executed += 13
+        entry = rd(rd(table) + 4 * (edx & mask))
+        ebx >>= entry & 31
+        left = (left - entry) & 0xFF
+        ecx = ((entry >> 8) + area) & MASK
+        edx = rd(ecx)
+        if edx & 0xFFFF == default:  # not a leaf: down the tree, a bit at a time
+            executed += 2 if refill else 1
+            while True:
+                step = edx >> 13 & 0xFFFF8
+                left = (left - 1) & 0xFF
+                executed += 10
+                if left == 0:
+                    ebx = rd(esi)
+                    esi = (esi + 4) & MASK
+                    left = 0x20
+                    executed += 3
+                bit = ebx & 1
+                ebx >>= 1
+                if not bit:
+                    step = 4
+                    executed += 1
+                ecx = (ecx + step) & MASK
+                edx = rd(ecx)
+                if edx & 0xFFFF != default:
+                    break
+        else:
+            executed += 1
+        pointer = rd(cache0)
+        mem[base + BITS_LEFT] = left
+        if ror:
+            eax = eax & 0xFFFF0000 | edx >> 16
+            executed += 7
+        else:
+            eax = edx
+            executed += 5
+        ecx = pointer
+        if rd(ecx) != edx:  # not the first of the cache: it becomes the first, and the others go down
+            wr(CACHE_SWAP, eax)
+            eax = rd(ecx)
+            wr(ecx, edx)
+            ecx = rd(cache1)
+            edx = rd(ecx)
+            wr(ecx, eax)
+            ecx = rd(cache2)
+            eax = rd(CACHE_SWAP)
+            wr(ecx, edx)
+            executed += 9
+
+    def leave(label, carry):
+        for number, register in ((CPU.AX, eax), (CPU.CX, ecx), (CPU.DX, edx), (CPU.BX, ebx), (CPU.SI, esi),
+                                 (CPU.DI, edi), (CPU.BP, ebp)):
+            cpu.set32(number, register)
+        cpu.flags = (cpu.flags & ~ARITHMETIC) | flags.ZF | flags.PF | (flags.CF if carry else 0)
+        cpu.instructions += executed - 2  # (the `mov al` before the INT was run, and the INT stands for the next one)
+        cpu.ip = label
+
+    while True:
+        value(KIND_TYPE, True)  # what the blocks of the run are, and how many
+        edx = rd(RUN_LENGTHS + (eax & 0xFC))
+        kind = eax & 3
+        ecx = kind
+        wr(RUN, edx)
+        executed += 7
+        if kind <= 1:  # a mono block (0) or a full one (1)
+            while True:
+                if kind == 0:
+                    value(KIND_COLORS, False)
+                    value(KIND_MASK, True)
+                    ecx = eax
+                    edx = edx_mask = eax
+                    eax = (eax >> 16 | eax << 16) & MASK
+                    edx = edx_mask & 0xFFFF0000 | eax & 0xFFFF  # the colors, in both halves
+                    eax = (eax >> 28 | ecx << 4) & MASK
+                    way = eax >> 4 & 0xF
+                    executed += 8
+                    eax = row_of_colors(way, edx)
+                    executed += ROW_COUNTS[way]
+                    draw(edi, eax)
+                    edi = (edi + ebp) & MASK
+                    way = ecx >> 4 & 0xF
+                    executed += 6
+                    eax = row_of_colors(way, edx)
+                    executed += ROW_COUNTS[way]
+                    draw(edi, eax)
+                    way = ecx >> 8 & 0xF
+                    executed += 5
+                    eax = row_of_colors(way, edx)
+                    executed += ROW_COUNTS[way]
+                    draw(edi + ebp, eax)
+                    way = ecx >> 12 & 0xF
+                    executed += 5
+                    eax = row_of_colors(way, edx)
+                    executed += ROW_COUNTS[way]
+                else:
+                    for row in range(4):
+                        value(KIND_FULL, False)
+                        value(KIND_FULL, True)
+                        if row == 0:
+                            draw(edi, eax)
+                            edi = (edi + ebp) & MASK
+                            executed += 2
+                        elif row == 1:
+                            draw(edi, eax)
+                            executed += 1
+                        elif row == 2:
+                            draw(edi + ebp, eax)
+                            executed += 1
+                draw(edi + 2 * ebp, eax)
+                step = rd(BLOCK_STEP)
+                carry = edi < step
+                edi = (edi - step) & MASK
+                executed += 4
+                in_row = (rd(BLOCKS_IN_ROW) - 1) & MASK
+                wr(BLOCKS_IN_ROW, in_row)
+                if in_row == 0:
+                    rows = (rd(ROWS_LEFT) - 1) & MASK
+                    wr(ROWS_LEFT, rows)
+                    executed += 2
+                    if rows == 0:
+                        return leave(STRIP_ENDS[kind], carry)
+                    edi = (edi + rd(ROW_STEP)) & MASK
+                    eax = rd(BLOCKS_PER_ROW)
+                    wr(BLOCKS_IN_ROW, eax)
+                    executed += 3
+                run = (rd(RUN) - 1) & MASK
+                wr(RUN, run)
+                executed += 2
+                if run == 0:
+                    executed += 1
+                    break
+        elif kind == 2:  # void blocks: the place goes on, nothing is drawn
+            while True:
+                ecx = rd(BLOCKS_IN_ROW)
+                executed += 3
+                if edx < ecx:
+                    ecx = edx
+                    executed += 1
+                edi = (edi + 4 * ecx) & MASK
+                in_row = (rd(BLOCKS_IN_ROW) - ecx) & MASK
+                wr(BLOCKS_IN_ROW, in_row)
+                executed += 3
+                if in_row == 0:
+                    rows = (rd(ROWS_LEFT) - 1) & MASK
+                    wr(ROWS_LEFT, rows)
+                    executed += 2
+                    if rows == 0:
+                        return leave(STRIP_ENDS[2], False)
+                    edi = (edi + rd(ROW_STEP)) & MASK
+                    eax = rd(BLOCKS_PER_ROW)
+                    wr(BLOCKS_IN_ROW, eax)
+                    executed += 3
+                edx = (edx - ecx) & MASK
+                executed += 2
+                if edx == 0:
+                    executed += 1
+                    break
+        else:  # solid blocks: a color
+            ecx = eax = eax & 0xFFFFFF00 | eax >> 8 & 0xFF
+            eax = (eax << 16) & MASK | ecx & 0xFFFF
+            executed += 4
+            while True:
+                ecx = rd(BLOCKS_IN_ROW)
+                executed += 3
+                if rd(RUN) < ecx:
+                    ecx = rd(RUN)
+                    executed += 1
+                wr(CACHE_SWAP, ebp)
+                edx = 4 * ecx & MASK
+                ebp = (ebp - edx) & MASK
+                edx = ecx
+                for row in range(4):
+                    for at in range(ecx):
+                        draw(edi + 4 * at, eax)
+                    edi = (edi + 4 * ecx) & MASK
+                    if row < 3:
+                        edi = (edi + ebp) & MASK
+                ecx = 0
+                edi = (edi - rd(SOLID_STEP)) & MASK
+                ebp = rd(CACHE_SWAP)
+                executed += 16
+                in_row = (rd(BLOCKS_IN_ROW) - edx) & MASK
+                wr(BLOCKS_IN_ROW, in_row)
+                executed += 2
+                if in_row == 0:
+                    rows = (rd(ROWS_LEFT) - 1) & MASK
+                    wr(ROWS_LEFT, rows)
+                    executed += 2
+                    if rows == 0:
+                        return leave(STRIP_ENDS[3], False)
+                    edi = (edi + rd(ROW_STEP)) & MASK
+                    run = (rd(RUN) - edx) & MASK
+                    wr(RUN, run)
+                    ecx = rd(BLOCKS_PER_ROW)
+                    wr(BLOCKS_IN_ROW, ecx)
+                    executed += 5
+                else:
+                    run = (rd(RUN) - edx) & MASK
+                    wr(RUN, run)
+                    executed += 2
+                if run == 0:
+                    executed += 1
+                    break
+
+
 PATCHES = [Patch("the tree of Smacker", 0x10DD90, 0x2F9,
                  "8d771c093903600f4bb962e1538d789d36301287d0d5a52b6167c23bb01a9989", big_tree),
            Patch("the table of the tree", 0x10E090, 0x6C,
@@ -361,6 +701,8 @@ PATCHES = [Patch("the tree of Smacker", 0x10DD90, 0x2F9,
                  "96d70c96ea368a455b0986a8c6756eaf5d3028b6297ef6871a1f566b18d07bc0", mark_values),
            Patch("the values of the tree filled in", 0x10E1D0, 0x30,
                  "b160ac45fcf6b0b914c88ece8e012c2e89dbb6575e02034d613af8cbff3523e5", fill_values),
+           Patch("the blocks of a frame of Smacker", 0x10F7B5, 0x120B,
+                 "f0cc5fa2a549d8f52976276926fb9af8ca6c0bc0240fda6daaa61c18a98d1e53", frame_blocks),
            Patch("the loop of the sound of Smacker", 0x11104C, 0x11A,
                  "f33af4d073d49beb7890a7ef6ec4d5abe3744b8b7d92b8205f6b7e8bd3a22d10", sound_loop),
            Patch("the descent of the first tree", 0x11105B, 0x28,
