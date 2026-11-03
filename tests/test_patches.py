@@ -348,6 +348,83 @@ class TestTheRowsOfAMonoBlock(unittest.TestCase):
                     self.assertEqual(cpu.instructions, patches.ROW_COUNTS[way] + 1)  # (and the HLT)
 
 
+def disc_machine():
+    """The volumes of the machine with the disc of the game, or a SkipTest if they are not here."""
+    from mydos import config
+    from mydos.volumes import Volumes
+    if not SMKP.exists() or not CONFIG.exists():
+        raise unittest.SkipTest("the game and the machine for it are not here")
+    try:
+        volumes = Volumes(config.load(CONFIG))
+        volumes.resolve("d:\\xcom3\\smk\\wingame2.smk")
+    except Exception as error:  # no disc, no video
+        raise unittest.SkipTest(f"the disc of the game is not here: {error}")
+    return volumes
+
+
+def save_machine_at(volumes, path, segment, ip, number):
+    """Play the video 2 up to the `number`th time that the code is at segment:ip, and save the machine in `path`. The
+    patches of the pieces that come later are not made: the machine is one that nothing has changed."""
+    from mydos import machine, snapshot
+    saved = list(patches.LATE_PATCHES)
+    patches.LATE_PATCHES.clear()
+    try:
+        where = volumes.resolve("ufoexe/smkp.exe")
+        computer = machine.build(volumes)
+        cpu = computer.cpu
+        psp.build(cpu, psp.PSP_SEG, psp.ENV_SEG, dos.MEMORY_TOP_SEG, where.dos_path(), tail=b" 2 GOFORIT SOUND")
+        loader.load(cpu, SMKP.read_bytes(), psp.PSP_SEG, computer.state.extended)
+        entries = [0]
+
+        def trace(cpu):
+            if cpu.ip == ip and cpu.s[CPU.CS] == segment:
+                entries[0] += 1
+                if entries[0] == number:
+                    snapshot.save(str(path), computer)
+                    raise Exit(0)
+        cpu.trace = trace
+        cpu.run(20000, lambda: None)
+    finally:
+        patches.LATE_PATCHES[:] = saved
+
+
+def run_saved_machine(volumes, path, patched, segment, back, inside=None):
+    """Put the saved machine back, and run it until it returns (to `back`, with the stack as it was less the address): once
+    as the code is, once with the patch. `inside(cpu, ip)` is called at an address on the way, if it is given, to change
+    something (the same for both). Returns what is left: the registers, the flags, the count of instructions, the hash of
+    the memory and that of the picture."""
+    from mydos import machine, snapshot
+    saved = list(patches.LATE_PATCHES)
+    if not patched:
+        patches.LATE_PATCHES.clear()
+    try:
+        computer = machine.build(volumes)
+        cpu = computer.cpu
+        snapshot.load(str(path), computer)
+        patches.install(cpu)
+        if patched:
+            patches.apply_late(cpu)
+    finally:
+        patches.LATE_PATCHES[:] = saved
+    if not patched:  # the code as it is: what the patch stood in the place of goes back
+        cpu.mem[BLOCKS_AT:BLOCKS_AT + 2] = bytes((0x3C, 0x08))  # cmp al, 8
+    cpu.event_sources, cpu.next_event = [], NEVER  # nothing of the devices comes in the middle
+    stack = cpu.wide(CPU.SP)
+    start = cpu.instructions
+
+    def trace(cpu):
+        if inside is not None:
+            inside(cpu)
+        if cpu.s[CPU.CS] == segment and cpu.ip == back and cpu.wide(CPU.SP) == stack + 4:
+            raise Exit(0)
+    cpu.trace = trace
+    cpu.run(1 << 30, lambda: None)
+    for place in (BLOCKS_AT, MIXER_AT + 0x46, MIXER_AT + 0xBB):  # (where the INTs stand)
+        cpu.mem[place:place + 2] = bytes(2)
+    picture = hashlib.sha1(b"".join(bytes(plane) for plane in computer.card.planes)).hexdigest()
+    return (cpu.r, cpu.rh, cpu.s[:], cpu.flags, cpu.ip, cpu.instructions - start, hashlib.sha1(cpu.mem).hexdigest(), picture)
+
+
 class TestTheBlocksOfAFrame(unittest.TestCase):
     """The frame of a video (SMKP.EXE plays the video 2 of the disc) is drawn by the code and by the patch, from the same
     state of the machine (the entry of the procedure for the third frame, put in a file and taken out again): the
@@ -356,66 +433,70 @@ class TestTheBlocksOfAFrame(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from mydos import config, machine, snapshot
-        from mydos.volumes import Volumes
-        cls.modules = (config, machine, snapshot)
-        if not SMKP.exists() or not CONFIG.exists():
-            raise unittest.SkipTest("the game and the machine for it are not here")
-        try:
-            cls.volumes = Volumes(config.load(CONFIG))
-            cls.volumes.resolve("d:\\xcom3\\smk\\wingame2.smk")
-        except Exception as error:  # no disc, no video
-            raise unittest.SkipTest(f"the disc of the game is not here: {error}")
+        cls.volumes = disc_machine()
         cls.directory = tempfile.TemporaryDirectory()
         cls.state = Path(cls.directory.name) / "frame.state"
-        cls.take_state(3)
+        save_machine_at(cls.volumes, cls.state, 0x0F, FRAME_CALL, 3)
 
     @classmethod
     def tearDownClass(cls):
         cls.directory.cleanup()
 
-    @classmethod
-    def take_state(cls, number):
-        """Play the video 2 up to the entry of the procedure for the `number`th time, and save the machine."""
-        config, machine, snapshot = cls.modules
-        where = cls.volumes.resolve("ufoexe/smkp.exe")
-        computer = machine.build(cls.volumes)
-        cpu = computer.cpu
-        psp.build(cpu, psp.PSP_SEG, psp.ENV_SEG, dos.MEMORY_TOP_SEG, where.dos_path(), tail=b" 2 GOFORIT SOUND")
-        loader.load(cpu, SMKP.read_bytes(), psp.PSP_SEG, computer.state.extended)
-        entries = [0]
-
-        def trace(cpu):
-            if cpu.ip == FRAME_CALL and cpu.s[CPU.CS] == 0x0F:
-                entries[0] += 1
-                if entries[0] == number:
-                    snapshot.save(str(cls.state), computer)
-                    raise Exit(0)
-        cpu.trace = trace
-        cpu.run(20000, lambda: None)
-
-    def draw_frame(self, patched):
-        config, machine, snapshot = self.modules
-        computer = machine.build(self.volumes)
-        cpu = computer.cpu
-        snapshot.load(str(self.state), computer)
-        patches.install(cpu)
-        if not patched:  # the code as it is: what the patch stood in the place of goes back
-            cpu.mem[BLOCKS_AT:BLOCKS_AT + 2] = bytes((0x3C, 0x08))  # cmp al, 8
-        cpu.event_sources, cpu.next_event = [], NEVER  # nothing of the devices comes in the middle
-        stack = cpu.wide(CPU.SP)
-        start = cpu.instructions
-
-        def trace(cpu):
-            if cpu.s[CPU.CS] == 0x0F and cpu.ip == FRAME_RETURN and cpu.wide(CPU.SP) == stack + 4:
-                raise Exit(0)
-        cpu.trace = trace
-        cpu.run(1 << 30, lambda: None)
-        cpu.mem[BLOCKS_AT:BLOCKS_AT + 2] = bytes(2)
-        picture = hashlib.sha1(b"".join(bytes(plane) for plane in computer.card.planes)).hexdigest()
-        return (cpu.r, cpu.rh, cpu.flags, cpu.ip, cpu.instructions - start, hashlib.sha1(cpu.mem).hexdigest(), picture)
-
     def test_the_frame_is_the_one_the_code_draws(self):
-        original, patched = self.draw_frame(False), self.draw_frame(True)
-        self.assertGreater(original[4], 100_000)  # it is a frame with blocks in it
+        original = run_saved_machine(self.volumes, self.state, False, 0x0F, FRAME_RETURN)
+        patched = run_saved_machine(self.volumes, self.state, True, 0x0F, FRAME_RETURN)
+        self.assertGreater(original[5], 100_000)  # it is a frame with blocks in it
         self.assertEqual(original, patched)
+
+
+# --- the mixer of the sound, that comes with the driver, later than the program
+
+MIXER_AT = 0x12E144  # where the procedure is, in the run of the video 2 (the driver is put there)
+MIXER_CALL, MIXER_LOOP = 0x2144, 0x217A  # the offsets in its segment: the procedure, and just before its first loop
+
+
+class TestTheMixerOfTheSound(unittest.TestCase):
+    """The procedure that mixes the sound into the ring of the buffer is run by the code and by the patch from the
+    same saved machine, with the source, the ring and the volume made random (so that the sums go over the end of a byte
+    too): the same registers, memory and count of instructions."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.volumes = disc_machine()
+        cls.directory = tempfile.TemporaryDirectory()
+        cls.state = Path(cls.directory.name) / "mixer.state"
+        save_machine_at(cls.volumes, cls.state, 0x47, MIXER_CALL, 3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.directory.cleanup()
+
+    def randomized(self, seed):
+        rng = random.Random(seed)
+        done = []
+
+        def inside(cpu):
+            if cpu.s[CPU.CS] == 0x47 and cpu.ip == MIXER_LOOP and not done:
+                done.append(True)
+                source = cpu.bases[cpu.s[CPU.DS]] + cpu.wide(CPU.SI)
+                ring = cpu.bases[cpu.s[CPU.ES]]
+                cpu.mem[source:source + 0x4000] = rng.randbytes(0x4000)
+                cpu.mem[ring:ring + 0x2000] = rng.randbytes(0x2000)
+                cpu.r[CPU.BX] = cpu.r[CPU.BX] & 0xFF | rng.randrange(256) << 8
+        return inside
+
+    def test_the_mixing_is_the_one_of_the_code(self):
+        for seed in range(6):
+            with self.subTest(seed=seed):
+                back = self.return_address()
+                original = run_saved_machine(self.volumes, self.state, False, 0x47, back, self.randomized(seed))
+                patched = run_saved_machine(self.volumes, self.state, True, 0x47, back, self.randomized(seed))
+                self.assertGreater(original[5], 1000)
+                self.assertEqual(original, patched)
+
+    def return_address(self):
+        from mydos import machine, snapshot
+        computer = machine.build(self.volumes)
+        snapshot.load(str(self.state), computer)
+        cpu = computer.cpu
+        return cpu.rd(cpu.s[CPU.SS], cpu.wide(CPU.SP))

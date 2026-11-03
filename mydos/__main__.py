@@ -97,6 +97,7 @@ def main():
 
     if args.no_patches:
         patches.PATCHES.clear()
+        patches.LATE_PATCHES.clear()
     volumes = Volumes(settings)
     data = where = None
     if args.program:

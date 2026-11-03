@@ -711,6 +711,110 @@ PATCHES = [Patch("the tree of Smacker", 0x10DD90, 0x2F9,
                  "2818b5bcdfd4b42808bdf79e05d761ac3bbb9daf601a628bb6466794d7039f14", down_the_third_tree)]
 
 
+# The patches of code that is not in the program when it is loaded, but comes later: the driver of the sound is
+# read from a file by the player, and put where there is room. Such a piece is found by its bytes, and patched when it
+# is there (and again when a saved machine is put back, for it keeps the INTs, and does not know what they mean).
+LOOK_EVERY = 2_000_000  # the instructions between the looks, until all the pieces are found
+SEARCH_FROM, SEARCH_TO = 0x100000, 0x800000  # where the program puts such code: above the first megabyte
+
+
+class LatePatch:
+    """A piece of code that comes later. It is `length` bytes, the first of which are `head` (they are what it is
+    searched by), and SHA-256 `digest` is that of all of it. `sites` are the places in it (the offsets from its
+    beginning) where the patch is: (offset, the two bytes of the code that the INT replaces, the handler)."""
+
+    def __init__(self, name, head, length, digest, sites):
+        self.name, self.head, self.length, self.digest, self.sites = name, bytes.fromhex(head), length, digest, sites
+
+    def find(self, cpu):
+        """The address of the code in the memory, as it is now (patched or not), or None."""
+        mem, start = cpu.mem, SEARCH_FROM
+        while True:
+            at = mem.find(self.head, start, SEARCH_TO)
+            if at < 0:
+                return None
+            code = bytearray(mem[at:at + self.length])
+            for offset, original, _ in self.sites:  # what was there before the INTs
+                code[offset:offset + len(PATCH_BYTES)] = original
+            if hashlib.sha256(code).hexdigest() == self.digest:
+                return at
+            start = at + 1
+
+    def apply(self, cpu):
+        """Patch the code if it is there; the machine learns where. Returns whether it was found."""
+        at = self.find(cpu)
+        if at is None:
+            return False
+        for offset, _, handler in self.sites:
+            cpu.mem[at + offset:at + offset + len(PATCH_BYTES)] = PATCH_BYTES
+            cpu.patch_sites[at + offset] = handler
+        return True
+
+
+def mix_into_ring(counter, after):
+    """The handler for the loop of the mixing of the sound (two samples for each round of it): the loop at the
+    offset of the code `after` less its length, that counts the rounds in the dword at FS:`counter`."""
+    def handler(cpu):
+        mix_samples(cpu, counter, after)
+    return handler
+
+
+def mix_samples(cpu, counter, after):
+    """What the loop of the mixer does: for every sample (a byte, the upper of a 16-bit sample at DS:ESI + 2 * ECX) it
+    makes the volume (BH, a signed byte) of it, and adds that to the byte of the ring at ES:EDI (a byte with 80h taken
+    off for the sign), and when the sum does not fit in a signed byte it is the biggest or the least. A round is two of
+    them; the dword at FS:`counter` is the rounds that are left, and the code goes on at the offset `after` when it is
+    0. The registers and the flags are as the code leaves them, and the instructions are counted as it would run."""
+    mem = cpu.mem
+    source = cpu.bases[cpu.s[CPU.DS]]
+    ring = cpu.bases[cpu.s[CPU.ES]]
+    counter_at = cpu.bases[cpu.s[CPU.FS]] + counter
+    esi, ecx, edi, eax = cpu.wide(CPU.SI), cpu.wide(CPU.CX), cpu.wide(CPU.DI), cpu.wide(CPU.AX)
+    volume = cpu.r[CPU.BX] >> 8 & 0xFF
+    volume -= 256 if volume > 127 else 0
+    rounds = DWORD.unpack_from(mem, counter_at)[0]
+    executed = 0
+    while True:
+        for _ in range(2):
+            sample = mem[source + (esi + 2 * ecx + 1 & MASK)]
+            ecx = (ecx + 1) & MASK
+            product = (sample - 256 if sample > 127 else sample) * volume & 0xFFFF  # imul bh: AX
+            eax = ((eax & 0xFFFF0000 | product) >> 7) & 0xFFFF00FF | mem[ring + edi] << 8  # shr eax, 7; mov ah, es:[edi]
+            eax ^= 0x8000  # xor ah, 80h
+            ah = eax >> 8 & 0xFF
+            total = (eax & 0xFF) + ah
+            low = total & 0xFF
+            executed += 8
+            if (low ^ eax) & (low ^ ah) & 0x80:  # the sum overflows: the biggest, or the least
+                low = 0xFF if low & 0x80 else 0  # (0x7F, with 80h taken off again, or 0)
+                executed += 6
+            else:
+                low ^= 0x80
+                executed += 3
+            eax = eax & 0xFFFFFF00 | low
+            mem[ring + edi] = low
+            edi = (edi + 1) & MASK
+        rounds -= 1
+        executed += 2
+        if rounds == 0:
+            break
+    DWORD.pack_into(mem, counter_at, 0)
+    for number, value in ((CPU.AX, eax), (CPU.CX, ecx), (CPU.DI, edi)):
+        cpu.set32(number, value)
+    cpu.flags = (cpu.flags & ~ARITHMETIC) | flags.ZF | flags.PF  # sub dword fs:[counter], 1: the result is 0
+    cpu.instructions += executed - 1  # (the INT stands for the first one)
+    cpu.ip = after
+
+
+# The mixer of the driver of the sound: the procedure at 2144 of its code, that mixes what is to be played into the
+# ring of the buffer; it has two loops, one up to the end of the ring, and one from its beginning.
+LATE_PATCHES = [LatePatch("the mixer of the sound",
+                          "1e568b0d10130000890d141300000fb7463266f72dfc12000003d28bda668e05",
+                          0x118, "5976e86960d7b54a2c51eb978f2d05c6875e674c7c48ba6af1b8a1d34ab75f8d",
+                          [(0x46, bytes.fromhex("8a44"), mix_into_ring(0x130C, 0x21E4)),
+                           (0xBB, bytes.fromhex("8a44"), mix_into_ring(0x1314, 0x2259))])]
+
+
 def apply(cpu, patches=None):
     """Patch the code in memory that is one of the known pieces (see Patch.matches). Returns the names of what was
     patched. Call it when a program is loaded."""
@@ -722,13 +826,30 @@ def apply(cpu, patches=None):
     return done
 
 
+def apply_late(cpu, patches=None):
+    """Patch the pieces of code that came after the program was loaded, those of them that are there. Returns the
+    patches that are not found yet."""
+    return [patch for patch in (LATE_PATCHES if patches is None else patches) if not patch.apply(cpu)]
+
+
 def install(cpu, patches=None):
-    """Teach the machine the meaning of `INT F0h`: do the work of the patch whose first instruction it stands in for."""
+    """Teach the machine the meaning of `INT F0h`: do the work of the patch whose first instruction it stands in for.
+    The pieces of code that come later are looked for from time to time, until they are found."""
     table = {patch.address: patch.handler for patch in (PATCHES if patches is None else patches)}
+    cpu.patch_sites = {}  # the places of the pieces that came later (their linear addresses)
 
     def hook(cpu):
-        handler = table.get(cpu.ip - len(PATCH_BYTES))
+        address = (cpu.bases or {}).get(cpu.s[CPU.CS], 0) + cpu.ip - len(PATCH_BYTES)
+        handler = cpu.patch_sites.get(address) or table.get(cpu.ip - len(PATCH_BYTES))
         if handler is None:
             raise NotImplementedError(f"INT {HOOK:02X} at {cpu.s[CPU.CS]:04X}:{cpu.start_ip:X}: no patch there")
         handler(cpu)
     cpu.int_handlers[HOOK] = hook
+    if LATE_PATCHES:
+        waiting = list(LATE_PATCHES)
+
+        def look(instructions):
+            waiting[:] = apply_late(cpu, waiting)
+            return instructions + LOOK_EVERY if waiting else None
+        cpu.event_sources.append(look)
+        cpu.wake()
