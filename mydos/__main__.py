@@ -7,6 +7,7 @@ from .cpu import CPU
 from .debugger import Debugger
 from .debugwindow import DebugWindow
 from .display import PngFile
+from .profile import Profile
 from .window import TkWindow, WindowError
 from .filesystem import FsError
 from .psp import ENV_SEG, PSP_SEG
@@ -56,6 +57,8 @@ def main():
     parser.add_argument("--debug", action="store_true", help="open the window of the debugger: the program waits there "
                         "before its first instruction, and goes on by a step (F7), over a call (F8) or up to a "
                         "breakpoint (F9); the breakpoints of -b are in it")
+    parser.add_argument("-p", metavar="REPORT", help="count how many times every instruction is executed, and write "
+                        "the hottest places of the program to REPORT when it ends (about a third slower)")
     parser.add_argument("-t", metavar="LOGFILE", help="write every call of the program to DOS (INT 21h, 2Fh, 25h, 20h) "
                         "to LOGFILE: what it asked, the names, and what DOS answered; to see what a program does "
                         "when it fails")
@@ -146,6 +149,14 @@ def main():
     log = open(args.d, "w") if args.d else None
     if log:
         cpu.trace = make_trace(log)
+    profile = None
+    if args.p:
+        try:
+            report = open(args.p, "w")
+        except OSError as error:
+            parser.error(f"cannot write {args.p}: {error.strerror or error}")
+        profile = Profile()
+        cpu.trace = profile.watching(cpu.trace)  # after the log of -d: the count goes first, the line of the log next
     dos_log = call_log = None
     if args.t:
         try:
@@ -174,6 +185,9 @@ def main():
             monitor.close()
         if log:
             log.close()
+        if profile:
+            report.write(profile.report(cpu))
+            report.close()
         if dos_log:
             call_log.finish()
             dos_log.close()

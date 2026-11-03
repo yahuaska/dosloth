@@ -106,6 +106,9 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   `Display` in the monitor, so it is looked after while the program runs; the plain functions that make its text are
   tested without Tk (`tests/test_debugwindow.py`); the registers a command changed are marked, the code can be shown
   from any address, and a register (`AX=1234`) or bytes of memory (`1000:20 90 CC`) can be set by hand
+- `mydos/profile.py` - `-p REPORT`: counts every instruction by address through the trace hook and writes the hottest
+  places (with the instructions and their counts) when the program ends; to see what is worth doing in Python
+  (`tests/test_profile.py`)
 - `mydos/__main__.py` - loads a .COM/.EXE and runs it: `python -m mydos tests/hello.com`; what is after the first
   `--` is the command line of the program (the options and the name come before it);
   `-d LOGFILE` writes every executed instruction to LOGFILE, e.g. `1773:0880  8B C3  mov ax, bx`;

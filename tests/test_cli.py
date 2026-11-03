@@ -731,3 +731,33 @@ class TestTheLogOfDosCalls(CommandLineTest):
         self.assertEqual(result.returncode, 7)
         self.assertTrue((self.dir / "calls.log").read_text())
         self.assertTrue((self.dir / "trace.log").read_text())
+
+
+class TestProfile(CommandLineTest):
+    # mov cx,3 ; nop ; loop -3 ; mov ax,4C07h ; int 21h
+    LOOP = bytes.fromhex("b9 03 00 90 e2 fd b8 07 4c cd 21")
+
+    def test_the_report_is_written_when_the_program_ends(self):
+        self.program(self.LOOP, "p.com")
+        result = self.run_emulator("-p", "report.txt", "p.com")
+        self.assertEqual(result.returncode, 7)
+        text = (self.dir / "report.txt").read_text()
+        self.assertTrue(text.startswith("instructions executed: 9 at 5 different addresses"))
+        self.assertIn("1000:0103  nop", text)
+
+    def test_the_report_is_written_when_the_program_crashes(self):
+        self.program(CRASH, "c.com")
+        self.run_emulator("-p", "report.txt", "c.com")
+        self.assertIn("instructions executed: 1 at 1 different addresses", (self.dir / "report.txt").read_text())
+
+    def test_it_goes_with_the_log_of_the_instructions(self):
+        self.program(self.LOOP, "p.com")
+        self.run_emulator("-p", "report.txt", "-d", "log.txt", "p.com")
+        self.assertEqual(len((self.dir / "log.txt").read_text().splitlines()), 9)
+        self.assertIn("instructions executed: 9", (self.dir / "report.txt").read_text())
+
+    def test_a_report_that_cannot_be_written_is_said_before_the_program_runs(self):
+        self.program(self.LOOP, "p.com")
+        result = self.run_emulator("-p", "no/such/dir/report.txt", "p.com")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("cannot write no/such/dir/report.txt", result.stderr)
