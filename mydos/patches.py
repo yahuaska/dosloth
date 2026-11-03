@@ -234,6 +234,124 @@ def fill_values(cpu):
     after_counting(cpu)
     give_back(cpu)
 
+# The loops of the same code that go down a tree of Huffman, bit by bit, to a leaf. The code has three of them, one
+# for each of the three trees of a value (the low byte, the high byte, and the third); each is eight instructions
+# for a bit, and they are four of every ten instructions of the player.
+def down_the_tree(cpu, leaf_at):
+    """What the loop does (it is at the first instruction of the loop, EDX is the node and EAX what is in it, which
+    is not a leaf): takes a bit from EBX (when BITS_LEFT is counted out, the next dword from ESI first), goes by it
+    (a bit 1 goes by the offset in EAX, a bit 0 to the next dword), and goes on until the dword is a leaf (its top bit
+    set). The program goes on at LEAF_AT with the flags of the `test` that found the leaf. The instructions that the
+    loop would have run are put in the count of them, so that the time of the program is what it was."""
+    mem = cpu.mem
+    base = cpu.bases[cpu.s[CPU.DS]]
+    unpack = DWORD.unpack_from
+    buffer, source, node_at, node = cpu.wide(CPU.BX), cpu.wide(CPU.SI), cpu.wide(CPU.DX), cpu.wide(CPU.AX)
+    left = mem[base + BITS_LEFT]
+    executed = 0
+    while True:
+        left = (left - 1) & 0xFF
+        executed += 8  # dec, jne, shr, jb, add, mov, test, je
+        if left == 0:
+            buffer = unpack(mem, base + source)[0]
+            source = (source + 4) & MASK
+            left = 0x20
+            executed += 3  # mov, add, mov
+        bit = buffer & 1
+        buffer >>= 1
+        if not bit:
+            node = 4
+            executed += 1  # mov eax, 4
+        carry = (node_at ^ node ^ (node_at + node)) & 0x10  # the AF of the `add`, which `test` leaves as it is
+        node_at = (node_at + node) & MASK
+        node = unpack(mem, base + node_at)[0]
+        if node & 0x80000000:
+            break
+    mem[base + BITS_LEFT] = left
+    for number, value in ((CPU.AX, node), (CPU.DX, node_at), (CPU.BX, buffer), (CPU.SI, source)):
+        cpu.set32(number, value)
+    cpu.flags = (cpu.flags & ~ARITHMETIC) | flags.SF | flags.PF | carry  # CF, OF, ZF clear
+    cpu.instructions += executed - 1  # (the INT stands for the first one)
+    cpu.ip = leaf_at
+
+
+def down_the_low_tree(cpu):
+    down_the_tree(cpu, 0x111083)
+
+
+def down_the_third_tree(cpu):
+    down_the_tree(cpu, 0x111101)
+
+
+# The loop of the sound of Smacker (16 bits, two channels) in the procedure at 1109D0: four values from four trees of
+# Huffman make a dword of two samples, and that is done again and again until the end of what is to be unpacked.
+TREE_OF_LEFT_LOW, TREE_OF_LEFT_HIGH, TREE_OF_RIGHT_LOW, TREE_OF_RIGHT_HIGH = 0x114928, 0x11492C, 0x114930, 0x114934
+SOUND_END = 0x114A9C  # where the unpacking is to stop: a place in the ring of the buffer
+SOUND_EXIT = 0x111166  # the code after the loop
+
+
+def sound_loop(cpu):
+    """What the loop at 11104C does. The code of the loop (it begins where the dword is made) goes down the tree of
+    TREE_OF_LEFT_LOW to a leaf and adds its byte to CL (the carry to CH), goes down TREE_OF_LEFT_HIGH and adds to CH,
+    turns ECX by 16 bits (the right sample), does the same with the two trees of the right, and puts ECX at EDI. Then EDI
+    is 4 more, and if it is SOUND_END the loop is over; if it is the end of the ring ([EBP+18]) it goes back to the start
+    of the ring ([EBP+14]). Each tree is gone down as down_the_tree does. The code goes on at SOUND_EXIT with the flags of
+    the comparison that ended it, and the instructions are counted as the code would have run them."""
+    mem = cpu.mem
+    base = cpu.bases[cpu.s[CPU.DS]]
+    unpack, pack = DWORD.unpack_from, DWORD.pack_into
+    frame = cpu.bases[cpu.s[CPU.SS]] + cpu.wide(CPU.BP)
+    ring_start, ring_end = unpack(mem, frame + 0x14)[0], unpack(mem, frame + 0x18)[0]
+    roots = [unpack(mem, base + at)[0] for at in (TREE_OF_LEFT_LOW, TREE_OF_LEFT_HIGH, TREE_OF_RIGHT_LOW,
+                                                  TREE_OF_RIGHT_HIGH)]
+    end = unpack(mem, base + SOUND_END)[0]
+    buffer, source, out, both = cpu.wide(CPU.BX), cpu.wide(CPU.SI), cpu.wide(CPU.DI), cpu.wide(CPU.CX)
+    left = mem[base + BITS_LEFT]
+    executed = 0
+    while True:
+        for number, root in enumerate(roots):
+            node_at = root
+            node = unpack(mem, base + node_at)[0]
+            executed += 4 + 3  # the three instructions that take the root and test it, the `jne`, and those that use the leaf
+            while not node & 0x80000000:
+                left = (left - 1) & 0xFF
+                executed += 8
+                if left == 0:
+                    buffer = unpack(mem, base + source)[0]
+                    source = (source + 4) & MASK
+                    left = 0x20
+                    executed += 3
+                bit = buffer & 1
+                buffer >>= 1
+                if not bit:
+                    node = 4
+                    executed += 1
+                node_at = (node_at + node) & MASK
+                node = unpack(mem, base + node_at)[0]
+            if number & 1:  # the second byte of a sample: added to CH, and the other sample is turned to the low half
+                both = (both & 0xFFFF00FF) | ((both + ((node & 0xFF) << 8)) & 0xFF00)
+                both = (both >> 16 | both << 16) & MASK
+            else:
+                total = (both & 0xFF) + (node & 0xFF)
+                both = (both & 0xFFFFFF00) | total & 0xFF
+                both = (both & 0xFFFF00FF) | ((both + ((total >> 8) << 8)) & 0xFF00)
+        pack(mem, base + out, both)
+        out = (out + 4) & MASK
+        if out == end:
+            executed += 4
+            break
+        executed += 6
+        if out == ring_end:
+            out = ring_start
+            executed += 2
+    mem[base + BITS_LEFT] = left
+    for number, value in ((CPU.AX, node), (CPU.DX, node_at), (CPU.BX, buffer), (CPU.SI, source), (CPU.DI, out),
+                          (CPU.CX, both)):
+        cpu.set32(number, value)
+    cpu.flags = (cpu.flags & ~ARITHMETIC) | flags.ZF | flags.PF  # cmp edi, [SOUND_END]: equal
+    cpu.instructions += executed - 1
+    cpu.ip = SOUND_EXIT
+
 
 PATCHES = [Patch("the tree of Smacker", 0x10DD90, 0x2F9,
                  "8d771c093903600f4bb962e1538d789d36301287d0d5a52b6167c23bb01a9989", big_tree),
@@ -242,7 +360,13 @@ PATCHES = [Patch("the tree of Smacker", 0x10DD90, 0x2F9,
            Patch("the values of the tree marked", 0x10E1A0, 0x30,
                  "96d70c96ea368a455b0986a8c6756eaf5d3028b6297ef6871a1f566b18d07bc0", mark_values),
            Patch("the values of the tree filled in", 0x10E1D0, 0x30,
-                 "b160ac45fcf6b0b914c88ece8e012c2e89dbb6575e02034d613af8cbff3523e5", fill_values)]
+                 "b160ac45fcf6b0b914c88ece8e012c2e89dbb6575e02034d613af8cbff3523e5", fill_values),
+           Patch("the loop of the sound of Smacker", 0x11104C, 0x11A,
+                 "f33af4d073d49beb7890a7ef6ec4d5abe3744b8b7d92b8205f6b7e8bd3a22d10", sound_loop),
+           Patch("the descent of the first tree", 0x11105B, 0x28,
+                 "2818b5bcdfd4b42808bdf79e05d761ac3bbb9daf601a628bb6466794d7039f14", down_the_low_tree),
+           Patch("the descent of the third tree", 0x1110D9, 0x28,
+                 "2818b5bcdfd4b42808bdf79e05d761ac3bbb9daf601a628bb6466794d7039f14", down_the_third_tree)]
 
 
 def apply(cpu, patches=None):

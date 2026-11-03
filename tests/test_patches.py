@@ -243,3 +243,83 @@ class TestTheTables(Beside):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- the loops that go down the tree to a leaf
+
+DESCENT_TREE, DESCENT_STREAM = 0x1A00000, 0x1B00000
+DESCENTS = ((0x11105B, 0x111083), (0x1110D9, 0x111101))  # where a loop starts, and where the code goes on after it
+
+
+def tree_to_go_down(rng, leaves):
+    """The nodes of a tree as the code goes down it: a leaf has the top bit set and a byte, a node has the offset of its
+    right side (the left one follows it)."""
+    if leaves == 1:
+        return [0x80000000 | rng.randrange(256)]
+    cut = rng.randrange(1, leaves)
+    left, right = tree_to_go_down(rng, cut), tree_to_go_down(rng, leaves - cut)
+    return [4 + 4 * len(left)] + left + right
+
+
+@unittest.skipUnless(SMKP.exists(), "the game is not here")
+class TestTheDescentOfTheTree(unittest.TestCase):
+    def run_loop(self, patch, seed, entry, leaf_at):
+        rng = random.Random(seed)
+        nodes = tree_to_go_down(rng, rng.randrange(2, 200))
+        cpu = game_machine(patch=patch)
+        cpu.mem[leaf_at] = 0xF4  # a HLT where the code goes on, to stop there
+        memory = {DESCENT_TREE: struct.pack(f"<{len(nodes)}I", *nodes), DESCENT_STREAM: rng.randbytes(4096),
+                  0x114960: bytes([rng.choice([1, 2, 5, 17, 32])])}
+        registers = {"eax": nodes[0], "ecx": rng.randrange(1 << 32), "edx": DESCENT_TREE,
+                     "ebx": rng.randrange(1 << 32), "esi": DESCENT_STREAM}
+        run_scenario(cpu, memory, registers, entry, rng.choice(FLAG_CHOICES))
+        return cpu
+
+    def test_the_result_is_the_one_of_the_code_it_replaces(self):
+        for entry, leaf_at in DESCENTS:
+            for seed in range(60):
+                with self.subTest(entry=hex(entry), seed=seed):
+                    original = self.run_loop(False, seed, entry, leaf_at)
+                    patched = self.run_loop(True, seed, entry, leaf_at)
+                    self.assertEqual((original.r, original.rh), (patched.r, patched.rh))
+                    self.assertEqual((original.flags, original.ip), (patched.flags, patched.ip))
+                    self.assertEqual(original.mem[0x114960], patched.mem[0x114960])
+                    self.assertEqual(original.instructions, patched.instructions)  # the time is the same
+
+
+# --- the loop of the sound of Smacker
+
+SOUND_FRAME, SOUND_RING = 0x1C00000, 0x1C10000
+SOUND_TREES = (0x114928, 0x11492C, 0x114930, 0x114934)  # where the roots of the four trees are
+
+
+@unittest.skipUnless(SMKP.exists(), "the game is not here")
+class TestTheLoopOfTheSound(unittest.TestCase):
+    def run_loop(self, patch, seed):
+        rng = random.Random(seed)
+        cpu = game_machine(patch=patch)
+        cpu.mem[0x111166] = 0xF4  # a HLT where the loop ends
+        memory = {DESCENT_STREAM: rng.randbytes(8192), 0x114960: bytes([rng.choice([1, 2, 5, 17, 32])])}
+        for number, root_at in enumerate(SOUND_TREES):
+            nodes = tree_to_go_down(rng, rng.choice([1, 1, 2, 5, 40, 150]))
+            memory[DESCENT_TREE + 0x1000 * number] = struct.pack(f"<{len(nodes)}I", *nodes)
+            memory[root_at] = struct.pack("<I", DESCENT_TREE + 0x1000 * number)
+        slots = rng.choice([2, 5, 16])
+        start = SOUND_RING + 4 * rng.randrange(slots)
+        memory[SOUND_FRAME + 0x14] = struct.pack("<II", SOUND_RING, SOUND_RING + 4 * slots)  # the ring: from, to
+        memory[0x114A9C] = struct.pack("<I", SOUND_RING + 4 * rng.randrange(1, slots))  # (the start is never met: it is what it wraps to)
+        registers = {"ebx": rng.randrange(1 << 32), "ecx": rng.randrange(1 << 32), "esi": DESCENT_STREAM,
+                     "edi": start, "ebp": SOUND_FRAME, "eax": rng.randrange(1 << 32), "edx": rng.randrange(1 << 32)}
+        run_scenario(cpu, memory, registers, 0x11104C, rng.choice(FLAG_CHOICES))
+        return cpu
+
+    def test_the_result_is_the_one_of_the_code_it_replaces(self):
+        for seed in range(80):
+            with self.subTest(seed=seed):
+                original, patched = self.run_loop(False, seed), self.run_loop(True, seed)
+                self.assertEqual((original.r, original.rh), (patched.r, patched.rh))
+                self.assertEqual((original.flags, original.ip), (patched.flags, patched.ip))
+                self.assertEqual(bytes(original.mem[SOUND_RING:SOUND_RING + 0x100]),
+                                 bytes(patched.mem[SOUND_RING:SOUND_RING + 0x100]))
+                self.assertEqual(original.mem[0x114960], patched.mem[0x114960])
+                self.assertEqual(original.instructions, patched.instructions)
