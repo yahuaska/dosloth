@@ -27,11 +27,18 @@ Port 3DAh, the status of the card, is different: reading it gives 00h and 09h tu
 going back to the top" and bit 0 is "nothing is being drawn right now". Programs wait in a loop for these bits to
 change, and a status that never changed would keep such a program there for good, without a word.
 
+The 256-color mode of the BIOS, 13h, is the same planes with the chain-4 bit of the sequencer's memory mode register
+(register 4, bit 3) set: the address of a byte of the window says the plane (its two low bits) and the place in it
+(the rest), so that the screen is a row of bytes, one a pixel, as the program sees it. With the bit clear, the 256-color
+bit of the graphics controller (register 5, bit 6) still makes the pixels of the screen 8 bits wide, and the program
+goes by the planes and the write modes as in the 16-color modes: this is what is called mode X.
+
 What is not done (a port outside 3C0h-3DFh, such as the monochrome ones at 3B4h, stops the emulator, and so does
-a memory access in a mode it does not know): odd/even addressing and 256-color modes (graphics controller register
-5, bits 4-6), the window being moved or made smaller by register 6, the text modes. The palette entries the BIOS
-fills in past the first 64 are not there: they are black. The attribute controller's overscan, plane enable and
-panning registers are kept but do nothing.
+a memory access in a mode it does not know): odd/even addressing and the interleaved shift (graphics controller
+register 5, bits 4 and 5), the window being moved or made smaller by register 6, the text modes, the start address and
+the line length of the CRT controller. The palette entries the BIOS fills in past the first 64 (past the first 32 in
+mode 13h) are not there: they are black. The attribute controller's overscan, plane enable and panning registers are
+kept but do nothing.
 """
 
 FIRST_PORT = 0x3C0
@@ -45,7 +52,9 @@ GRAPHICS = 0x3CE
 WINDOW_START = 0xA0000  # where the planes show in the address space,
 WINDOW_END = 0xB0000  # 64 KB of it
 PLANE_SIZE = 0x10000
-UNSUPPORTED_MODE_BITS = 0x70  # in graphics controller register 5: odd/even, interleaved shift, 256 colors
+UNSUPPORTED_MODE_BITS = 0x30  # in graphics controller register 5: odd/even, interleaved shift
+COLORS_256 = 0x40  # in the same register: the pixels of the screen are 8 bits wide
+CHAIN_4 = 0x08  # in the sequencer's memory mode register (4): the two low bits of an address say the plane
 
 ATTRIBUTE_PORT = 0x3C0
 ATTRIBUTE_READ_PORT = 0x3C1
@@ -82,6 +91,11 @@ def default_dac():
 
 # what the BIOS leaves in the registers that are not 0 after it has set a graphics mode
 POWER_ON = {(SEQUENCER, 2): 0x0F, (GRAPHICS, 7): 0x0F, (GRAPHICS, 8): 0xFF}
+# and in mode 13h: the memory mode of the sequencer with chain-4, the 256-color bit, and the attribute controller's mode
+# control with the 8-bit pixels (bit 6)
+MODE_13H = {(SEQUENCER, 4): 0x0E, (GRAPHICS, 5): COLORS_256}
+MODE_13H_CONTROL = 0x41
+GRAYS = [0, 5, 8, 11, 14, 17, 20, 24, 28, 32, 36, 40, 45, 50, 56, 63]  # the 16 grays that follow the 16 colors
 
 
 class Vga:
@@ -212,9 +226,36 @@ class Vga:
     def graphics(self, index):
         return self.registers.get((GRAPHICS, index), 0)
 
+    def set_mode_13h(self):
+        """What the BIOS does to the card for video mode 13h, on top of clear(): the registers of the 256-color chain-4
+        mode, the 8-bit pixels, and the first 32 colors of the DAC (the 16 of the EGA and 16 grays; the rest black)."""
+        self.registers.update(MODE_13H)
+        self.attributes[MODE_CONTROL] = MODE_13H_CONTROL
+        self.attributes[:16] = range(16)  # the pixels are not looked up in the 16 registers, but as if they were
+        self.dac = bytearray(768)
+        for number, color in enumerate(CGA_COLORS):
+            self.dac[number * 3:number * 3 + 3] = bytes(color)
+        for number, gray in enumerate(GRAYS):
+            self.dac[(16 + number) * 3:(16 + number) * 3 + 3] = bytes((gray, gray, gray))
+
+    def mode_256(self):
+        """Whether the pixels of the screen are 8 bits wide, a byte of each of the four planes in turn."""
+        return bool(self.graphics(5) & COLORS_256)
+
+    def chain_4(self):
+        return bool(self.sequencer(4) & CHAIN_4)
+
+    def colors256(self):
+        """The 256 colors of the screen as (red, green, blue) in 8 bits each, with the mask of the DAC on the number."""
+        colors = []
+        for number in range(256):
+            red, green, blue = self.get_dac(number & self.pel_mask)
+            colors.append(tuple(part << 2 | part >> 4 for part in (red, green, blue)))
+        return colors
+
     def check_mode(self):
         if self.graphics(5) & UNSUPPORTED_MODE_BITS:
-            raise NotImplementedError("VGA memory in odd/even, interleaved or 256-color mode (graphics register 5 "
+            raise NotImplementedError("VGA memory in odd/even or interleaved mode (graphics register 5 "
                                       f"is {self.graphics(5):02X})")
 
     def read_memory(self, offset):
@@ -222,6 +263,8 @@ class Vga:
         is one plane's (read mode 0) or says which of its bits have the color the program is looking for (mode 1)."""
         self.check_mode()
         planes = self.planes
+        if self.chain_4():
+            return planes[offset & 3][offset >> 2]
         self.latches = [plane[offset] for plane in planes]
         if not self.graphics(5) & 0x08:
             return planes[self.graphics(4) & 3][offset]
@@ -237,6 +280,9 @@ class Vga:
         from the byte of the CPU, the set/reset, the latch and the bit mask; which way depends on the write mode."""
         self.check_mode()
         self.changed = True
+        if self.chain_4():  # one byte to one plane: what the other registers say does not count
+            self.planes[offset & 3][offset >> 2] = value
+            return
         mode = self.graphics(5) & 3
         map_mask = self.sequencer(2)
         latches = self.latches

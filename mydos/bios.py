@@ -8,7 +8,7 @@ from collections import deque
 
 from . import flags, text, vesa
 from .cpu import CPU
-from .text import BDA_COLUMNS, BDA_PAGE, BDA_VIDEO_MODE, BLANK_CELL, GRAPHICS_MODE, TEXT_BASE, TEXT_MODE
+from .text import BDA_COLUMNS, BDA_PAGE, BDA_VIDEO_MODE, BLANK_CELL, GRAPHICS_MODE, MODE_13H, TEXT_BASE, TEXT_MODE
 
 TICKS_PER_DAY = 0x1800B0  # the BIOS timer ticks 18.2065 times a second: 1,573,040 ticks make a day
 # where the BIOS keeps the state of the video, in its data area at 0040:0000
@@ -49,11 +49,13 @@ def int1a(cpu):
 def set_video_mode(cpu, mode, keep_picture):
     """Put the machine in a video mode, as the BIOS does: the state in the data area, and a clean screen unless the
     picture is to be kept (the registers of the card are set up either way)."""
-    if mode not in (TEXT_MODE, GRAPHICS_MODE):
+    if mode not in (TEXT_MODE, GRAPHICS_MODE, MODE_13H):
         raise NotImplementedError(f"INT 10h AH=00 AL={mode:02X}: video mode {mode:02X}")
     text.set_up(cpu, mode)
     if cpu.video is not None:
         cpu.video.clear(keep_planes=keep_picture)
+        if mode == MODE_13H:
+            cpu.video.set_mode_13h()
     if not keep_picture:
         cpu.mem[TEXT_BASE:TEXT_BASE + TEXT_CLEARED] = BLANK_CELL * (TEXT_CLEARED // 2)
 

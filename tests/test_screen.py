@@ -5,7 +5,7 @@ from mydos import screen
 from mydos.bios import Keyboard
 from mydos.cpu import Exit
 from mydos.display import Display
-from mydos.screen import EGA_COLORS, Frame, Monitor, render
+from mydos.screen import EGA_COLORS, Frame, Monitor, render, render_256
 from mydos.vga import Vga
 
 
@@ -24,6 +24,31 @@ def reference(planes, palette, width, height):
 
 def blank(width, height, extra=0):
     return [bytearray(width // 8 * height + extra) for _ in range(4)]
+
+
+class TestRender256(unittest.TestCase):
+    PALETTE = [(n, 255 - n, n // 2) for n in range(256)]
+
+    def test_the_bytes_of_the_planes_in_turn_are_the_pixels_in_a_row(self):
+        planes = [bytearray(0x10000) for _ in range(4)]
+        for address in range(64000):
+            planes[address & 3][address >> 2] = address * 7 & 0xFF
+        frame = render_256(planes, self.PALETTE)
+        self.assertEqual((frame.width, frame.height, len(frame.rgb)), (320, 200, 320 * 200 * 3))
+        for address in (0, 1, 2, 3, 4, 319, 320, 321, 12345, 63999):
+            number = address * 7 & 0xFF
+            self.assertEqual(frame.rgb[3 * address:3 * address + 3], bytes(self.PALETTE[number]), address)
+
+    def test_a_smaller_picture(self):
+        planes = [bytearray(2) for _ in range(4)]
+        planes[1][0] = 9
+        frame = render_256(planes, self.PALETTE, width=4, height=2)
+        self.assertEqual((frame.width, frame.height), (4, 2))
+        self.assertEqual(frame.rgb[3:6], bytes(self.PALETTE[9]))
+
+    def test_planes_that_are_too_small_are_refused(self):
+        with self.assertRaises(ValueError):
+            render_256([bytearray(100)] * 4, self.PALETTE)
 
 
 class TestRender(unittest.TestCase):
@@ -183,6 +208,27 @@ class TestMonitor(unittest.TestCase):
             self.assertEqual(display.calls, ["poll", "present", "poll"])
             self.assertEqual(display.frames[0].rgb[:3], b"\xFF\xFF\xFF")
         self.assertFalse(self.card.changed)
+
+    def test_a_card_in_mode_13h_shows_320_by_200_pixels_with_the_colors_of_the_dac(self):
+        self.card.clear()
+        self.card.set_mode_13h()
+        self.card.set_dac(7, 63, 0, 0)  # red
+        self.card.write_memory(2, 7)  # the third pixel of the first row
+        self.card.write_memory(321, 15)  # the second of the second
+        self.monitor.tick()
+        frame = self.first.frames[0]
+        self.assertEqual((frame.width, frame.height), (320, 200))
+        self.assertEqual(frame.rgb[6:9], b"\xFF\x00\x00")
+        self.assertEqual(frame.rgb[3 * 321:3 * 321 + 3], b"\xFF\xFF\xFF")
+        self.assertEqual(frame.rgb[:6], bytes(6))
+
+    def test_the_picture_goes_back_to_16_colors_with_the_mode(self):
+        self.card.clear()
+        self.card.set_mode_13h()
+        self.card.clear()
+        self.card.write_memory(0, 0x80)
+        self.monitor.tick()
+        self.assertEqual((self.first.frames[0].width, self.first.frames[0].height), (640, 480))
 
     def test_every_display_is_polled_before_any_is_shown_the_picture(self):
         order = []

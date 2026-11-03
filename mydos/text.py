@@ -25,6 +25,7 @@ PAGE_BYTES = 0x1000
 PAGES = 8
 TEXT_MODE = 0x03  # 80 by 25 characters in 16 colors: what DOS is in before a program starts
 GRAPHICS_MODE = 0x12  # 640 by 480 pixels in 16 colors
+MODE_13H = 0x13  # 320 by 200 pixels in 256 colors
 BLANK_CELL = bytes([0x20, 0x07])  # a space, light grey on black
 DEFAULT_CURSOR_SHAPE = 0x0607  # the last two of the 8 scan lines of a character of the old displays
 
@@ -33,12 +34,13 @@ def set_up(cpu, mode):
     """What the BIOS puts in its data area for a video mode: the size of the screen, the cursor of every page at
     the top left, the usual shape of the cursor."""
     cpu.mem[BDA_VIDEO_MODE] = mode
-    cpu.mem[BDA_COLUMNS:BDA_COLUMNS + 2] = (80).to_bytes(2, "little")
+    cpu.mem[BDA_COLUMNS:BDA_COLUMNS + 2] = (40 if mode == MODE_13H else 80).to_bytes(2, "little")
     cpu.mem[BDA_CURSORS:BDA_CURSORS + 2 * PAGES] = bytes(2 * PAGES)
     cpu.mem[BDA_CURSOR_SHAPE:BDA_CURSOR_SHAPE + 2] = DEFAULT_CURSOR_SHAPE.to_bytes(2, "little")
     cpu.mem[BDA_PAGE] = 0
-    cpu.mem[BDA_ROWS] = 24 if mode == TEXT_MODE else 29  # 25 rows of 16 scan lines, or 480 scan lines of 16
-    cpu.mem[BDA_CHARACTER_HEIGHT:BDA_CHARACTER_HEIGHT + 2] = (16).to_bytes(2, "little")
+    # 25 rows of 16 scan lines, 480 scan lines of 16, or 25 rows of 8 scan lines
+    cpu.mem[BDA_ROWS] = 29 if mode == GRAPHICS_MODE else 24
+    cpu.mem[BDA_CHARACTER_HEIGHT:BDA_CHARACTER_HEIGHT + 2] = (8 if mode == MODE_13H else 16).to_bytes(2, "little")
 
 
 def check_page(page, what):

@@ -229,6 +229,30 @@ class TestVideoMode(unittest.TestCase):
         self.assertEqual(self.mode(), (0x12, 80, 0))
         self.assertEqual(self.cpu.rw(0x40, 0x4A), 80)
 
+    def test_mode_13h_is_40_columns_of_8_scan_lines_with_the_card_in_the_chain_4_mode(self):
+        self.call(0x0013)
+        self.assertEqual(self.mode(), (0x13, 40, 0))
+        self.assertEqual(self.cpu.rw(0x40, 0x4A), 40)
+        self.assertEqual((self.cpu.rb(0x40, 0x84), self.cpu.rw(0x40, 0x85)), (24, 8))
+        self.assertTrue(self.card.mode_256() and self.card.chain_4())
+        self.assertEqual(self.card.get_dac(15), (63, 63, 63))
+
+    def test_mode_13h_clears_the_planes_and_bit_7_keeps_them(self):
+        self.call(0x0013)
+        self.card.write_memory(1234, 0x77)
+        self.call(0x0093)
+        self.assertEqual(self.card.read_memory(1234), 0x77)
+        self.assertTrue(self.card.chain_4())
+        self.call(0x0013)
+        self.assertEqual(self.card.read_memory(1234), 0)
+
+    def test_text_mode_after_mode_13h_takes_the_card_back(self):
+        self.call(0x0013)
+        self.call(0x0003)
+        self.assertFalse(self.card.mode_256() or self.card.chain_4())
+        self.assertEqual(self.mode(), (0x03, 80, 0))
+        self.assertEqual(self.cpu.rw(0x40, 0x85), 16)
+
     def test_setting_the_mode_back_to_text_is_remembered_too(self):
         self.call(0x0012)
         self.call(0x0003)
@@ -278,7 +302,7 @@ class TestVideoMode(unittest.TestCase):
 
     def test_other_modes_stop_the_emulator_and_change_nothing(self):
         self.call(0x0012)
-        for mode in (0x00, 0x01, 0x02, 0x04, 0x05, 0x06, 0x07, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x13, 0x6A, 0x7F):
+        for mode in (0x00, 0x01, 0x02, 0x04, 0x05, 0x06, 0x07, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x14, 0x6A, 0x7F):
             with self.assertRaises(NotImplementedError, msg=hex(mode)):
                 self.call(mode)
             with self.assertRaises(NotImplementedError, msg=hex(mode | 0x80)):

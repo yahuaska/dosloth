@@ -80,11 +80,14 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/dump.py` - the crash dump (`<program>.crash.json` and `.crash.mem`): beside the program, or in the current
   directory when that cannot be written to (a program on a CD-ROM); a failing dump never hides the real error
 - `mydos/timer.py` - the 8253/8254 timer on ports 40h-43h; its time is the count of executed instructions
-- `mydos/vga.py` - a VGA card for the 16-color planar modes: the ports 3C0h-3DFh, and the window A0000h-AFFFFh as
+- `mydos/vga.py` - a VGA card for the planar modes: the ports 3C0h-3DFh, and the window A0000h-AFFFFh as
   four planes with the write modes 0-3, read modes 0-1 and the latches; the colors: the DAC (3C6h-3C9h) and the
-  palette registers of the attribute controller (3C0h). The CPU hands that window to the card (`cpu.video`), so
-  the crash dump's `.mem` file has nothing in it for the screen
-- `mydos/screen.py` - the planes -> a `Frame` of RGB pixels (mode 12h layout, 640x480, the colors of the card), and
+  palette registers of the attribute controller (3C0h). Mode 13h (256 colors, 320x200) is the chain-4 bit of the
+  sequencer (the two low bits of an address are the plane) and the 256-color bit of the graphics controller; the BIOS
+  sets it (`set_mode_13h`). The CPU hands that window to the card (`cpu.video`), so the crash dump's `.mem` file has
+  nothing in it for the screen
+- `mydos/screen.py` - the planes -> a `Frame` of RGB pixels (mode 12h layout, 640x480, the colors of the card; or
+  mode 13h, 320x200, a byte a pixel from the DAC), and
   the `Monitor` that looks after all the displays: polls their windows, shows the picture when the card was drawn on
 - `mydos/display.py` - the `Display` interface (`present(frame)`, `poll()`, `close()`) that every window or file that
   shows the picture goes through; `PngFile` is the first. `-s PNGFILE` uses it

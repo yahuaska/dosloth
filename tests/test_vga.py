@@ -759,9 +759,85 @@ class TestTheWindowInTheCpu(unittest.TestCase):
         self.assertEqual(cpu.video.planes[1][0x40], 0x00)
 
 
+def mode_13h():
+    chip = Vga()
+    chip.clear()
+    chip.set_mode_13h()
+    return chip
+
+
+class TestMode13h(unittest.TestCase):
+    """256 colors, a byte a pixel, the planes taken in turn: the chain-4 mode of the BIOS."""
+
+    def test_the_two_low_bits_of_an_address_are_the_plane_and_the_rest_the_place_in_it(self):
+        chip = mode_13h()
+        for address in (0, 1, 2, 3, 4, 5, 0x1234, 63999, 0xFFFF):
+            chip.write_memory(address, address & 0xFF ^ 0x5A)
+            self.assertEqual(chip.planes[address & 3][address >> 2], address & 0xFF ^ 0x5A, hex(address))
+            self.assertEqual(chip.read_memory(address), address & 0xFF ^ 0x5A, hex(address))
+
+    def test_a_byte_goes_to_one_plane_whatever_the_other_registers_say(self):
+        chip = mode_13h()
+        chip.registers[vga.SEQUENCER, 2] = 0x01  # a map mask that allows plane 0 only
+        chip.registers[vga.GRAPHICS, 3] = 0x18  # XOR with the latch
+        chip.registers[vga.GRAPHICS, 8] = 0x0F  # and a bit mask
+        chip.latches = [0xFF] * 4
+        chip.write_memory(3, 0xC3)
+        self.assertEqual([plane[0] for plane in chip.planes], [0, 0, 0, 0xC3])
+
+    def test_a_write_says_the_screen_changed(self):
+        chip = mode_13h()
+        chip.changed = False
+        chip.write_memory(10, 1)
+        self.assertTrue(chip.changed)
+
+    def test_the_registers_the_bios_leaves(self):
+        chip = mode_13h()
+        self.assertTrue(chip.mode_256())
+        self.assertTrue(chip.chain_4())
+        self.assertEqual(chip.attributes[vga.MODE_CONTROL], 0x41)
+        self.assertEqual(chip.sequencer(2), 0x0F)  # the map mask is still the one of every graphics mode
+
+    def test_the_first_32_colors_are_those_of_the_ega_and_the_grays_and_the_rest_are_black(self):
+        chip = mode_13h()
+        self.assertEqual([chip.get_dac(n) for n in range(16)], [tuple(color) for color in vga.CGA_COLORS])
+        self.assertEqual([chip.get_dac(16 + n) for n in range(16)], [(g, g, g) for g in vga.GRAYS])
+        self.assertEqual(chip.get_dac(6), (42, 21, 0))
+        self.assertEqual({chip.get_dac(n) for n in range(32, 256)}, {(0, 0, 0)})
+
+    def test_the_colors_are_the_dac_in_8_bits_and_the_mask_is_on_the_number(self):
+        chip = mode_13h()
+        chip.set_dac(0x85, 63, 32, 0)
+        colors = chip.colors256()
+        self.assertEqual((len(colors), colors[0x85], colors[15]), (256, (255, 130, 0), (255, 255, 255)))
+        chip.write(vga.PEL_MASK_PORT, 0x0F)
+        self.assertEqual(chip.colors256()[0x85], chip.colors256()[5])  # 85h and 0Fh = 05h
+
+    def test_another_mode_set_takes_the_registers_back(self):
+        chip = mode_13h()
+        chip.clear()
+        self.assertFalse(chip.mode_256() or chip.chain_4())
+        self.assertEqual(chip.attributes[vga.MODE_CONTROL], DEFAULT_ATTRIBUTES[vga.MODE_CONTROL])
+
+    def test_without_the_chain_the_planes_and_the_write_modes_work_as_in_16_colors(self):
+        chip = mode_13h()
+        chip.registers[vga.SEQUENCER, 4] = 0x06  # mode X: no chain-4, no odd/even
+        chip.registers[vga.SEQUENCER, 2] = 0x05  # planes 0 and 2
+        chip.write_memory(7, 0x99)
+        self.assertEqual([plane[7] for plane in chip.planes], [0x99, 0, 0x99, 0])
+        self.assertEqual(chip.read_memory(7), 0x99)
+        self.assertTrue(chip.mode_256())  # and the screen is still of 8-bit pixels
+
+    def test_the_graphics_controller_bit_alone_does_not_stop_the_card(self):
+        chip = Vga()
+        chip.registers[vga.GRAPHICS, 5] = 0x40
+        chip.read_memory(0)
+        chip.write_memory(0, 1)
+
+
 class TestWhatTheCardDoesNotKnow(unittest.TestCase):
-    def test_modes_with_odd_even_interleaved_or_256_colors_stop_the_emulator(self):
-        for mode in (0x10, 0x20, 0x40, 0x50):
+    def test_modes_with_odd_even_or_interleaved_shift_stop_the_emulator(self):
+        for mode in (0x10, 0x20, 0x30, 0x50, 0x70):
             chip = Vga()
             configure(chip, mode=mode)
             with self.assertRaises(NotImplementedError, msg=hex(mode)):
@@ -771,7 +847,7 @@ class TestWhatTheCardDoesNotKnow(unittest.TestCase):
 
     def test_the_bits_of_the_mode_register_that_are_known_do_not_stop_it(self):
         chip = Vga()
-        for mode in (0x00, 0x01, 0x02, 0x03, 0x08, 0x0B):
+        for mode in (0x00, 0x01, 0x02, 0x03, 0x08, 0x0B, 0x40, 0x43):
             configure(chip, mode=mode)
             chip.read_memory(0)
             chip.write_memory(0, 0)

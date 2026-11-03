@@ -192,6 +192,18 @@ class TestFiles(FlatFiles):
             with self.assertRaisesRegex(NotImplementedError, f"INT 21h AX={ax:04X} in the flat mode"):
                 self.call32(ax)
 
+    def test_the_check_of_the_input_changes_AL_only_and_says_whether_a_key_waits(self):
+        from types import SimpleNamespace
+        self.cpu.set32(CPU.AX, 0x12340B02)  # AL is not an argument
+        self.cpu.keyboard = SimpleNamespace(buffer=[])
+        self.cpu.ip = CODE_AT
+        self.cpu.step()
+        self.assertEqual(self.cpu.get32(CPU.AX), 0x12340B00)
+        self.cpu.keyboard.buffer.append(0x1E61)
+        self.cpu.ip = CODE_AT
+        self.cpu.step()
+        self.assertEqual(self.cpu.get32(CPU.AX), 0x12340BFF)
+
     def test_the_end_of_the_program_still_ends_the_emulator(self):
         with self.assertRaises(Exit) as stop:
             self.call32(0x4C07)

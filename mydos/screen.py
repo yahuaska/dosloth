@@ -5,9 +5,10 @@ first plane, bit 3 in the last, all at the same place. One byte of a plane holds
 the leftmost pixel in the highest bit. A line of the picture is `BYTES_PER_LINE` bytes, one after the other from the
 start of the plane.
 
-Only the layout of mode 12h is known here: 640 by 480 pixels, 80 bytes a line, the picture starting at the beginning
-of the planes. The start address and the line length that the CRT controller could change are not looked at, and the
-colors are the standard 16 of the EGA, whatever palette the program has set up.
+Two layouts are known here. Mode 12h: 640 by 480 pixels, 80 bytes a line, the picture starting at the beginning of
+the planes. Mode 13h, when the pixels are 8 bits wide: 320 by 200 pixels, the planes taken in turn a byte at a time,
+which is the order of the bytes of a picture of 320 by 200 bytes (the card does this for the program as well, see
+vga.py). The start address and the line length that the CRT controller could change are not looked at.
 """
 import time
 from dataclasses import dataclass
@@ -16,6 +17,9 @@ from .cpu import Exit
 
 WIDTH = 640
 HEIGHT = 480
+
+WIDTH_256 = 320
+HEIGHT_256 = 200
 
 EGA_COLORS = [
     (0x00, 0x00, 0x00), (0x00, 0x00, 0xAA), (0x00, 0xAA, 0x00), (0x00, 0xAA, 0xAA),
@@ -58,6 +62,21 @@ def render(planes, palette=EGA_COLORS, width=WIDTH, height=HEIGHT):
     return Frame(width, height, bytes(rgb))
 
 
+def render_256(planes, palette, width=WIDTH_256, height=HEIGHT_256):
+    """Make the Frame of a picture in which a pixel is a byte, the bytes of the four planes in turn, with `palette`,
+    256 colors of (red, green, blue), for the numbers."""
+    count = width * height
+    if count % 4 or any(len(plane) < count // 4 for plane in planes):
+        raise ValueError(f"{width}x{height} pixels need {count // 4} bytes in each plane")
+    indexes = bytearray(count)
+    for number, plane in enumerate(planes):
+        indexes[number::4] = bytes(plane[:count // 4])
+    rgb = bytearray(count * 3)
+    for channel in range(3):
+        rgb[channel::3] = bytes(indexes).translate(bytes(color[channel] for color in palette))
+    return Frame(width, height, bytes(rgb))
+
+
 class Monitor:
     """Everything that shows the picture of the card, looked after together.
 
@@ -73,7 +92,10 @@ class Monitor:
 
     def show(self):
         """Give every display the picture as it is now."""
-        frame = render(self.card.planes, self.card.colors())
+        if self.card.mode_256():
+            frame = render_256(self.card.planes, self.card.colors256())
+        else:
+            frame = render(self.card.planes, self.card.colors())
         self.card.changed = False
         for display in self.displays:
             display.present(frame)
