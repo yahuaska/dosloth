@@ -362,6 +362,16 @@ class TestAMachineThatGoesOn(SnapshotTest):
         self.assertEqual((b.soundblaster.mixer[0x22], b.soundblaster.answers), (0xCC, [4, 5]))
         self.assertIs(b.cpu.port_readers[0x220].__self__, b.soundblaster)  # still the card that the ports go to
 
+    def test_the_masks_of_the_interrupt_controllers_come_back(self):
+        a = self.make()
+        a.pics[0].mask, a.pics[1].mask = 0x12, 0x34
+        path = str(self.out / "x.state")
+        snapshot.save(path, a)
+        b = self.make()
+        snapshot.load(path, b)
+        self.assertEqual((b.pics[0].mask, b.pics[1].mask), (0x12, 0x34))
+        self.assertEqual(b.cpu.port_readers[0x21].__self__, b.pics[0])
+
     def tampered_without(self, computer, part):
         data = snapshot.unpack(*snapshot.capture(computer))
         del data[part]

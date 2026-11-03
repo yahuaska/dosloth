@@ -183,6 +183,7 @@ def capture(machine, rewind=False):
         "mouse": dict(vars(machine.mouse)),
         "sysport": {"value": machine.sysport.value},
         "soundblaster": dict(vars(machine.soundblaster)),
+        "pics": [dict(vars(chip)) for chip in machine.pics],
         "dos": dos_state(machine.state, files),
         "volumes": {"current_drive": volumes.current_drive, "directories": volumes.directories,
                     "memory_disks": {number: fs.dump() for number, fs in volumes.filesystems.items()
@@ -256,6 +257,8 @@ def restore(machine, packed, blobs):
     set_attributes(machine.mouse, data.get("mouse", {}))
     set_attributes(machine.sysport, data.get("sysport", {}))
     set_attributes(machine.soundblaster, data.get("soundblaster", {}))
+    for chip, saved_chip in zip(machine.pics, data.get("pics", [])):
+        set_attributes(chip, saved_chip)
 
     saved_volumes = data.get("volumes", {})
     volumes.current_drive = saved_volumes.get("current_drive", volumes.current_drive)
