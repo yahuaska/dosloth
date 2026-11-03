@@ -38,7 +38,7 @@ DMA_OUTPUT = 0x14  # two bytes follow: the number of the bytes to play, less one
 AUTO_OUTPUT = 0x1C  # the same, again and again: blocks of the size that BLOCK_SIZE said
 FAST_AUTO_OUTPUT, FAST_OUTPUT = 0x90, 0x91  # the same two, for the rates that the DSP cannot do in the other way
 HALT, CONTINUE, END_AUTO, SPEAKER_STATUS = 0xD0, 0xD4, 0xDA, 0xD8
-DMA_CHANNEL = 1  # the channel of the DMA controller that the card is on
+DMA_CHANNEL = 1  # the channel of the DMA controller that the card is on when no program has set up another one
 ARGUMENTS = {ECHO: 1, TIME_CONSTANT: 1, SAMPLE_RATE: 2, BLOCK_SIZE: 2, DMA_OUTPUT: 2}  # the bytes after the command
 RAISE_IRQ = 0xF2  # the DSP raises its interrupt at once: how a program finds the line that the card is on
 IRQ = 7  # the line of the interrupt controllers that the card is on
@@ -63,6 +63,7 @@ class SoundBlaster:
         self.length = 0  # the bytes that the playing in hand is to play before the interrupt
         self.repeating = False  # the playing is the repeated one
         self.playing = False
+        self.channel = DMA_CHANNEL  # the channel the playing in hand goes through
         self.due = None  # the time when the playing in hand ends, or None
         self.speaker = False
 
@@ -152,14 +153,15 @@ class SoundBlaster:
         self.length, self.repeating, self.playing = length, repeating, True
         self.due = self.clock() + self.duration(length)
         if self.dma:
-            self.dma.begin(DMA_CHANNEL, 1_000_000 / (256 - self.time_constant) * timer.TICKS_PER_INSTRUCTION
+            self.channel = self.dma.output_channel(DMA_CHANNEL)  # the card is on the one the program has set up
+            self.dma.begin(self.channel, 1_000_000 / (256 - self.time_constant) * timer.TICKS_PER_INSTRUCTION
                            / timer.PIT_FREQUENCY)  # the bytes a instruction
         self.wake()
 
     def stop(self):
         self.playing, self.due = False, None
         if self.dma:
-            self.dma.end(DMA_CHANNEL)
+            self.dma.end(self.channel)
 
     def duration(self, length):
         """How many instructions the playing of `length` bytes takes: a byte takes (256 - the time constant)
@@ -173,7 +175,7 @@ class SoundBlaster:
         if self.due is None or now < self.due:
             return self.due
         if self.dma:
-            self.dma.finish(DMA_CHANNEL)
+            self.dma.finish(self.channel)
         self.interrupt()
         if self.repeating:
             self.due += self.duration(self.length)

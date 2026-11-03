@@ -28,6 +28,7 @@ CHANNELS = 4
 ADDRESS_PORTS = (0x00, 0x02, 0x04, 0x06)
 COUNT_PORTS = (0x01, 0x03, 0x05, 0x07)
 STATUS_COMMAND, MASK_ONE, MODE, CLEAR_FLIP_FLOP, RESET, UNMASK_ALL, MASK_ALL = 0x08, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F
+READ_MEMORY = 2  # the bits 2 and 3 of the mode: the device reads memory (the transfer is memory to device)
 REPEATED = 0x10  # in the mode: the channel begins again at its end
 PAGE_PORTS = {0x87: 0, 0x83: 1, 0x81: 2, 0x82: 3}
 MASK_BIT = 0x04
@@ -76,6 +77,15 @@ class Dma:
             moved = size
         count = self.counts[channel] - moved
         return (self.addresses[channel] + moved) & 0xFFFF, count & 0xFFFF
+
+    def output_channel(self, default):
+        """The channel that a program has set up to give memory to a device, and has let through: the first one that
+        is not masked and has the mode of reading memory (bits 2 and 3 are 10). A card that can be on any of the
+        channels of its jumpers is on that one. `default` if there is none."""
+        for channel in range(CHANNELS):
+            if not self.masked[channel] and self.modes[channel] >> 2 & 3 == READ_MEMORY:
+                return channel
+        return default
 
     def begin(self, channel, rate):
         """A device begins to move bytes through the channel, `rate` of them a instruction."""

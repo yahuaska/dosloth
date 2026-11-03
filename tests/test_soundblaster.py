@@ -189,6 +189,15 @@ class TestThePlayingByDma(unittest.TestCase):
         self.cpu.port_out(0x0C, 0)
         self.assertEqual(self.cpu.port_in(0x02) | self.cpu.port_in(0x02) << 8, address)
 
+    def test_the_card_is_on_the_channel_that_the_program_has_set_up(self):
+        self.cpu.port_out(0x0B, 0x5B)  # the channel 3, to the device
+        self.cpu.port_out(0x0A, 0x03)  # let through
+        self.ask(0x14, 0x0F, 0x00)
+        self.assertEqual(self.card.channel, 3)
+        self.assertIsNotNone(self.dma.started[3])
+        self.at(self.card.due)
+        self.assertEqual(self.cpu.port_in(0x08), 0x08)  # the end of the channel 3
+
     def test_a_halt_stops_it_and_a_continue_goes_on(self):
         self.ask(0x14, 0x0F, 0x00)
         self.ask(0xD0)

@@ -88,6 +88,20 @@ class TestTheRegisters(DmaTest):
             self.get(0xC0)
 
 
+class TestTheChannelOfADevice(DmaTest):
+    def test_it_is_the_one_that_is_not_masked_and_reads_memory(self):
+        self.assertEqual(self.dma.output_channel(1), 1)  # none: the default
+        self.out(0x0B, 0x5B)  # the channel 3, memory to the device, repeated
+        self.assertEqual(self.dma.output_channel(1), 1)  # masked
+        self.out(0x0A, 0x03)
+        self.assertEqual(self.dma.output_channel(1), 3)
+
+    def test_a_channel_that_writes_memory_is_not_taken(self):
+        self.out(0x0B, 0x45)  # the channel 1, device to memory (bits 2-3 are 01)
+        self.out(0x0A, 0x01)
+        self.assertEqual(self.dma.output_channel(2), 2)
+
+
 class TestTheLiveRegisters(DmaTest):
     """A device moves bytes: 1 a instruction, from the time that the test sets."""
 
