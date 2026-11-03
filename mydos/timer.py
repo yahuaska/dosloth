@@ -9,7 +9,7 @@ and a control port (43h) that sets how each one works.
 Nothing here runs in the background. A counter's value is worked out from the time whenever a program
 reads it, and the time is the number of instructions executed so far, not the clock of the host. That
 keeps every run the same as the one before, which matters when traces are compared. How many timer ticks
-one instruction is worth is a guess, TICKS_PER_INSTRUCTION.
+one instruction is worth is a guess, TICKS_PER_INSTRUCTION (a fraction: it is less than 1 now).
 
 What is done: counting in binary in modes 0, 2 and 3 (the ones programs use), the control byte, the latch
 command, and reading and loading counters as low byte, high byte, or both. What is not (it stops the
@@ -19,9 +19,15 @@ Counter 0 raises line 0 of the interrupt controllers (pic.py) at the end of ever
 the machine makes `events` a source of the CPU (see CPU.events).
 """
 
+from fractions import Fraction
+
 PIT_FREQUENCY = 1193182  # ticks a second
-# A real 8086 runs roughly 300,000 instructions a second, so one instruction is about 4 timer ticks.
-TICKS_PER_INSTRUCTION = 4
+# The speed of the machine, as the timer counts it. The programs that this machine runs are those of a 486 or a Pentium
+# (the 32-bit ones even more): a sound driver that mixes while the sound is played, or a video player, has to do its work in
+# the time of the sound, and at the 300,000 instructions a second of an 8086 it never does. So a second is 50 million
+# instructions, and an instruction is a little less than a fortieth of a tick. (A guess, as every one here is.)
+INSTRUCTIONS_PER_SECOND = 50_000_000
+TICKS_PER_INSTRUCTION = Fraction(PIT_FREQUENCY, INSTRUCTIONS_PER_SECOND)
 
 
 class Counter:
@@ -143,7 +149,7 @@ class Timer:
 
 def install(cpu, ticks_per_instruction=TICKS_PER_INSTRUCTION):
     """Put a timer on ports 40h-43h of the CPU. Its clock is the CPU's count of executed instructions. Returns it."""
-    timer = Timer(lambda: cpu.instructions * ticks_per_instruction, ticks_per_instruction)
+    timer = Timer(lambda: int(cpu.instructions * ticks_per_instruction), ticks_per_instruction)
     for port in (0x40, 0x41, 0x42):
         cpu.port_readers[port] = timer.read
     for port in (0x40, 0x41, 0x42, 0x43):  # the control port can only be written

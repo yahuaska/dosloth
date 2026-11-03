@@ -136,17 +136,18 @@ class TestOnTheCpu(unittest.TestCase):
         # in al,61h ; and al,10h ; mov bl,al ; again: in al,61h ; and al,10h ; cmp al,bl ; je again ; hlt
         code = bytes([0xE4, 0x61, 0x24, 0x10, 0x88, 0xC3, 0xE4, 0x61, 0x24, 0x10, 0x38, 0xD8, 0x74, 0xF8, 0xF4])
         cpu = self.machine(code)
-        self.run_to_hlt(cpu)
+        self.run_to_hlt(cpu, limit=5000)
         self.assertNotEqual(cpu.get8(0), cpu.get8(3))
-        # the time a toggle takes: 18 ticks, 4 ticks an instruction, so a few passes of the loop of 5 instructions
-        self.assertLess(cpu.instructions, 60)
+        # the time a toggle takes: 18 ticks, which are 754 instructions, so a few passes of the loop of 5 instructions
+        toggle = sysport.REFRESH_TICKS / timer.TICKS_PER_INSTRUCTION
+        self.assertLess(cpu.instructions, toggle + 20)
 
     def test_a_program_that_waits_for_ten_toggles_waits_ten_times_as_long(self):
         # mov cx,10 ; mov dl,0 ; again: in al,61h ; and al,10h ; cmp al,dl ; je again ; mov dl,al ; loop again ; hlt
         code = bytes([0xB9, 0x0A, 0x00, 0xB2, 0x00, 0xE4, 0x61, 0x24, 0x10, 0x38, 0xD0, 0x74, 0xF8, 0x88, 0xC2,
                       0xE2, 0xF4, 0xF4])
         cpu = self.machine(code)
-        self.run_to_hlt(cpu, limit=5000)
+        self.run_to_hlt(cpu, limit=50000)
         ticks = cpu.instructions * timer.TICKS_PER_INSTRUCTION
         self.assertGreaterEqual(ticks, 9 * sysport.REFRESH_TICKS)  # ten changes of the bit take nine of its periods
 

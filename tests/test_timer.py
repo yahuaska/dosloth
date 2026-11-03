@@ -184,7 +184,9 @@ class TestOnTheCpu(unittest.TestCase):
         self.assertIsInstance(chip, timer.Timer)
         self.assertEqual(len(chip.counters), 3)
         cpu.instructions = 100
-        self.assertEqual(chip.now(), 100 * timer.TICKS_PER_INSTRUCTION)
+        self.assertEqual(chip.now(), int(100 * timer.TICKS_PER_INSTRUCTION))
+        cpu.instructions = timer.INSTRUCTIONS_PER_SECOND
+        self.assertEqual(chip.now(), timer.PIT_FREQUENCY)  # a second of instructions is a second of ticks
 
     def test_the_ports_are_wired_and_the_control_port_cannot_be_read(self):
         cpu = CPU()
@@ -303,15 +305,16 @@ class TestTheInterrupt(unittest.TestCase):
         cpu.flags |= IF
         chip.write(0x43, 0x34)  # counter 0, both bytes, mode 2
         chip.write(0x40, 0xE8)
-        chip.write(0x40, 0x03)  # 1000 ticks: 250 instructions
+        chip.write(0x40, 0x03)  # 1000 ticks: 41,900 instructions
         entered = None
-        for _ in range(300):
+        for _ in range(50000):
             cpu.step()
             if cpu.s[CPU.CS] == 0x2000:
                 entered = cpu.instructions
                 break
         self.assertIsNotNone(entered)
-        self.assertEqual(entered, 251)  # the interrupt is taken at the 250th instruction that is done, before the next
+        due = -(-1000 // timer.TICKS_PER_INSTRUCTION)  # the instruction at which 1000 ticks have gone
+        self.assertEqual(entered, due + 1)  # taken when that many are done, before the next
 
 
 if __name__ == "__main__":

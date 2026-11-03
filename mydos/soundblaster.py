@@ -154,8 +154,7 @@ class SoundBlaster:
         self.due = self.clock() + self.duration(length)
         if self.dma:
             self.channel = self.dma.output_channel(DMA_CHANNEL)  # the card is on the one the program has set up
-            self.dma.begin(self.channel, 1_000_000 / (256 - self.time_constant) * timer.TICKS_PER_INSTRUCTION
-                           / timer.PIT_FREQUENCY)  # the bytes a instruction
+            self.dma.begin(self.channel, 1_000_000 / (256 - self.time_constant) / timer.INSTRUCTIONS_PER_SECOND)
         self.wake()
 
     def stop(self):
@@ -165,9 +164,9 @@ class SoundBlaster:
 
     def duration(self, length):
         """How many instructions the playing of `length` bytes takes: a byte takes (256 - the time constant)
-        microseconds, and the machine counts the time of the timer chip in instructions."""
+        microseconds, and the machine counts the time in instructions (timer.INSTRUCTIONS_PER_SECOND of them a second)."""
         microseconds = length * (256 - self.time_constant)
-        return max(1, microseconds * timer.PIT_FREQUENCY // 1_000_000 // timer.TICKS_PER_INSTRUCTION)
+        return max(1, microseconds * timer.INSTRUCTIONS_PER_SECOND // 1_000_000)
 
     def events(self, now):
         """The end of a block, when its time comes: the channel is at its end, and the interrupt is raised. The

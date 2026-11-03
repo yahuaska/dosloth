@@ -98,7 +98,7 @@ class TestTheInterrupt(unittest.TestCase):
 
 
 class TestThePlayingByDma(unittest.TestCase):
-    """The card on a clock that the test moves: a byte of the time constant 0 takes 256 microseconds (76 instructions)."""
+    """The card on a clock that the test moves: a byte of the time constant 0 takes 256 microseconds (12,800 instructions)."""
 
     def setUp(self):
         from mydos import dma, pic
@@ -135,18 +135,18 @@ class TestThePlayingByDma(unittest.TestCase):
 
     def test_the_output_ends_when_its_time_has_gone_with_the_channel_at_its_end_and_the_interrupt(self):
         self.ask(0x40, 0x64)  # 156 microseconds a byte
-        self.ask(0x14, 0x0F, 0x00)  # 16 bytes: 2496 microseconds: 744 instructions
-        self.assertEqual(self.card.due, 744)
-        self.assertEqual(self.at(743), 744)
+        self.ask(0x14, 0x0F, 0x00)  # 16 bytes: 2496 microseconds: 124,800 instructions at 50 million a second
+        self.assertEqual(self.card.due, 124800)
+        self.assertEqual(self.at(124799), 124800)
         self.assertIsNone(self.pics.pending())
-        self.assertIsNone(self.at(744))
+        self.assertIsNone(self.at(124800))
         self.assertEqual(self.pics.pending(), 7)
         self.assertEqual(self.cpu.port_in(0x08), 0x02)  # the channel 1 has reached the end
         self.assertFalse(self.card.playing)
 
     def test_the_repeated_output_raises_the_interrupt_for_every_block(self):
         self.ask(0x40, 0x00)
-        self.ask(0x48, 0x0F, 0x00)  # blocks of 16 bytes: 4096 microseconds: 1218 instructions
+        self.ask(0x48, 0x0F, 0x00)  # blocks of 16 bytes: 4096 microseconds
         self.ask(0x1C)
         first = self.card.due
         self.assertEqual(self.at(first), first + first)
@@ -176,11 +176,11 @@ class TestThePlayingByDma(unittest.TestCase):
         self.out(0x0C, 0)
         for port, value in ((0x02, 0x00), (0x02, 0x20), (0x03, 0xFF), (0x03, 0x0F), (0x0B, 0x59)):  # a repeated 1000h
             self.out(port, value)
-        self.ask(0x40, 0x00)  # a byte a 256 microseconds: 76 instructions
+        self.ask(0x40, 0x00)  # a byte a 256 microseconds: 12,800 instructions
         self.ask(0x48, 0xFF, 0x07)
         self.cpu.instructions = 1000
         self.ask(0x1C)
-        self.cpu.instructions = 1000 + 76 * 100
+        self.cpu.instructions = 1000 + 12800 * 100
         self.cpu.port_out(0x0C, 0)
         address = self.cpu.port_in(0x02) | self.cpu.port_in(0x02) << 8
         self.assertAlmostEqual(address, 0x2000 + 100, delta=2)

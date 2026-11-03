@@ -80,7 +80,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/dump.py` - the crash dump (`<program>.crash.json` and `.crash.mem`): beside the program, or in the current
   directory when that cannot be written to (a program on a CD-ROM); a failing dump never hides the real error
 - `mydos/timer.py` - the 8253/8254 timer on ports 40h-43h; its time is the count of executed instructions; counter 0
-  raises line 0 at the end of every count (`events`, a source of the CPU)
+  raises line 0 at the end of every count (`events`, a source of the CPU); a second is 50 million instructions
+  (`INSTRUCTIONS_PER_SECOND`): the 32-bit programs of a 486 or Pentium need the time to be that fast
 - `mydos/pic.py` - the two 8259 interrupt controllers (20h/21h, A0h/A1h): masks, requests, in service, EOI, ICW1-4; a
   device raises a line (`raise_line`), the CPU takes it between two instructions (`CPU.events`, `interrupt_by`):
   a handler that a program put in the vector table is called, else the BIOS one (not there) is as good as done: the
