@@ -1,11 +1,11 @@
-"""The machine as a whole: a CPU with the BIOS, DOS, the timer, the video card and the mouse on it.
+"""The machine as a whole: a CPU with the BIOS, DOS, the timer, the video card, the mouse and a silent Sound Blaster on it.
 
 A run builds it the same way whether the program is started or the state of an earlier run is put back (see
 snapshot.py), so the code that does it is here, once.
 """
 from dataclasses import dataclass
 
-from . import bios, country, dos, mouse, patches, sysport, timer, vesa, vga
+from . import bios, country, dos, mouse, patches, soundblaster, sysport, timer, vesa, vga
 from .cpu import CPU
 
 
@@ -20,6 +20,7 @@ class Machine:
     mouse: object
     sysport: object  # port 61h
     volumes: object
+    soundblaster: object = None  # the silent card
     program: str | None = None  # where the program is on the host, which is what a dump of a crash is named after
 
     @property
@@ -36,8 +37,9 @@ def build(volumes):
     card = vga.install(cpu)
     pointer = mouse.install(cpu)
     port = sysport.install(cpu, clock)
+    blaster = soundblaster.install(cpu)
     patches.install(cpu)
-    return Machine(cpu, keyboard, state, clock, card, pointer, port, volumes)
+    return Machine(cpu, keyboard, state, clock, card, pointer, port, volumes, blaster)
 
 
 def install_rom(cpu):

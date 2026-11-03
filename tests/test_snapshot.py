@@ -351,6 +351,17 @@ class TestAMachineThatGoesOn(SnapshotTest):
         snapshot.restore(b, packed, blobs)
         self.assertEqual(b.sysport.value, 0x05)
 
+    def test_the_state_of_the_sound_blaster_comes_back(self):
+        a = self.make()
+        a.soundblaster.mixer[0x22] = 0xCC
+        a.soundblaster.answers = [4, 5]
+        path = str(self.out / "x.state")
+        snapshot.save(path, a)
+        b = self.make()
+        snapshot.load(path, b)
+        self.assertEqual((b.soundblaster.mixer[0x22], b.soundblaster.answers), (0xCC, [4, 5]))
+        self.assertIs(b.cpu.port_readers[0x220].__self__, b.soundblaster)  # still the card that the ports go to
+
     def tampered_without(self, computer, part):
         data = snapshot.unpack(*snapshot.capture(computer))
         del data[part]
