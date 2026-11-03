@@ -171,6 +171,24 @@ class TestThePlayingByDma(unittest.TestCase):
         self.ask(0xD8)
         self.assertEqual([self.cpu.port_in(BASE + 0xA) for _ in range(2)], [0x00, 0xFF])
 
+    def test_the_playing_moves_the_registers_of_the_dma_channel(self):
+        self.out = self.cpu.port_out
+        self.out(0x0C, 0)
+        for port, value in ((0x02, 0x00), (0x02, 0x20), (0x03, 0xFF), (0x03, 0x0F), (0x0B, 0x59)):  # a repeated 1000h
+            self.out(port, value)
+        self.ask(0x40, 0x00)  # a byte a 256 microseconds: 76 instructions
+        self.ask(0x48, 0xFF, 0x07)
+        self.cpu.instructions = 1000
+        self.ask(0x1C)
+        self.cpu.instructions = 1000 + 76 * 100
+        self.cpu.port_out(0x0C, 0)
+        address = self.cpu.port_in(0x02) | self.cpu.port_in(0x02) << 8
+        self.assertAlmostEqual(address, 0x2000 + 100, delta=2)
+        self.ask(0xD0)  # a halt
+        self.cpu.instructions += 10 ** 6
+        self.cpu.port_out(0x0C, 0)
+        self.assertEqual(self.cpu.port_in(0x02) | self.cpu.port_in(0x02) << 8, address)
+
     def test_a_halt_stops_it_and_a_continue_goes_on(self):
         self.ask(0x14, 0x0F, 0x00)
         self.ask(0xD0)

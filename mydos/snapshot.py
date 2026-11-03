@@ -184,7 +184,7 @@ def capture(machine, rewind=False):
         "mouse": dict(vars(machine.mouse)),
         "sysport": {"value": machine.sysport.value},
         "soundblaster": machine.soundblaster.state(),
-        "dma": dict(vars(machine.dma)),
+        "dma": machine.dma.state(),
         "pics": [chip.state() for chip in machine.pics],
         "dos": dos_state(machine.state, files),
         "volumes": {"current_drive": volumes.current_drive, "directories": volumes.directories,

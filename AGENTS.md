@@ -86,9 +86,12 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   a handler that a program put in the vector table is called, else the BIOS one (not there) is as good as done: the
   line is ended at once, the timer line goes to INT 1Ch. The check costs one comparison per instruction
   (`cpu.next_event`; `cpu.wake()` after anything that may change it). A handler in the flat mode stops the emulator
-- `mydos/dma.py` - the 8237 DMA controller, channels 0-3, and the pages: the registers only, no transfers
+- `mydos/dma.py` - the 8237 DMA controller, channels 0-3, and the pages: the registers, and no data moved; while a device
+  plays through a channel (`begin`) the address and the count that a program reads are the live ones (a sound driver
+  finds where the card is in its buffer from them, and a player takes that as its clock)
 - `mydos/soundblaster.py` - a Sound Blaster that plays nothing: it is at 220h (IRQ 7, DMA 1), answers reset, version,
-  echo, the time constant and the DMA output (over at once, with the interrupt); the other bases 210h-260h read 0FFh
+  echo, rate, block size and the DMA playing (single and repeated: it takes the time that the sound would take, the
+  block ends raise the interrupt); the other bases 210h-260h read 0FFh
 - `mydos/vga.py` - a VGA card for the planar modes: the ports 3C0h-3DFh, and the window A0000h-AFFFFh as
   four planes with the write modes 0-3, read modes 0-1 and the latches; the colors: the DAC (3C6h-3C9h) and the
   palette registers of the attribute controller (3C0h). Mode 13h (256 colors, 320x200) is the chain-4 bit of the

@@ -97,7 +97,8 @@ class SoundBlaster:
                 self.resetting = False
                 self.answers = [READY]
                 self.waiting_for, self.arguments = 0, []
-                self.playing, self.repeating, self.due = False, False, None  # a reset stops the playing
+                self.repeating = False
+                self.stop()  # a reset stops the playing
         elif offset == WRITE:
             self.command(value)
 
@@ -123,7 +124,7 @@ class SoundBlaster:
         elif value == SPEAKER_STATUS:
             self.answers.append(0xFF if self.speaker else 0x00)
         elif value == HALT:
-            self.playing, self.due = False, None
+            self.stop()
         elif value == CONTINUE:
             if self.length:
                 self.start(self.length, self.repeating)
@@ -150,7 +151,15 @@ class SoundBlaster:
         """Begin to play `length` bytes by DMA: the end of them is a time from now."""
         self.length, self.repeating, self.playing = length, repeating, True
         self.due = self.clock() + self.duration(length)
+        if self.dma:
+            self.dma.begin(DMA_CHANNEL, 1_000_000 / (256 - self.time_constant) * timer.TICKS_PER_INSTRUCTION
+                           / timer.PIT_FREQUENCY)  # the bytes a instruction
         self.wake()
+
+    def stop(self):
+        self.playing, self.due = False, None
+        if self.dma:
+            self.dma.end(DMA_CHANNEL)
 
     def duration(self, length):
         """How many instructions the playing of `length` bytes takes: a byte takes (256 - the time constant)
@@ -169,7 +178,7 @@ class SoundBlaster:
         if self.repeating:
             self.due += self.duration(self.length)
         else:
-            self.playing, self.due = False, None
+            self.stop()
         return self.due
 
     def interrupt(self):
