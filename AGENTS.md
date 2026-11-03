@@ -109,6 +109,11 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/profile.py` - `-p REPORT`: counts every instruction by address through the trace hook and writes the hottest
   places (with the instructions and their counts) when the program ends; to see what is worth doing in Python
   (`tests/test_profile.py`)
+- `mydos/patches.py` - Python in the place of hot code: the first two bytes of a known piece of code (checked by a
+  SHA-256 of it, at its exact address) become `INT F0h`, whose handler does the work and sets the instruction pointer
+  where the code goes on. So far one: the tree reader of SMKP.EXE (10DD90). `--no-patches` runs the code as it is. A
+  patched program shows `int F0` in the trace and the debugger; `tests/test_patches.py` runs the real code beside the
+  patch on random trees, when the game is in XCOMA
 - `mydos/__main__.py` - loads a .COM/.EXE and runs it: `python -m mydos tests/hello.com`; what is after the first
   `--` is the command line of the program (the options and the name come before it);
   `-d LOGFILE` writes every executed instruction to LOGFILE, e.g. `1773:0880  8B C3  mov ax, bx`;

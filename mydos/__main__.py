@@ -2,7 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import breakpoints, calllog, config, disasm, dos, dump, loader, machine, psp, screen, snapshot
+from . import breakpoints, calllog, config, disasm, dos, dump, loader, machine, patches, psp, screen, snapshot
 from .cpu import CPU
 from .debugger import Debugger
 from .debugwindow import DebugWindow
@@ -59,6 +59,8 @@ def main():
                         "breakpoint (F9); the breakpoints of -b are in it")
     parser.add_argument("-p", metavar="REPORT", help="count how many times every instruction is executed, and write "
                         "the hottest places of the program to REPORT when it ends (about a third slower)")
+    parser.add_argument("--no-patches", action="store_true", help="run the code of the program as it is, with no "
+                        "Python in its place (see patches.py): to trace it, or to compare with a patched run")
     parser.add_argument("-t", metavar="LOGFILE", help="write every call of the program to DOS (INT 21h, 2Fh, 25h, 20h) "
                         "to LOGFILE: what it asked, the names, and what DOS answered; to see what a program does "
                         "when it fails")
@@ -93,6 +95,8 @@ def main():
     except config.ConfigError as error:
         parser.error(str(error))  # prints the message with the usage and exits with status 2, before anything runs
 
+    if args.no_patches:
+        patches.PATCHES.clear()
     volumes = Volumes(settings)
     data = where = None
     if args.program:

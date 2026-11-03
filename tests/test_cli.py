@@ -761,3 +761,10 @@ class TestProfile(CommandLineTest):
         result = self.run_emulator("-p", "no/such/dir/report.txt", "p.com")
         self.assertEqual(result.returncode, 2)
         self.assertIn("cannot write no/such/dir/report.txt", result.stderr)
+
+
+class TestNoPatches(CommandLineTest):
+    def test_a_program_runs_the_same_with_no_patches(self):
+        self.program(CURRENT_DRIVE, "p.com")
+        self.assertEqual(self.run_emulator("--no-patches", "p.com").returncode,
+                         self.run_emulator("p.com").returncode)

@@ -8,7 +8,7 @@ program (a DOS/4G one) goes to the memory above 1 MB, and starts in the flat mod
 import struct
 from dataclasses import dataclass
 
-from . import le
+from . import le, patches
 from .cpu import CPU
 from .flat import REAL_MODE, Bases
 
@@ -116,7 +116,7 @@ def load_exe(cpu, data, psp_seg):
     cpu.ip = h.ip
 
 
-def load_le(cpu, data, psp_seg, extended):
+def load_le(cpu, data, psp_seg, extended, patch=True):
     """Load the LE program in `data` (bound to the extender or not) the way DOS/4G does, and start it in the flat mode.
 
     Each object goes to a block of `extended` (see xmem.py), which the program owns, and the fixups are made for where
@@ -156,6 +156,8 @@ def load_le(cpu, data, psp_seg, extended):
     cpu.s[CPU.CS], cpu.s[CPU.SS], cpu.s[CPU.DS], cpu.s[CPU.ES] = CODE_SELECTOR, DATA_SELECTOR, DATA_SELECTOR, psp_seg
     cpu.set32(CPU.SP, esp)
     cpu.ip = entry
+    if patch:
+        patches.apply(cpu)  # the pieces of the code that Python does faster
 
 
 def load(cpu, data, psp_seg, extended=None):

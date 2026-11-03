@@ -5,7 +5,7 @@ snapshot.py), so the code that does it is here, once.
 """
 from dataclasses import dataclass
 
-from . import bios, country, dos, mouse, sysport, timer, vesa, vga
+from . import bios, country, dos, mouse, patches, sysport, timer, vesa, vga
 from .cpu import CPU
 
 
@@ -36,6 +36,7 @@ def build(volumes):
     card = vga.install(cpu)
     pointer = mouse.install(cpu)
     port = sysport.install(cpu, clock)
+    patches.install(cpu)
     return Machine(cpu, keyboard, state, clock, card, pointer, port, volumes)
 
 
