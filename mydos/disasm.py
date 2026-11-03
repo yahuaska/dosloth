@@ -39,7 +39,7 @@ UNCHANGED_BY_66 = frozenset((
     *range(Op.MOV_R8_IMM8, Op.MOV_R8_IMM8 + 8), Op.ENTER, Op.LEAVE, Op.RET_NEAR, Op.RET_NEAR_POP, Op.XLAT,
     Op.GROUP3_RM, Op.GROUP3_RM + 1, Op.GROUP4_RM8, Op.GROUP5_RM16, Op.IMUL_RM_IMM16, Op.IMUL_RM_IMM8,
     Op.SHIFT_RM_IMM8, Op.SHIFT_RM_IMM8 + 1, *range(Op.SHIFT_RM, Op.SHIFT_RM + 4), Op.LOOPNE, Op.LOOPE, Op.LOOP,
-    Op.JCXZ, Op.TWO_BYTE, Op.MOVSB, Op.CMPSB, Op.STOSB, Op.LODSB, Op.SCASB, Op.PUSH_ES, Op.PUSH_CS, Op.PUSH_SS,
+    Op.RETF, Op.RETF_POP, Op.IRET, Op.JCXZ, Op.TWO_BYTE, Op.MOVSB, Op.CMPSB, Op.STOSB, Op.LODSB, Op.SCASB, Op.PUSH_ES, Op.PUSH_CS, Op.PUSH_SS,
     Op.PUSH_DS, Op.POP_ES, Op.POP_SS, Op.POP_DS, Op.MOV_RM16_SREG, Op.MOV_SREG_RM16, Op.LES, Op.LDS))
 FAR_POINTER_LOADS = {0xB2: "lss", 0xB4: "lfs", 0xB5: "lgs"}
 STRING_32 = {Op.MOVSW: "movsd", Op.CMPSW: "cmpsd", Op.STOSW: "stosd", Op.LODSW: "lodsd", Op.SCASW: "scasd"}
@@ -196,6 +196,8 @@ def _decode(r):
         op = r.u8()
 
     text = _decode_opcode32(r, op, seg_override) if r.osize32 else _decode_opcode(r, op, seg_override)
+    if text == "iret" and r.osize32:
+        text = "iretd"  # the frame of doublewords
     if text is None:
         return None
     if rep == Op.REPNE_PREFIX:

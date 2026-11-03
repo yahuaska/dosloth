@@ -382,6 +382,15 @@ class TestAMachineThatGoesOn(SnapshotTest):
         self.assertEqual((b.dma.addresses[1], b.dma.masked[1], b.dma.ended), (0x1234, False, 2))
         self.assertIs(b.cpu.port_readers[0x03].__self__, b.dma)
 
+    def test_the_handlers_of_the_flat_mode_come_back(self):
+        a = self.make()
+        a.cpu.pm_vectors = {0x0F: (0x2F, 0x123456), 0x08: (0x0F, 7)}
+        path = str(self.out / "x.state")
+        snapshot.save(path, a)
+        b = self.make()
+        snapshot.load(path, b)
+        self.assertEqual(b.cpu.pm_vectors, {0x0F: (0x2F, 0x123456), 0x08: (0x0F, 7)})
+
     def tampered_without(self, computer, part):
         data = snapshot.unpack(*snapshot.capture(computer))
         del data[part]

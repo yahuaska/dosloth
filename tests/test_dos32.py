@@ -204,6 +204,23 @@ class TestFiles(FlatFiles):
         self.cpu.step()
         self.assertEqual(self.cpu.get32(CPU.AX), 0x12340BFF)
 
+    def test_a_vector_is_set_to_ds_edx_and_given_back_in_es_ebx(self):
+        self.call32(0x250F, edx=0x00123456)
+        self.assertIsNone(self.failed())
+        self.assertEqual(self.cpu.pm_vectors[0x0F], (BASED, 0x00123456))
+        self.call32(0x350F)
+        self.assertEqual((self.cpu.s[CPU.ES], self.cpu.get32(CPU.BX)), (BASED, 0x00123456))
+
+    def test_a_vector_that_is_not_set_gives_the_handler_of_the_rom_through_the_code_selector(self):
+        self.call32(0x350F)
+        self.assertEqual((self.cpu.s[CPU.ES], self.cpu.get32(CPU.BX)), (CODE_SELECTOR, 0xF0010))
+        self.call32(0x3560)
+        self.assertEqual(self.cpu.get32(CPU.BX), 0xF0001)
+
+    def test_a_vector_that_is_a_function_of_ours_has_no_address_to_give(self):
+        with self.assertRaisesRegex(NotImplementedError, "function of the emulator"):
+            self.call32(0x3521)
+
     def test_the_end_of_the_program_still_ends_the_emulator(self):
         with self.assertRaises(Exit) as stop:
             self.call32(0x4C07)

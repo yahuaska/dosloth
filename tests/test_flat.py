@@ -4,6 +4,7 @@ real mode, so that every one of them must give the same answer)."""
 import struct
 import unittest
 
+from mydos import flags
 from mydos.cpu import CPU, MEMORY_SIZE, Exit
 from mydos.flat import Bases, RealModeBases
 from tests import test_cpu386, test_cpu386_0f, test_cpu386_ops, test_cpu386_segments, test_cpu386_widths
@@ -20,6 +21,81 @@ def flat_cpu(bases=None):
     cpu = CPU()
     cpu.use_flat_memory(Bases({0x10: 0, 0x18: 0x30000, 0x20: 0x1000}) if bases is None else bases)
     return cpu
+
+
+class DescriptorQuestions(unittest.TestCase):
+    """LAR and LSL: what a 32-bit program asks of a selector it has, to make another like it."""
+
+    def lar(self, selector, code=b"\x0F\x02\xC9", ecx=None):
+        """Run `lar ecx, ecx` (or the code given) with the selector in CX, with 32-bit code."""
+        cpu = flat_cpu()
+        cpu.enter_flat(Bases({0x10: 0, 0x18: 0x30000, 0x20: 0x1000}))
+        cpu.s[CPU.CS] = 0x10
+        cpu.mem[0:len(code)] = code
+        cpu.ip = 0
+        cpu.set32(CPU.CX, selector if ecx is None else ecx)
+        cpu.step()
+        return cpu
+
+
+class TestLoadAccessRights(DescriptorQuestions):
+    def test_a_data_selector_has_the_rights_of_a_32_bit_data_segment_and_zf_says_so(self):
+        cpu = self.lar(0x18)
+        self.assertEqual(cpu.get32(CPU.CX), 0x00C09200)
+        self.assertTrue(cpu.get_flag(flags.ZF))
+
+    def test_the_code_selector_is_a_readable_code_segment(self):
+        self.assertEqual(self.lar(0x10).get32(CPU.CX), 0x00C09A00)
+
+    def test_a_selector_that_is_not_there_clears_zf_and_leaves_the_register(self):
+        cpu = self.lar(0x47, ecx=0x12340047)
+        self.assertEqual(cpu.get32(CPU.CX), 0x12340047)
+        self.assertFalse(cpu.get_flag(flags.ZF))
+
+    def test_the_selector_is_the_word_of_the_operand_and_not_all_of_ecx(self):
+        self.assertEqual(self.lar(0x18, ecx=0xABCD0018).get32(CPU.CX), 0x00C09200)
+
+    def test_the_form_with_a_16_bit_register_changes_only_that_register(self):
+        cpu = self.lar(0x18, code=b"\x66\x0F\x02\xC9", ecx=0xABCD0018)
+        self.assertEqual(cpu.get32(CPU.CX), 0xABCD9200)
+
+    def test_in_the_real_mode_it_stops_the_emulator(self):
+        cpu = CPU()
+        cpu.mem[0:3] = b"\x0F\x02\xC9"
+        with self.assertRaisesRegex(NotImplementedError, "real mode"):
+            cpu.step()
+
+    def test_the_events_of_the_devices_are_looked_at_in_the_flat_mode_too(self):
+        cpu = self.lar(0x18)
+        seen = []
+        cpu.event_sources.append(lambda now: seen.append(now))
+        cpu.wake()
+        cpu.ip = 0
+        cpu.step()
+        self.assertEqual(len(seen), 1)
+
+
+class TestLoadSegmentLimit(DescriptorQuestions):
+    """LSL (0F 03): the limit, which is all of the address space for every selector there is."""
+
+    def test_a_selector_that_is_there_gives_the_whole_address_space_and_zf(self):
+        cpu = self.lar(0x18, code=b"\x0F\x03\xC9")
+        self.assertEqual(cpu.get32(CPU.CX), 0xFFFFFFFF)
+        self.assertTrue(cpu.get_flag(flags.ZF))
+
+    def test_a_selector_that_is_not_there_clears_zf_and_leaves_the_register(self):
+        cpu = self.lar(0x47, code=b"\x0F\x03\xC9", ecx=0x12340047)
+        self.assertEqual((cpu.get32(CPU.CX), cpu.get_flag(flags.ZF)), (0x12340047, False))
+
+    def test_the_form_with_a_16_bit_register_changes_only_that_register(self):
+        cpu = self.lar(0x18, code=b"\x66\x0F\x03\xC9", ecx=0xABCD0018)
+        self.assertEqual(cpu.get32(CPU.CX), 0xABCDFFFF)
+
+    def test_in_the_real_mode_it_stops_the_emulator(self):
+        cpu = CPU()
+        cpu.mem[0:3] = b"\x0F\x03\xC9"
+        with self.assertRaisesRegex(NotImplementedError, "real mode"):
+            cpu.step()
 
 
 class TestTheTableOfSelectors(unittest.TestCase):
@@ -246,8 +322,8 @@ class TestTheProgram(unittest.TestCase):
         cpu.mem[0x30004:0x30008] = bytes([0x26, 0x66, 0x0F, 0xA2])
         with self.assertRaisesRegex(NotImplementedError, "opcode 0F A2 at 0018:0004: 26 66 0f a2"):
             cpu.step()
-        cpu = self.machine(bytes([0x66, 0xCB]))
-        with self.assertRaisesRegex(NotImplementedError, "opcode 66 CB, the 32-bit form, at 0018:0000"):
+        cpu = self.machine(bytes([0x66, 0x9A]))
+        with self.assertRaisesRegex(NotImplementedError, "opcode 66 9A, the 32-bit form, at 0018:0000"):
             cpu.step()
         cpu = self.machine(bytes([0x67, 0x6C]))
         with self.assertRaisesRegex(NotImplementedError, "opcode 6C with 32-bit addresses at 0018:0000"):

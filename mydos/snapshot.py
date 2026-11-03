@@ -176,7 +176,8 @@ def capture(machine, rewind=False):
         "disks": fingerprint(machine.config),
         "cpu": {"mem": {"size": len(cpu.mem), "runs": pages.runs(cpu.mem)}, "r": cpu.r, "rh": cpu.rh, "s": cpu.s,
                 "ip": cpu.start_ip if rewind else cpu.ip, "flags": cpu.flags, "eflags_high": cpu.eflags_high,
-                "instructions": cpu.instructions - bool(rewind), "mode": cpu.get_mode()},
+                "instructions": cpu.instructions - bool(rewind), "mode": cpu.get_mode(),
+                "pm_vectors": [[n, selector, offset] for n, (selector, offset) in cpu.pm_vectors.items()]},
         "vga": dict(vars(machine.card)),
         "timer": [dict(vars(counter)) for counter in machine.timer.counters],
         "keyboard": machine.keyboard.buffer,
@@ -241,6 +242,7 @@ def restore(machine, packed, blobs):
     cpu.s[:len(saved["s"])] = saved["s"]  # a snapshot from before FS and GS has four: those stay 0
     cpu.rh[:] = saved.get("rh", cpu.rh)  # a snapshot of before the 386 has no high halves: they stay 0
     cpu.eflags_high = saved.get("eflags_high", cpu.eflags_high)
+    cpu.pm_vectors = {n: (selector, offset) for n, selector, offset in saved.get("pm_vectors", [])}
     cpu.set_mode(saved.get("mode", REAL_MODE))  # a snapshot from before the flat mode is one of real mode
     cpu.ip, cpu.flags, cpu.instructions = saved["ip"], saved["flags"], saved["instructions"]
     cpu.start_ip = cpu.ip

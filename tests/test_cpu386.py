@@ -523,20 +523,20 @@ class TestSignExtensions(Machine):
 
 class TestWhatIsNotDoneYet(Machine):
     def test_an_instruction_with_the_prefix_66_that_has_no_32_bit_form_yet_stops_the_emulator(self):
-        for opcode in (0x9A, 0xEA, 0xCA, 0xCB, 0xCF, 0x6D, 0x6F, 0xD8):
+        for opcode in (0x9A, 0xEA, 0x6D, 0x6F, 0xD8):
             cpu = self.start(bytes([0x66, opcode, 0xC0, 0, 0, 0, 0]))
             with self.assertRaisesRegex(NotImplementedError, f"opcode 66 {opcode:02X}, the 32-bit form, at 1000:0000"):
                 cpu.step()
 
     def test_the_message_has_the_bytes_from_the_prefix(self):
-        cpu = self.start(bytes([0x66, 0xCB, 0x90]))
-        with self.assertRaisesRegex(NotImplementedError, "66 cb 90 00 00 00 00 00$"):  # eight bytes
+        cpu = self.start(bytes([0x66, 0x9A, 0x90]))
+        with self.assertRaisesRegex(NotImplementedError, "66 9a 90 00 00 00 00 00$"):  # eight bytes
             cpu.step()
 
     def test_a_16_bit_form_that_is_not_there_for_the_32_bit_one_is_not_taken_instead(self):
-        # CB is retf, which takes a pointer of 16:16 off the stack: with 66 it would take 16:32, which is not done,
-        # and it must not take the other one
-        cpu = self.start(bytes([0x66, 0xCB]))
+        # 9A is a far call, which pushes a pointer of 16:16: with 66 it would push 16:32, which is not done, and it must
+        # not push the other one
+        cpu = self.start(bytes([0x66, 0x9A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]))
         cpu.push16(0x3000)
         cpu.push16(0x0123)
         with self.assertRaises(NotImplementedError):

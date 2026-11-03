@@ -103,6 +103,7 @@ class CPU(Ops32, Fpu, FlatMemory):
         self.seg_override = None  # set by step(): segment register from a prefix, or None
         self.trace = None  # optional fn(cpu), called before every instruction (for the -d log)
         self.breakpoints = {}  # offset -> True (at any selector) or the set of the selectors that run() stops at
+        self.pm_vectors = {}  # in the flat mode: interrupt number -> (selector, offset) of the handler a program has set
         self.pics = None  # the interrupt controllers (pic.Pics), when the machine has them
         self.event_sources = []  # fn(instructions) -> the instruction count of its next event, or None (see events())
         self.next_event = NEVER  # the instruction count at which events() is to look at the devices and the lines
@@ -1423,7 +1424,18 @@ class CPU(Ops32, Fpu, FlatMemory):
         self.dispatch(self.fetch8())
 
     def dispatch(self, n):
-        """Go to the handler of interrupt `n`, as INT does with the number it has read (see int_)."""
+        """Go to the handler of interrupt `n`, as INT does with the number it has read (see int_).
+
+        In the flat mode the handlers that a program has set (pm_vectors) are called with a frame of doublewords: the
+        flags, CS and EIP, and IRETD takes them back. The table at address 0 is that of real mode and is not looked at.
+        """
+        if self.flat and n in self.pm_vectors:
+            self.push32(self.flags | self.eflags_high << 16)
+            self.push32(self.s[self.CS])
+            self.push32(self.ip)
+            self.flags &= ~(flags.IF | flags.TF)
+            self.s[self.CS], self.ip = self.pm_vectors[n]
+            return
         vector = int.from_bytes(self.mem[n * 4:n * 4 + 4], "little")  # the table is at address 0 in any mode
         offset, segment = vector & 0xFFFF, vector >> 16
         if offset or segment:
@@ -1474,8 +1486,6 @@ class CPU(Ops32, Fpu, FlatMemory):
         if not hooked and number == 0x08:
             number = 0x1C
         if self.vector_is_set(number):
-            if self.flat:
-                raise NotImplementedError(f"interrupt {number:02X} of the line {line} with a handler in the flat mode")
             self.dispatch(number)
         elif not hooked and number in self.int_handlers:
             self.int_handlers[number](self)
@@ -1483,7 +1493,10 @@ class CPU(Ops32, Fpu, FlatMemory):
             self.pics.end(line)  # the handler is the BIOS's, and it is done
 
     def vector_is_set(self, n):
-        """Whether a program has put the address of a handler of interrupt `n` in the table."""
+        """Whether a program has put the address of a handler of interrupt `n` in its table: the one of the flat mode,
+        or the one at address 0."""
+        if self.flat:
+            return n in self.pm_vectors
         return bool(int.from_bytes(self.mem[n * 4:n * 4 + 4], "little"))
 
     def iret(self, op):

@@ -265,6 +265,67 @@ class TestExtendedMemory(FlatMachine):
         self.assertEqual((self.cpu.r[CPU.BX], self.cpu.r[CPU.CX]), (0x000A, 0x0000))
 
 
+class TestTheVectors(FlatMachine):
+    def test_a_handler_is_set_to_cx_edx_and_given_back(self):
+        self.call(0x31, 0x0205, bx=0x000F, cx=0x0027, dx=0x1234)
+        self.assertIsNone(self.failed())
+        self.assertEqual(self.cpu.pm_vectors[0x0F], (0x0027, 0x1234))
+        self.cpu.r[CPU.CX] = self.cpu.r[CPU.DX] = 0
+        self.call(0x31, 0x0204, bx=0x000F)
+        self.assertEqual((self.failed(), self.cpu.r[CPU.CX], self.cpu.r[CPU.DX]), (None, 0x0027, 0x1234))
+
+    def test_the_offset_is_all_of_edx_and_a_vector_that_is_not_set_is_the_handler_of_the_rom(self):
+        self.cpu.set32(CPU.DX, 0x00F00123)
+        self.call(0x31, 0x0205, bx=0x0008, cx=0x0027, dx=0x0123)
+        self.cpu.set32(CPU.DX, 0x00F00123)
+        self.cpu.pm_vectors[0x0A] = (0x0027, 0x00F00123)
+        self.call(0x31, 0x0204, bx=0x000A)
+        self.assertEqual(self.cpu.get32(CPU.DX), 0x00F00123)
+        self.call(0x31, 0x0204, bx=0x0077)
+        self.assertEqual((self.cpu.r[CPU.CX], self.cpu.get32(CPU.DX)), (CODE_SELECTOR, 0xF0020))
+
+
+class TestTheVectorsOfTheRealMode(FlatMachine):
+    def test_a_vector_is_set_in_the_table_at_address_0_and_given_back(self):
+        self.call(0x31, 0x0201, bx=0x000F, cx=0x1404, dx=0x0010)
+        self.assertIsNone(self.failed())
+        self.assertEqual(self.cpu.mem[0x3C:0x40], bytes([0x10, 0x00, 0x04, 0x14]))
+        self.cpu.r[CPU.CX] = self.cpu.r[CPU.DX] = 0
+        self.call(0x31, 0x0200, bx=0x000F)
+        self.assertEqual((self.failed(), self.cpu.r[CPU.CX], self.cpu.r[CPU.DX]), (None, 0x1404, 0x0010))
+
+    def test_a_vector_that_is_not_set_is_the_handler_of_the_rom(self):
+        self.call(0x31, 0x0200, bx=0x000F)
+        self.assertEqual((self.cpu.r[CPU.CX], self.cpu.r[CPU.DX]), dos.MASTER_EOI_AT)
+        self.call(0x31, 0x0200, bx=0x0060)
+        self.assertEqual((self.cpu.r[CPU.CX], self.cpu.r[CPU.DX]), dos.IRET_AT)
+
+
+class TestTheProgramHoldsAllTheMemory(FlatMachine):
+    """DOS gave the memory below 1 MB to the program, as it does to every one, and the program has not given it back."""
+
+    def test_the_program_gives_back_all_but_its_psp_when_it_asks_for_a_block(self):
+        memory = self.state.memory
+        self.assertEqual(memory.largest(), 0)  # nothing is free yet
+        self.call(0x31, 0x0100, bx=0x304)
+        self.assertIsNone(self.failed())
+        self.assertEqual(memory.blocks[self.state.psp_seg], dpmi.PROGRAM_PARAGRAPHS)
+        self.assertEqual(memory.blocks[self.cpu.r[CPU.AX]], 0x304)
+
+    def test_a_block_that_is_more_than_all_of_it_is_still_error_8_and_the_program_has_given_back_what_it_could(self):
+        self.call(0x31, 0x0100, bx=0xFFFF)
+        self.assertEqual(self.failed(), 0x0008)
+        self.assertEqual(self.cpu.r[CPU.BX], self.state.memory.largest())
+        self.assertGreater(self.cpu.r[CPU.BX], 0x8000)
+
+    def test_a_block_of_the_program_that_is_small_already_is_not_made_bigger(self):
+        self.state.memory.resize(self.state.psp_seg, 0x20)
+        self.state.memory.allocate(self.state.memory.largest(), 0)  # nothing is left
+        self.call(0x31, 0x0100, bx=0x10)
+        self.assertEqual(self.failed(), 0x0008)
+        self.assertEqual(self.state.memory.blocks[self.state.psp_seg], 0x20)
+
+
 class TestMemoryBelowTheMegabyte(FlatMachine):
     def setUp(self):
         super().setUp()

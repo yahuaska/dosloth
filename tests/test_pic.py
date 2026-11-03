@@ -3,6 +3,7 @@ import unittest
 
 from mydos import flags, pic
 from mydos.cpu import CPU
+from mydos.flat import RealModeBases
 
 
 class PicTest(unittest.TestCase):
@@ -225,13 +226,25 @@ class TestTheCpuTakesThem(PicTest):
         self.assertEqual(cpu.s[CPU.CS], HANDLER)
         self.assertEqual(self.master.in_service, 1)  # the program ends it
 
-    def test_a_handler_in_the_flat_mode_stops_the_emulator(self):
+    def test_in_the_flat_mode_the_handlers_are_those_that_the_program_set_and_the_frame_is_of_doublewords(self):
+        cpu = self.cpu
+        cpu.use_flat_memory(RealModeBases())
+        cpu.pm_vectors[0x09] = (HANDLER, 0)
+        cpu.r[CPU.SP] = 0x1000
+        self.pics.raise_line(1)
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.r[CPU.SP]), (HANDLER, 1, 0x1000 - 12))
+        self.assertEqual((cpu.rd(0x3000, 0x1000 - 4), cpu.rd(0x3000, 0x1000 - 8)), (flags.IF | 2, CODE))  # eflags, CS
+        self.assertFalse(cpu.flags & flags.IF)
+
+    def test_in_the_flat_mode_the_table_at_address_0_is_not_looked_at(self):
         cpu = self.cpu
         self.hook(0x09)
-        cpu.flat = True
+        cpu.use_flat_memory(RealModeBases())
         self.pics.raise_line(1)
-        with self.assertRaisesRegex(NotImplementedError, "flat mode"):
-            cpu.step()
+        cpu.step()
+        self.assertEqual(cpu.s[CPU.CS], CODE)  # taken as one with no handler: ended by the machine
+        self.assertEqual(self.master.in_service, 0)
 
     def test_a_machine_without_controllers_takes_no_interrupt(self):
         cpu = CPU()

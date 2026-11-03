@@ -15,6 +15,8 @@ the bits 111 (the local table, the privilege 3), as 0Fh and 17h of the loader ar
 """
 from . import flags
 from .cpu import CPU
+from .loader import CODE_SELECTOR
+from .rom import default_handler
 from .xmem import PAGE
 
 SELECTOR_BITS = 0x07  # the local descriptor table, privilege level 3
@@ -28,6 +30,7 @@ INVALID_VALUE = 0x8021
 INVALID_SELECTOR = 0x8022
 INVALID_HANDLE = 0x8023
 INSUFFICIENT_DOS_MEMORY = 0x0008
+PROGRAM_PARAGRAPHS = 0x100  # what a program of 32 bits keeps of the memory below 1 MB that DOS gave it: its PSP, and room
 UNKNOWN = 0xFFFFFFFF  # what the call for the memory says of what it does not know
 
 VERSION = 0x0009  # DPMI 0.9: the major number in AH, the minor one in AL
@@ -63,6 +66,18 @@ def zero_based_selector(cpu):
     return selector
 
 
+def get_vector(cpu, n):
+    """The (selector, offset) of the handler of interrupt `n` of the flat mode: what a program has set, else the one of
+    the ROM (see rom.py), reached through the code selector of the program, whose base is 0. An interrupt that is one of
+    ours (a Python function: DOS, the BIOS) has no address to give: the program that asks stops the emulator."""
+    if n in cpu.pm_vectors:
+        return cpu.pm_vectors[n]
+    if n in cpu.int_handlers:
+        raise NotImplementedError(f"the handler of interrupt {n:02X} is a function of the emulator: it has no address")
+    segment, offset = default_handler(n)
+    return CODE_SELECTOR, segment * 16 + offset
+
+
 def refuse(cpu, code):
     cpu.r[CPU.AX] = code
     cpu.set_flag(flags.CF, True)
@@ -96,7 +111,8 @@ def int31(cpu, state):
     base of BX in CX:DX, get and set), 0008h and 0009h (the limit in CX:DX and the rights in CX: taken and not kept);
     0400h, the version; the memory: 0500h (what there is), 0501h and 0502h (a block above 1 MB, and its return),
     0100h and 0101h (a block below it, with its selector, and its return), 0600h and 0601h (locking: nothing to lock),
-    0800h (a device's memory: the physical address is the linear one). A call that is not here stops the emulator.
+    0800h (a device's memory: the physical address is the linear one), 0200h and 0201h (the handlers of the interrupts of the real mode, the table at address 0), 0204h and 0205h
+    (those of the protected mode: get, set). A call that is not here stops the emulator.
     """
     if not cpu.flat:
         raise NotImplementedError("INT 31h from real mode")
@@ -130,6 +146,11 @@ def int31(cpu, state):
         put_pair(cpu, CPU.BX, CPU.CX, pair(cpu, CPU.BX, CPU.CX))
     elif ax == 0x0100:
         segment = state.memory.allocate(cpu.r[CPU.BX], state.psp_seg)
+        if segment is None and state.memory.blocks.get(state.psp_seg, 0) > PROGRAM_PARAGRAPHS \
+                and state.memory.resize(state.psp_seg, PROGRAM_PARAGRAPHS):
+            # DOS gave all the memory to the program as it does to any program, but a program of 32 bits has its
+            # code and data above 1 MB, and the memory below is for what it asks of DPMI: it gives it back
+            segment = state.memory.allocate(cpu.r[CPU.BX], state.psp_seg)
         if segment is None:
             cpu.r[CPU.BX] = state.memory.largest()
             return refuse(cpu, INSUFFICIENT_DOS_MEMORY)
@@ -143,6 +164,20 @@ def int31(cpu, state):
         if cpu.r[CPU.DX] not in cpu.bases or not state.memory.free(cpu.bases[cpu.r[CPU.DX]] // 16):
             return refuse(cpu, INVALID_SELECTOR)
         del cpu.bases[cpu.r[CPU.DX]]
+    elif ax == 0x0200:  # the handler of the interrupt BL of the real mode: CX:DX, from the table at address 0
+        n = cpu.get8(3)
+        vector = int.from_bytes(cpu.mem[n * 4:n * 4 + 4], "little")  # the table is at the physical address 0
+        cpu.r[CPU.DX], cpu.r[CPU.CX] = vector & 0xFFFF, vector >> 16
+        if not (cpu.r[CPU.CX] or cpu.r[CPU.DX]) and n not in cpu.int_handlers:
+            cpu.r[CPU.CX], cpu.r[CPU.DX] = default_handler(n)  # none: the one of the ROM, as INT 21h AH=35h gives
+    elif ax == 0x0201:  # set it, to CX:DX
+        n = cpu.get8(3)
+        cpu.mem[n * 4:n * 4 + 4] = (cpu.r[CPU.CX] << 16 | cpu.r[CPU.DX]).to_bytes(4, "little")
+    elif ax == 0x0204:  # the handler of the interrupt BL of the protected mode: CX:EDX
+        cpu.r[CPU.CX], selector_offset = get_vector(cpu, cpu.get8(3))
+        cpu.set32(CPU.DX, selector_offset)
+    elif ax == 0x0205:  # set it, to CX:EDX
+        cpu.pm_vectors[cpu.get8(3)] = (cpu.r[CPU.CX], cpu.get32(CPU.DX))
     elif ax == 0x0400:
         cpu.r[CPU.AX], cpu.r[CPU.BX] = VERSION, FLAGS_386
         cpu.r[CPU.CX], cpu.r[CPU.DX] = PROCESSOR_486, PIC_BASES

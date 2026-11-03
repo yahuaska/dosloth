@@ -256,10 +256,31 @@ class Ops32:
         self.ip = self.pop32() & self.ip_mask
         self.set_stack(self.SP, self.get_stack(self.SP) + count)
 
+    def iretd(self, op):
+        """Return from an interrupt whose handler was called with doublewords (the flat mode): EIP, CS and the flags."""
+        self.ip = self.pop32() & self.ip_mask
+        self.s[self.CS] = self.pop32() & 0xFFFF
+        value = self.pop32()
+        self.flags = (value & flags.DEFINED) | flags.ALWAYS_ONE
+        self.eflags_high = (value >> 16) & AC
+
+    def retf32(self, op):
+        """Return from a far procedure that was called with doublewords on the stack: pop EIP, then CS (66 CB)."""
+        self.ip = self.pop32() & self.ip_mask
+        self.s[self.CS] = self.pop32() & 0xFFFF
+
+    def retf_pop32(self, op):
+        """The same, and drop the arguments of the procedure (66 CA + imm16)."""
+        count = self.fetch16()
+        self.ip = self.pop32() & self.ip_mask
+        self.s[self.CS] = self.pop32() & 0xFFFF
+        self.set_stack(self.SP, self.get_stack(self.SP) + count)
+
     def group5_rm32(self, op):
         """INC, DEC, CALL, JMP and PUSH of a 32-bit register or memory operand (66 FF, by the 'reg' field).
 
-        The far forms (CALL FAR and JMP FAR, 3 and 5) take a pointer of 16:32, which needs selectors: they stop.
+        The far forms (CALL FAR and JMP FAR, 3 and 5) take a pointer of 16:32 in memory: the offset of 32 bits, then
+        the selector. A far call pushes CS and then EIP, both as doublewords, and 66 CB or 66 CA gets them back.
         """
         m = modrm.decode(self, self.seg_override)
         if m.reg in (0, 1):
@@ -270,6 +291,15 @@ class Ops32:
             self.ip = target & self.ip_mask
         elif m.reg == 4:
             self.ip = m.read(self, 32) & self.ip_mask
+        elif m.reg in (3, 5):
+            if m.is_reg:  # there is no register that could hold 6 bytes
+                raise NotImplementedError(
+                    f"opcode 66 FF /{m.reg} with a register at {self.s[self.CS]:04X}:{self.start_ip:04X}")
+            offset, segment = self.rd(m.seg, m.off), self.rw(m.seg, m.off + 4)
+            if m.reg == 3:
+                self.push32(self.s[self.CS])
+                self.push32(self.ip)
+            self.s[self.CS], self.ip = segment, offset & self.ip_mask
         elif m.reg == 6:  # read first: PUSH ESP pushes the value it had before
             self.push32(m.read(self, 32))
         else:
@@ -440,6 +470,47 @@ class Ops32:
             value = signed(value, source_bits)
         self.set_reg(m.reg, 32 if self.osize32 else 16, value)
 
+    def load_access_rights(self, second):
+        """LAR (0F 02): the access rights of the descriptor of a selector go to a register, and ZF says it was found.
+
+        The descriptors are not kept here, only the bases of the selectors (see flat.py), so what comes is what
+        every selector of a 32-bit program has: a descriptor of the whole address space with a granularity of 4 KB, of
+        32 bits, present, of the ring 0, and a readable code segment if it is the one that is being run, else a data
+        segment that can be written. The access byte is in bits 8-15 and the flags in bits 20-23, as in the descriptor.
+        A selector that is not there leaves the register as it was and clears ZF.
+        """
+        if not self.flat:
+            raise NotImplementedError("LAR in the real mode")
+        m = modrm.decode(self, self.seg_override)
+        selector = m.read(self, 16)
+        try:
+            self.bases[selector]
+        except (KeyError, NotImplementedError):
+            self.set_flag(flags.ZF, False)
+            return
+        access = 0x9A if selector == self.s[self.CS] else 0x92
+        self.set_reg(m.reg, 32 if self.osize32 else 16, 0x00C00000 | access << 8)
+        self.set_flag(flags.ZF, True)
+
+    def load_segment_limit(self, second):
+        """LSL (0F 03): the limit of the segment of a selector goes to a register, and ZF says it was found.
+
+        The limits are not kept (see load_access_rights), and a selector of a 32-bit program is of the whole address
+        space, so the answer is the limit of that: the whole 4 GB. A selector that is not there leaves the register as
+        it was and clears ZF.
+        """
+        if not self.flat:
+            raise NotImplementedError("LSL in the real mode")
+        m = modrm.decode(self, self.seg_override)
+        selector = m.read(self, 16)
+        try:
+            self.bases[selector]
+        except (KeyError, NotImplementedError):
+            self.set_flag(flags.ZF, False)
+            return
+        self.set_reg(m.reg, 32 if self.osize32 else 16, 0xFFFFFFFF)
+        self.set_flag(flags.ZF, True)
+
     def imul_two(self, second):
         """A register <- the register times the r/m operand, signed, cut to the size of the register (0F AF)."""
         m = modrm.decode(self, self.seg_override)
@@ -526,6 +597,8 @@ class Ops32:
         table.update({code: self.setcc for code in range(0x90, 0xA0)})
         table.update({code: self.movzx_movsx for code in (0xB6, 0xB7, 0xBE, 0xBF)})
         table[0xAF] = self.imul_two
+        table[0x02] = self.load_access_rights
+        table[0x03] = self.load_segment_limit
         table.update({code: self.double_shift for code in (0xA4, 0xA5, 0xAC, 0xAD)})
         table.update({code: self.bit_operation for code in (0xA3, 0xAB, 0xB3, 0xBB, 0xBA)})
         table.update({0xBC: self.bit_scan, 0xBD: self.bit_scan})
@@ -591,6 +664,8 @@ class Ops32:
         table[Op.ENTER], table[Op.LEAVE] = self.enter32, self.leave32
         table[Op.CALL_NEAR], table[Op.JMP_NEAR] = self.call_near32, self.jmp_near32
         table[Op.RET_NEAR], table[Op.RET_NEAR_POP] = self.ret_near32, self.ret_near_pop32
+        table[Op.RETF], table[Op.RETF_POP] = self.retf32, self.retf_pop32
+        table[Op.IRET] = self.iretd
         for code in (*range(0xA4, 0xA8), *range(0xAA, 0xB0)):
             table[code] = self.string32
         for code in FPU_OPCODES:  # the coprocessor is there for a 32-bit program (see fpu.py)

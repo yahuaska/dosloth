@@ -176,6 +176,8 @@ class FlatMemory:
 
     def step_flat(self):
         """Run one instruction: step() of real mode, with the opcode read at the base of CS plus EIP."""
+        if self.instructions >= self.next_event:
+            self.events()
         self.instructions += 1
         if self.trace:
             self.trace(self)

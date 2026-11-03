@@ -290,11 +290,49 @@ class TestGroup5And4(Machine):
         cpu.step()
         self.assertEqual(cpu.rd(0x4000, 0x01FC), 0x0200)
 
-    def test_the_far_forms_and_the_other_numbers_stop_the_emulator(self):
-        for reg in (3, 5, 7):
-            cpu = self.start(bytes([0x66, 0xFF, 0x06 | reg << 3, 0x00, 0x01]))
+    def test_the_far_forms_with_a_register_and_the_other_numbers_stop_the_emulator(self):
+        for reg, modrm_byte in ((3, 0xDB), (5, 0xEB), (7, 0x06 | 7 << 3)):
+            cpu = self.start(bytes([0x66, 0xFF, modrm_byte, 0x00, 0x01]))
             with self.assertRaisesRegex(NotImplementedError, f"opcode 66 FF /{reg}"):
                 cpu.step()
+
+    def test_a_far_call_through_memory_pushes_cs_and_eip_as_doublewords_and_goes_to_the_pointer(self):
+        cpu = self.start(bytes([0x66, 0xFF, 0x1E, 0x00, 0x01]))  # call far [0100]
+        cpu.wd(0x2000, 0x0100, 0x00000555)  # the offset of 32 bits
+        cpu.ww(0x2000, 0x0104, 0x3000)  # and the selector
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.r[SP]), (0x3000, 0x0555, 0x01F8))
+        self.assertEqual((cpu.rd(0x4000, 0x01F8), cpu.rd(0x4000, 0x01FC)), (0x0005, 0x1000))  # EIP, and CS under it
+
+    def test_a_far_jump_through_memory_pushes_nothing(self):
+        cpu = self.start(bytes([0x66, 0xFF, 0x2E, 0x00, 0x01]))  # jmp far [0100]
+        cpu.wd(0x2000, 0x0100, 0x00000777)
+        cpu.ww(0x2000, 0x0104, 0x3000)
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.r[SP]), (0x3000, 0x0777, 0x0200))
+
+    def test_a_far_return_of_doublewords_takes_eip_and_cs_and_the_arguments(self):
+        cpu = self.start(bytes([0x66, 0xCB]))  # retf
+        cpu.push32(0x1111_2000)  # CS: the high half is not a part of the selector
+        cpu.push32(0x0000_0444)
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.r[SP]), (0x2000, 0x0444, 0x0200))
+        cpu = self.start(bytes([0x66, 0xCA, 0x08, 0x00]))  # retf 8
+        cpu.push32(0x2000)
+        cpu.push32(0x0444)
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.r[SP]), (0x2000, 0x0444, 0x0208))
+
+    def test_iretd_takes_eip_cs_and_the_flags_of_32_bits(self):
+        cpu = self.start(bytes([0xCF]))
+        cpu.code32 = True  # in a 32-bit code segment CF is IRETD
+        cpu.push32(flags.CF | flags.ZF | 0x0002)
+        cpu.push32(0x2000)
+        cpu.push32(0x0444)
+        cpu.flags = 0x0002
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.r[SP]), (0x2000, 0x0444, 0x0200))
+        self.assertEqual(cpu.flags & (flags.CF | flags.ZF), flags.CF | flags.ZF)
 
     def test_pop_into_a_register_and_into_memory(self):
         cpu = self.start(bytes([0x66, 0x8F, 0xC3]))  # pop ebx

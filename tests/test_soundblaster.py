@@ -98,6 +98,8 @@ class TestTheInterrupt(unittest.TestCase):
 
 
 class TestThePlayingByDma(unittest.TestCase):
+    """The card on a clock that the test moves: a byte of the time constant 0 takes 256 microseconds (76 instructions)."""
+
     def setUp(self):
         from mydos import dma, pic
         self.cpu = CPU()
@@ -110,17 +112,80 @@ class TestThePlayingByDma(unittest.TestCase):
         for byte in bytes_:
             self.cpu.port_out(BASE + 0xC, byte)
 
+    def at(self, instructions):
+        """Let the time be `instructions` and give the card its events; returns what it says is next."""
+        self.cpu.instructions = instructions
+        return self.card.events(instructions)
+
     def test_the_time_constant_is_kept_and_has_one_byte(self):
         self.ask(0x40, 0x64)
         self.assertEqual(self.card.time_constant, 0x64)
         self.assertEqual(self.card.waiting_for, 0)
 
-    def test_the_output_is_over_at_once_with_the_channel_at_its_end_and_the_interrupt(self):
-        self.ask(0x14, 0x10)
-        self.assertIsNone(self.pics.pending())  # a byte is yet to come
-        self.ask(0x00)
+    def test_the_rate_makes_the_time_constant(self):
+        self.ask(0x41, 0x2B, 0x11)  # 11025 Hz, high byte first: 91 microseconds
+        self.assertEqual(self.card.time_constant, 256 - 91)
+
+    def test_a_block_size_is_the_bytes_less_one_and_the_playing_is_told_to_the_cpu(self):
+        self.ask(0x48, 0xFF, 0x03)
+        self.assertEqual(self.card.block_size, 0x400)
+        self.cpu.next_event = 1 << 62
+        self.ask(0x14, 0x10, 0x00)
+        self.assertEqual(self.cpu.next_event, 0)  # woken: the time of its end is to be looked up
+
+    def test_the_output_ends_when_its_time_has_gone_with_the_channel_at_its_end_and_the_interrupt(self):
+        self.ask(0x40, 0x64)  # 156 microseconds a byte
+        self.ask(0x14, 0x0F, 0x00)  # 16 bytes: 2496 microseconds: 744 instructions
+        self.assertEqual(self.card.due, 744)
+        self.assertEqual(self.at(743), 744)
+        self.assertIsNone(self.pics.pending())
+        self.assertIsNone(self.at(744))
         self.assertEqual(self.pics.pending(), 7)
         self.assertEqual(self.cpu.port_in(0x08), 0x02)  # the channel 1 has reached the end
+        self.assertFalse(self.card.playing)
+
+    def test_the_repeated_output_raises_the_interrupt_for_every_block(self):
+        self.ask(0x40, 0x00)
+        self.ask(0x48, 0x0F, 0x00)  # blocks of 16 bytes: 4096 microseconds: 1218 instructions
+        self.ask(0x1C)
+        first = self.card.due
+        self.assertEqual(self.at(first), first + first)
+        self.assertEqual(self.pics.pending(), 7)
+        self.pics.acknowledge()
+        self.pics.end(7)
+        self.assertEqual(self.at(2 * first), 3 * first)
+        self.assertEqual(self.pics.pending(), 7)  # and again
+
+    def test_the_fast_commands_play_the_block_once_and_repeatedly(self):
+        self.ask(0x48, 0x0F, 0x00)
+        self.ask(0x91)
+        self.assertIsNone(self.at(self.card.due))
+        self.assertEqual(self.pics.pending(), 7)
+        self.ask(0x90)
+        self.assertIsNotNone(self.at(self.card.due))
+        self.assertTrue(self.card.repeating)
+
+    def test_the_speaker_is_asked_about(self):
+        self.ask(0xD8)
+        self.ask(0xD1)
+        self.ask(0xD8)
+        self.assertEqual([self.cpu.port_in(BASE + 0xA) for _ in range(2)], [0x00, 0xFF])
+
+    def test_a_halt_stops_it_and_a_continue_goes_on(self):
+        self.ask(0x14, 0x0F, 0x00)
+        self.ask(0xD0)
+        self.assertIsNone(self.at(10 ** 6))
+        self.assertIsNone(self.pics.pending())
+        self.ask(0xD4)
+        self.assertIsNotNone(self.card.due)
+
+    def test_the_end_of_the_repeating_lets_the_block_in_hand_end_and_that_is_all(self):
+        self.ask(0x48, 0x0F, 0x00)
+        self.ask(0x1C)
+        self.ask(0xDA)
+        self.assertIsNone(self.at(self.card.due))
+        self.assertEqual(self.pics.pending(), 7)
+        self.assertFalse(self.card.playing)
 
     def test_a_reset_forgets_the_arguments_that_came(self):
         self.ask(0x14, 0x10)
@@ -129,8 +194,17 @@ class TestThePlayingByDma(unittest.TestCase):
         self.ask(0xE1)
         self.assertEqual([self.cpu.port_in(BASE + 0xA) for _ in range(3)], [0xAA, 4, 5])
 
-    def test_the_state_has_no_controllers_in_it(self):
-        self.assertNotIn("dma", self.card.state())
+    def test_a_reset_stops_the_playing(self):
+        self.ask(0x14, 0x10, 0x00)
+        self.cpu.port_out(BASE + 6, 1)
+        self.cpu.port_out(BASE + 6, 0)
+        self.assertEqual((self.card.playing, self.card.due), (False, None))
+
+    def test_the_state_has_no_controllers_clock_or_functions_in_it(self):
+        import json
+        state = self.card.state()
+        self.assertFalse({"dma", "pics", "clock", "wake"} & set(state))
+        json.dumps(state)
 
 
 class TestTheMixer(DspTest):

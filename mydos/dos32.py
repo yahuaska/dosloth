@@ -21,6 +21,13 @@ def int21(cpu, state, real):
         cpu.r[CPU.AX] = 1
         cpu.set_flag(flags.CF, False)
         dpmi.zero_based_selector(cpu)
+    elif ax >> 8 == 0x25:  # set the handler of interrupt AL to DS:EDX
+        cpu.pm_vectors[cpu.get8(0)] = (cpu.s[CPU.DS], cpu.get32(CPU.DX))
+        cpu.set_flag(flags.CF, False)
+    elif ax >> 8 == 0x35:  # get it into ES:EBX
+        cpu.s[CPU.ES], offset = dpmi.get_vector(cpu, cpu.get8(0))
+        cpu.set32(CPU.BX, offset)
+        cpu.set_flag(flags.CF, False)
     elif ax >> 8 in SHARED_WITH_REAL_MODE:
         real(cpu, state)
     else:

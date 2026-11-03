@@ -504,7 +504,7 @@ class TestAgreesWithCpu32(unittest.TestCase):
                 self.assertEqual(length, len(fetched) + 1, text)  # step() reads the first byte, the prefix, itself
 
     def test_an_opcode_with_the_prefix_that_the_cpu_does_not_know_is_a_db_of_the_prefix(self):
-        self.assertEqual(dis(b"\x66\xCB"), (1, "db 66"))  # retf with a pointer of 16:32: no form yet
+        self.assertEqual(dis(b"\x66\x9A\0\0\0\0\0\0"), (1, "db 66"))  # a far call with a pointer of 16:32: no form yet
 
     def test_the_opcodes_that_the_cpu_takes_with_the_prefix_are_the_ones_that_are_written_with_it(self):
         """Both ways: nothing that the CPU stops at is written as an instruction, and nothing it takes as a db."""
