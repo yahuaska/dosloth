@@ -35,6 +35,16 @@ MAX_PATH = 260  # how long a path from a program may be, with its ending zero
 BYTES_PER_SECTOR = 512
 SECTORS_PER_CLUSTER = 64
 MAX_CLUSTERS = 0xFFFF
+# What INT 21h AH=35h gives for a vector that has no handler of ours: one in the ROM that does no more than a BIOS does,
+# an IRET; for the vectors of the interrupt controllers it says the end of the interrupt first, and then does an IRET
+IRET_AT = (0xF000, 0x0001)
+MASTER_EOI_AT = (0xF000, 0x0010)
+SLAVE_EOI_AT = (0xF000, 0x0020)
+ROM_HANDLERS = {
+    IRET_AT: b"\xCF",
+    MASTER_EOI_AT: b"\x50\xB0\x20\xE6\x20\x58\xCF",  # push ax ; mov al, 20h ; out 20h, al ; pop ax ; iret
+    SLAVE_EOI_AT: b"\x50\xB0\x20\xE6\xA0\xE6\x20\x58\xCF",  # the same to both controllers
+}
 MEMORY_TOP_SEG = 0xA000  # the end of the 640 KB of ordinary memory; DOS hands out nothing above it
 
 
@@ -211,6 +221,11 @@ def int21(cpu, state):
         n = cpu.get8(0)
         cpu.r[CPU.BX] = cpu.rw(0, n * 4)
         cpu.s[CPU.ES] = cpu.rw(0, n * 4 + 2)
+        if not (cpu.r[CPU.BX] or cpu.s[CPU.ES]) and n not in cpu.int_handlers:
+            # nothing is there: where the BIOS of a real machine has a handler, that does no more than return, and a
+            # program that takes the vector over calls it (or jumps to it) when it is done with an interrupt
+            where = MASTER_EOI_AT if 0x08 <= n <= 0x0F else SLAVE_EOI_AT if 0x70 <= n <= 0x77 else IRET_AT
+            cpu.s[CPU.ES], cpu.r[CPU.BX] = where
     elif ah == 0x1A:  # set the disk transfer area to DS:DX (EDX): where the results of a file search are put
         state.dta = (cpu.s[CPU.DS], cpu.wide(CPU.DX))
     elif ah == 0x2F:  # get the disk transfer area into ES:BX
@@ -627,6 +642,12 @@ def int25(cpu, state):
     cpu.set_flag(flags.CF, True)
 
 
+def install_iret(cpu):
+    """Put the handlers of ROM_HANDLERS in memory, where the BIOS ROM would be."""
+    for (segment, offset), code in ROM_HANDLERS.items():
+        cpu.mem[segment * 16 + offset:segment * 16 + offset + len(code)] = code
+
+
 def install(cpu, volumes=None):
     """Hook DOS interrupt handlers into the CPU, for the drives in `volumes` (see volumes.py).
 
@@ -634,6 +655,7 @@ def install(cpu, volumes=None):
     """
     state = DosState(volumes if volumes is not None else Volumes(default_config(Path.cwd())))
     country.install(cpu)
+    install_iret(cpu)
     sysvars.write(cpu, state.config, MEMORY_TOP_SEG)  # the tables of DOS, which a program finds with AH=52h
     cpu.int_handlers[0x20] = lambda cpu: process.terminate(cpu, state, 0)
     cpu.int_handlers[0x21] = lambda cpu: dos32.int21(cpu, state, int21) if cpu.flat else int21(cpu, state)

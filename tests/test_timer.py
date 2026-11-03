@@ -226,5 +226,93 @@ class TestOnTheCpu(unittest.TestCase):
         self.assertEqual(values[0], values[1])
 
 
+class Lines:
+    """Pretend controllers: they only count the requests of the lines."""
+
+    def __init__(self):
+        self.raised = []
+
+    def raise_line(self, line):
+        self.raised.append(line)
+
+
+class TestTheInterrupt(unittest.TestCase):
+    def setUp(self):
+        self.chip, self.clock = make()
+        self.chip.ticks_per_instruction = 4
+        self.lines = Lines()
+
+    def test_the_line_is_raised_at_the_end_of_the_count_and_the_next_one_is_told(self):
+        program(self.chip, 0, 2, 1000)
+        self.assertEqual(self.chip.events(0, self.lines), 250)  # 1000 ticks, 4 a instruction
+        self.assertEqual(self.lines.raised, [])
+        self.clock.ticks = 1000
+        self.assertEqual(self.chip.events(250, self.lines), 500)
+        self.assertEqual(self.lines.raised, [0])
+
+    def test_the_end_of_the_count_that_is_not_a_whole_instruction_is_at_the_next_instruction(self):
+        program(self.chip, 0, 2, 1001)
+        self.assertEqual(self.chip.events(0, self.lines), 251)
+
+    def test_a_few_ends_that_went_by_make_one_request(self):
+        program(self.chip, 0, 3, 100)
+        self.clock.ticks = 450
+        self.chip.events(112, self.lines)
+        self.assertEqual(self.lines.raised, [0])
+        self.chip.events(112, self.lines)
+        self.assertEqual(self.lines.raised, [0])  # asked once, not again before the next end
+        self.assertEqual(self.chip.counters[0].fired, 4)
+
+    def test_the_reload_of_0_is_65536_the_tick_of_18_2_hz(self):
+        self.assertEqual(self.chip.events(0, self.lines), 65536 // 4)
+
+    def test_a_counter_of_mode_0_counts_once(self):
+        program(self.chip, 0, 0, 100)
+        self.clock.ticks = 100
+        self.assertIsNone(self.chip.events(25, self.lines))
+        self.assertEqual(self.lines.raised, [0])
+        self.clock.ticks = 500
+        self.assertIsNone(self.chip.events(125, self.lines))
+        self.assertEqual(self.lines.raised, [0])
+
+    def test_setting_the_counter_again_starts_the_count_and_says_so(self):
+        called = []
+        self.chip.on_change = lambda: called.append(1)
+        program(self.chip, 0, 2, 1000)
+        self.assertEqual(len(called), 2)  # the mode, and the count
+        self.clock.ticks = 900
+        program(self.chip, 0, 2, 1000)
+        self.assertEqual(self.chip.events(225, self.lines), 475)  # a count from here, not from the old start
+
+    def test_the_machine_raises_the_timer_line_to_a_program_that_took_the_interrupt(self):
+        from mydos import pic
+        from mydos.flags import IF
+        cpu = CPU()
+        pics = pic.install(cpu)
+        chip = timer.install(cpu)
+        chip.on_change = cpu.wake
+        cpu.event_sources.append(lambda now: chip.events(now, pics))
+        cpu.wake()
+        cpu.mem[0x08 * 4:0x08 * 4 + 4] = (0x2000 << 16).to_bytes(4, "little")  # a handler at 2000:0000
+        cpu.mem[0x20000:0x20002] = b"\x90\xCF"
+        cpu.mem[0x10000:0x10000 + 0x6000] = b"\x90" * 0x6000
+        cpu.s[CPU.CS] = 0x1000
+        cpu.s[CPU.SS] = 0x3000
+        cpu.r[CPU.SP] = 0x1000
+        cpu.ip = 0
+        cpu.flags |= IF
+        chip.write(0x43, 0x34)  # counter 0, both bytes, mode 2
+        chip.write(0x40, 0xE8)
+        chip.write(0x40, 0x03)  # 1000 ticks: 250 instructions
+        entered = None
+        for _ in range(300):
+            cpu.step()
+            if cpu.s[CPU.CS] == 0x2000:
+                entered = cpu.instructions
+                break
+        self.assertIsNotNone(entered)
+        self.assertEqual(entered, 251)  # the interrupt is taken at the 250th instruction that is done, before the next
+
+
 if __name__ == "__main__":
     unittest.main()

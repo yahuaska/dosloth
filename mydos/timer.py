@@ -13,8 +13,10 @@ one instruction is worth is a guess, TICKS_PER_INSTRUCTION.
 
 What is done: counting in binary in modes 0, 2 and 3 (the ones programs use), the control byte, the latch
 command, and reading and loading counters as low byte, high byte, or both. What is not (it stops the
-emulator, so nothing goes unnoticed): BCD counting, modes 1, 4 and 5, the read-back command, and the
-interrupts the counters would raise.
+emulator, so nothing goes unnoticed): BCD counting, modes 1, 4 and 5, and the read-back command.
+
+Counter 0 raises line 0 of the interrupt controllers (pic.py) at the end of every count, when the machine has them:
+the machine makes `events` a source of the CPU (see CPU.events).
 """
 
 PIT_FREQUENCY = 1193182  # ticks a second
@@ -30,6 +32,7 @@ class Counter:
         self.access = 3  # 1: low byte only, 2: high byte only, 3: low byte then high byte
         self.reload = reload  # the value counting starts from; 0 means 65536
         self.start = 0  # the time, in ticks, when counting (re)started
+        self.fired = 0  # how many times it has reached the end of its count since `start`, and the line was raised
         self.pending_low = None  # a low byte written, waiting for its high byte
         self.read_high_next = False  # the next read of an unlatched counter gives the high byte
         self.latched = None  # the bytes a latch command froze, still to be read, or None
@@ -38,8 +41,10 @@ class Counter:
 class Timer:
     """The timer chip. `now()` gives the time in timer ticks."""
 
-    def __init__(self, now):
+    def __init__(self, now, ticks_per_instruction=TICKS_PER_INSTRUCTION):
         self.now = now
+        self.ticks_per_instruction = ticks_per_instruction
+        self.on_change = None  # called when counter 0 is set again, so that the time of its next end of count is looked up
         # the state the BIOS leaves the chip in: counter 0 at the 18.2 Hz tick, counter 1 for refresh
         self.counters = [Counter(3, 0), Counter(2, 18), Counter(3, 0)]
 
@@ -54,6 +59,26 @@ class Timer:
         else:  # mode 3, a square wave: counts down by two, so it makes the trip in half the time
             value = reload - 2 * (ticks % max(reload // 2, 1))
         return value & 0xFFFF  # 65536 shows as 0
+
+    def events(self, instructions, pics):
+        """Raise line 0 of the interrupt controllers when counter 0 has reached the end of its count, as the system
+        clock does 18.2 times a second (or as often as a program has set it). `instructions` is the time. Returns the
+        instruction count of the next end of count, or None if there will be none (a counter of mode 0 counts once).
+
+        Several ends of count that went by since the last time make one request, as the controller keeps no more.
+        """
+        counter = self.counters[0]
+        reload = counter.reload or 65536
+        ends = (self.now() - counter.start) // reload
+        if counter.mode == 0:
+            ends = min(ends, 1)
+        if ends > counter.fired:
+            counter.fired = ends
+            pics.raise_line(0)
+        if counter.mode == 0 and counter.fired:
+            return None
+        next_end = counter.start + (counter.fired + 1) * reload  # in ticks
+        return -(-next_end // self.ticks_per_instruction)
 
     def read(self, port):
         """A byte read from the data port of counter 0, 1 or 2."""
@@ -89,6 +114,9 @@ class Timer:
             counter.pending_low = None
         counter.reload = reload
         counter.start = self.now()
+        counter.fired = 0
+        if self.on_change:
+            self.on_change()
 
     def write_control(self, byte):
         """The control byte: bits 7-6 pick the counter, 5-4 how it is read and loaded, 3-1 the mode, 0 BCD."""
@@ -108,15 +136,16 @@ class Timer:
         if mode not in (0, 2, 3):
             raise NotImplementedError(f"timer mode {mode}")
         counter.mode, counter.access = mode, access
+        if self.on_change:
+            self.on_change()
         counter.pending_low, counter.read_high_next, counter.latched = None, False, None
 
 
 def install(cpu, ticks_per_instruction=TICKS_PER_INSTRUCTION):
     """Put a timer on ports 40h-43h of the CPU. Its clock is the CPU's count of executed instructions. Returns it."""
-    timer = Timer(lambda: cpu.instructions * ticks_per_instruction)
+    timer = Timer(lambda: cpu.instructions * ticks_per_instruction, ticks_per_instruction)
     for port in (0x40, 0x41, 0x42):
         cpu.port_readers[port] = timer.read
     for port in (0x40, 0x41, 0x42, 0x43):  # the control port can only be written
         cpu.port_writers[port] = timer.write
-    return timer
     return timer

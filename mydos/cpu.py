@@ -7,6 +7,8 @@ from .fpu import Fpu
 from .ops32 import Ops32, signed
 from .opcodes import ADDRESS_SIZED, PREFIXES, Alu, Op
 
+NEVER = 1 << 62  # an instruction count that is never reached: the time of an event that is not to come
+
 
 # The memory of the machine: the first megabyte is that of DOS, and what is above it is for the 32-bit programs. It is
 # all there from the start, and costs nothing until it is written to; pages.py tells how it is saved.
@@ -101,6 +103,9 @@ class CPU(Ops32, Fpu, FlatMemory):
         self.seg_override = None  # set by step(): segment register from a prefix, or None
         self.trace = None  # optional fn(cpu), called before every instruction (for the -d log)
         self.breakpoints = {}  # offset -> True (at any selector) or the set of the selectors that run() stops at
+        self.pics = None  # the interrupt controllers (pic.Pics), when the machine has them
+        self.event_sources = []  # fn(instructions) -> the instruction count of its next event, or None (see events())
+        self.next_event = NEVER  # the instruction count at which events() is to look at the devices and the lines
         self.rep = None  # set by step(): the repeat prefix in front of this instruction (F3 or F2), or None
 
         # opcode byte -> handler(op). Groups get one entry per opcode value.
@@ -571,6 +576,8 @@ class CPU(Ops32, Fpu, FlatMemory):
         stops the emulator with an error showing where it happened and the bytes around it, so the
         next thing to implement is always obvious.
         """
+        if self.instructions >= self.next_event:
+            self.events()
         self.instructions += 1
         if self.trace:
             self.trace(self)
@@ -1413,7 +1420,10 @@ class CPU(Ops32, Fpu, FlatMemory):
         Where the table has 0000:0000 the interrupt is one of ours, a Python function registered in
         self.int_handlers (see dos.py and bios.py). An interrupt that is neither stops the emulator.
         """
-        n = self.fetch8()
+        self.dispatch(self.fetch8())
+
+    def dispatch(self, n):
+        """Go to the handler of interrupt `n`, as INT does with the number it has read (see int_)."""
         vector = int.from_bytes(self.mem[n * 4:n * 4 + 4], "little")  # the table is at address 0 in any mode
         offset, segment = vector & 0xFFFF, vector >> 16
         if offset or segment:
@@ -1427,6 +1437,54 @@ class CPU(Ops32, Fpu, FlatMemory):
         if h is None:
             raise NotImplementedError(f"INT {n:02X} at {self.s[self.CS]:04X}:{self.start_ip:04X}")
         h(self)
+
+    def wake(self):
+        """Make the next instruction look at the devices and the lines: something has changed there."""
+        self.next_event = 0
+
+    def events(self):
+        """Look at what happens in the devices and at the lines of the interrupt controllers; called by step() when
+        the time has come: the instruction count is at `next_event`.
+
+        The devices of `event_sources` raise their lines when it is time, and say when the next is. Then a line that
+        is allowed to interrupt makes the CPU go to its handler, if interrupts are allowed (IF); if not, the CPU looks
+        again at the next instruction, and at the next, until they are.
+        """
+        soonest = NEVER
+        for source in self.event_sources:
+            due = source(self.instructions)
+            if due is not None and due < soonest:
+                soonest = due
+        self.next_event = soonest
+        if self.pics is not None and self.pics.pending() is not None:
+            if self.flags & flags.IF:
+                self.interrupt_by(self.pics.acknowledge())
+            self.next_event = min(soonest, self.instructions + 1)  # another line may wait, or IF may be set next
+
+    def interrupt_by(self, line):
+        """The interrupt of a line of the controllers, taken between two instructions.
+
+        A program that has put an address in the table gets it called. Where it has not, the handler is the BIOS's,
+        which is not here: the end of the interrupt is said at once, and the program goes on. The BIOS handler of
+        the timer calls the interrupt 1Ch, for the programs that wait there for a tick: that one is called, if there
+        is a handler.
+        """
+        number = self.pics.vector(line)
+        hooked = self.vector_is_set(number)
+        if not hooked and number == 0x08:
+            number = 0x1C
+        if self.vector_is_set(number):
+            if self.flat:
+                raise NotImplementedError(f"interrupt {number:02X} of the line {line} with a handler in the flat mode")
+            self.dispatch(number)
+        elif not hooked and number in self.int_handlers:
+            self.int_handlers[number](self)
+        if not hooked:
+            self.pics.end(line)  # the handler is the BIOS's, and it is done
+
+    def vector_is_set(self, n):
+        """Whether a program has put the address of a handler of interrupt `n` in the table."""
+        return bool(int.from_bytes(self.mem[n * 4:n * 4 + 4], "little"))
 
     def iret(self, op):
         """Return from an interrupt handler (opcode CF): pop IP, then CS, then the flags.

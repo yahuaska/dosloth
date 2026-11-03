@@ -372,6 +372,16 @@ class TestAMachineThatGoesOn(SnapshotTest):
         self.assertEqual((b.pics[0].mask, b.pics[1].mask), (0x12, 0x34))
         self.assertEqual(b.cpu.port_readers[0x21].__self__, b.pics[0])
 
+    def test_the_registers_of_the_dma_come_back(self):
+        a = self.make()
+        a.dma.addresses[1], a.dma.masked[1], a.dma.ended = 0x1234, False, 2
+        path = str(self.out / "x.state")
+        snapshot.save(path, a)
+        b = self.make()
+        snapshot.load(path, b)
+        self.assertEqual((b.dma.addresses[1], b.dma.masked[1], b.dma.ended), (0x1234, False, 2))
+        self.assertIs(b.cpu.port_readers[0x03].__self__, b.dma)
+
     def tampered_without(self, computer, part):
         data = snapshot.unpack(*snapshot.capture(computer))
         del data[part]

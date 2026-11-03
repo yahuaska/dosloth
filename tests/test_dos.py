@@ -68,6 +68,42 @@ class TestIoctlGetDeviceInfo(unittest.TestCase):
                 int21(0x4400 | al, bx=1)
 
 
+class TestTheVectors(unittest.TestCase):
+    """INT 21h AH=25h and 35h: the table of vectors, and what a vector that has no handler of ours gives."""
+
+    def setUp(self):
+        self.cpu = CPU()
+        dos.install(self.cpu)
+        self.cpu.s[CPU.CS], self.cpu.s[CPU.DS] = 0x1000, 0x2000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x21])
+
+    def call(self, ax, dx=0):
+        self.cpu.r[CPU.AX], self.cpu.r[CPU.DX], self.cpu.ip = ax, dx, 0
+        self.cpu.step()
+        return self.cpu.s[CPU.ES], self.cpu.r[CPU.BX]
+
+    def test_a_vector_that_is_set_is_given_back(self):
+        self.call(0x2560, 0x1234)
+        self.assertEqual(self.call(0x3560), (0x2000, 0x1234))
+
+    def test_a_vector_with_no_handler_gives_an_iret_in_the_rom(self):
+        where = self.call(0x3560)
+        self.assertEqual(where, dos.IRET_AT)
+        self.assertEqual(self.cpu.mem[where[0] * 16 + where[1]], 0xCF)
+
+    def test_the_vectors_of_the_controllers_give_a_handler_that_ends_the_interrupt_first(self):
+        for number, at, ports in ((0x08, dos.MASTER_EOI_AT, (0x20,)), (0x0D, dos.MASTER_EOI_AT, (0x20,)),
+                                  (0x70, dos.SLAVE_EOI_AT, (0xA0, 0x20)), (0x77, dos.SLAVE_EOI_AT, (0xA0, 0x20))):
+            where = self.call(0x3500 | number)
+            self.assertEqual(where, at, number)
+            code = bytes(self.cpu.mem[where[0] * 16 + where[1]:where[0] * 16 + where[1] + 9])
+            self.assertEqual([code[i + 1] for i in range(len(code)) if code[i] == 0xE6], list(ports))
+            self.assertIn(0xCF, code)
+
+    def test_a_vector_that_is_ours_gives_the_zero_that_it_always_gave(self):
+        self.assertEqual(self.call(0x3521), (0, 0))  # INT 21h is a Python function: nothing is in the table
+
+
 class TestAbsoluteDiskRead(unittest.TestCase):
     """INT 25h: sectors of a disk. This machine has none to give, so it is an error, and the flags stay on the stack."""
 

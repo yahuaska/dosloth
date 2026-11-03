@@ -79,7 +79,16 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   take the lowest free slot
 - `mydos/dump.py` - the crash dump (`<program>.crash.json` and `.crash.mem`): beside the program, or in the current
   directory when that cannot be written to (a program on a CD-ROM); a failing dump never hides the real error
-- `mydos/timer.py` - the 8253/8254 timer on ports 40h-43h; its time is the count of executed instructions
+- `mydos/timer.py` - the 8253/8254 timer on ports 40h-43h; its time is the count of executed instructions; counter 0
+  raises line 0 at the end of every count (`events`, a source of the CPU)
+- `mydos/pic.py` - the two 8259 interrupt controllers (20h/21h, A0h/A1h): masks, requests, in service, EOI, ICW1-4; a
+  device raises a line (`raise_line`), the CPU takes it between two instructions (`CPU.events`, `interrupt_by`):
+  a handler that a program put in the vector table is called, else the BIOS one (not there) is as good as done: the
+  line is ended at once, the timer line goes to INT 1Ch. The check costs one comparison per instruction
+  (`cpu.next_event`; `cpu.wake()` after anything that may change it). A handler in the flat mode stops the emulator
+- `mydos/dma.py` - the 8237 DMA controller, channels 0-3, and the pages: the registers only, no transfers
+- `mydos/soundblaster.py` - a Sound Blaster that plays nothing: it is at 220h (IRQ 7, DMA 1), answers reset, version,
+  echo, the time constant and the DMA output (over at once, with the interrupt); the other bases 210h-260h read 0FFh
 - `mydos/vga.py` - a VGA card for the planar modes: the ports 3C0h-3DFh, and the window A0000h-AFFFFh as
   four planes with the write modes 0-3, read modes 0-1 and the latches; the colors: the DAC (3C6h-3C9h) and the
   palette registers of the attribute controller (3C0h). Mode 13h (256 colors, 320x200) is the chain-4 bit of the

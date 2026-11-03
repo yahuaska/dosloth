@@ -5,7 +5,7 @@ snapshot.py), so the code that does it is here, once.
 """
 from dataclasses import dataclass
 
-from . import bios, country, dos, mouse, patches, pic, soundblaster, sysport, timer, vesa, vga
+from . import bios, country, dma, dos, mouse, patches, pic, soundblaster, sysport, timer, vesa, vga
 from .cpu import CPU
 
 
@@ -21,6 +21,7 @@ class Machine:
     sysport: object  # port 61h
     volumes: object
     pics: object = None  # (master, slave): the interrupt controllers
+    dma: object = None  # the DMA controller
     soundblaster: object = None  # the silent card
     program: str | None = None  # where the program is on the host, which is what a dump of a crash is named after
 
@@ -38,13 +39,18 @@ def build(volumes):
     card = vga.install(cpu)
     pointer = mouse.install(cpu)
     port = sysport.install(cpu, clock)
-    blaster = soundblaster.install(cpu)
     controllers = pic.install(cpu)
+    channels = dma.install(cpu)
+    cpu.event_sources.append(lambda now: clock.events(now, controllers))
+    clock.on_change = cpu.wake
+    blaster = soundblaster.install(cpu, controllers, channels)
+    cpu.wake()
     patches.install(cpu)
-    return Machine(cpu, keyboard, state, clock, card, pointer, port, volumes, controllers, blaster)
+    return Machine(cpu, keyboard, state, clock, card, pointer, port, volumes, controllers, channels, blaster)
 
 
 def install_rom(cpu):
     """Write what the ROM of a real machine holds: the data of the BIOS that does not change while a program runs."""
     vesa.install(cpu)
     country.install(cpu)
+    dos.install_iret(cpu)

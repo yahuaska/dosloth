@@ -65,8 +65,72 @@ class TestTheDsp(DspTest):
         self.assertFalse(self.card.speaker)
 
     def test_another_command_stops_the_emulator(self):
-        with self.assertRaisesRegex(NotImplementedError, "no command 14"):
-            self.ask(0x14)
+        with self.assertRaisesRegex(NotImplementedError, "no command 15"):
+            self.ask(0x15)
+
+
+class TestTheInterrupt(unittest.TestCase):
+    def setUp(self):
+        from mydos import pic
+        self.cpu = CPU()
+        self.pics = pic.install(self.cpu)
+        self.card = soundblaster.install(self.cpu, self.pics)
+        self.pics.master.mask = 0
+
+    def test_the_command_f2_raises_line_7(self):
+        self.cpu.port_out(BASE + 0xC, 0xF2)
+        self.assertEqual(self.pics.pending(), 7)
+
+    def test_a_read_of_the_status_takes_back_an_interrupt_that_was_not_taken(self):
+        self.cpu.port_out(BASE + 0xC, 0xF2)
+        self.cpu.port_in(BASE + 0xE)
+        self.assertIsNone(self.pics.pending())
+
+    def test_a_read_of_the_status_does_not_stop_an_interrupt_in_service(self):
+        self.cpu.port_out(BASE + 0xC, 0xF2)
+        self.pics.acknowledge()
+        self.cpu.port_in(BASE + 0xE)
+        self.assertEqual(self.pics.master.in_service, 0x80)
+
+    def test_the_card_without_controllers_just_does_not_interrupt(self):
+        card = SoundBlaster()
+        card.write(BASE + 0xC, 0xF2)
+
+
+class TestThePlayingByDma(unittest.TestCase):
+    def setUp(self):
+        from mydos import dma, pic
+        self.cpu = CPU()
+        self.pics = pic.install(self.cpu)
+        self.pics.master.mask = 0
+        self.dma = dma.install(self.cpu)
+        self.card = soundblaster.install(self.cpu, self.pics, self.dma)
+
+    def ask(self, *bytes_):
+        for byte in bytes_:
+            self.cpu.port_out(BASE + 0xC, byte)
+
+    def test_the_time_constant_is_kept_and_has_one_byte(self):
+        self.ask(0x40, 0x64)
+        self.assertEqual(self.card.time_constant, 0x64)
+        self.assertEqual(self.card.waiting_for, 0)
+
+    def test_the_output_is_over_at_once_with_the_channel_at_its_end_and_the_interrupt(self):
+        self.ask(0x14, 0x10)
+        self.assertIsNone(self.pics.pending())  # a byte is yet to come
+        self.ask(0x00)
+        self.assertEqual(self.pics.pending(), 7)
+        self.assertEqual(self.cpu.port_in(0x08), 0x02)  # the channel 1 has reached the end
+
+    def test_a_reset_forgets_the_arguments_that_came(self):
+        self.ask(0x14, 0x10)
+        self.cpu.port_out(BASE + 6, 1)
+        self.cpu.port_out(BASE + 6, 0)
+        self.ask(0xE1)
+        self.assertEqual([self.cpu.port_in(BASE + 0xA) for _ in range(3)], [0xAA, 4, 5])
+
+    def test_the_state_has_no_controllers_in_it(self):
+        self.assertNotIn("dma", self.card.state())
 
 
 class TestTheMixer(DspTest):
@@ -101,7 +165,7 @@ class TestTheOtherPlaces(DspTest):
 class TestTheState(unittest.TestCase):
     def test_all_of_it_is_numbers_and_lists(self):
         import json
-        json.dumps(vars(SoundBlaster()))
+        json.dumps(SoundBlaster().state())
 
 
 if __name__ == "__main__":
