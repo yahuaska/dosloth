@@ -360,8 +360,7 @@ def int21(cpu, state):
                 cpu.set_flag(flags.CF, True)
                 cpu.r[CPU.AX] = ACCESS_DENIED
             else:
-                for i, byte in enumerate(data):
-                    cpu.wb(cpu.s[CPU.DS], (cpu.wide(CPU.DX) + i) & cpu.address_mask(), byte)
+                cpu.write_bytes(cpu.s[CPU.DS], cpu.wide(CPU.DX), data)
                 put_count(cpu, len(data))
                 cpu.set_flag(flags.CF, False)
     elif ah == 0x40:  # write CX bytes from DS:DX to the file handle in BX; AX = how many were written

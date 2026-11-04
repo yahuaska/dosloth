@@ -277,6 +277,18 @@ class CPU(Ops32, Fpu, FlatMemory):
         self.wb(seg, off, val)
         self.wb(seg, off + 1, val >> 8)
 
+    def write_bytes(self, seg, off, data):
+        """Write the bytes of `data` from seg:off on, each one as wb does it: the offset wraps at 64 KB, the address at
+        1 MB, and the window of the video card takes its bytes. A run that wraps nowhere and does not touch the window is
+        one copy: what a program that reads a file into its memory asks for."""
+        start = seg * 16 + off
+        end = start + len(data)
+        if off + len(data) <= 0x10000 and end <= 0x100000 and (end <= self.video_start or start >= self.video_end):
+            self.mem[start:end] = data
+            return
+        for i, byte in enumerate(data):
+            self.wb(seg, (off + i) & 0xFFFF, byte)
+
     # --- 8-bit register access: 0-3 = AL CL DL BL, 4-7 = AH CH DH BH ---
     def get8(self, n):
         """Read an 8-bit register by its x86 number.

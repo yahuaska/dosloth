@@ -385,3 +385,30 @@ class TestTheMode(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWriteBytesOfTheFlatMemory(unittest.TestCase):
+    """CPU.write_bytes with selectors: the same as writing the bytes one by one."""
+
+    def test_a_run_goes_to_the_base_of_the_selector_and_the_offset(self):
+        cpu = flat_cpu()
+        cpu.write_bytes(0x18, 0x10, b"hello")
+        self.assertEqual(bytes(cpu.mem[0x30010:0x30015]), b"hello")
+
+    def test_a_run_in_the_window_of_the_card_and_over_its_edges_goes_as_bytes_do(self):
+        cpu = TestTheWindowOfTheVideoCard().machine()
+        cpu.write_bytes(0x10, 0xA0010, b"\x01\x02")
+        cpu.write_bytes(0x10, 0x9FFFE, b"\x11\x22\x33\x44")
+        self.assertEqual(cpu.video.cells, {0x10: 1, 0x11: 2, 0: 0x33, 1: 0x44})
+        self.assertEqual(bytes(cpu.mem[0x9FFFE:0xA0000]), b"\x11\x22")
+        self.assertEqual(cpu.mem[0xA0010], 0)
+
+    def test_a_run_that_goes_past_the_end_of_the_memory_stops_the_emulator_as_a_byte_does(self):
+        cpu = flat_cpu()
+        with self.assertRaises(IndexError):
+            cpu.write_bytes(0x10, MEMORY_SIZE - 1, b"ab")
+
+    def test_the_offset_wraps_at_4_gb(self):
+        cpu = flat_cpu(Bases({0x10: 0x100}))
+        cpu.write_bytes(0x10, 0xFFFFFFFE, b"abcd")  # the sum is 0x100000000FE... it wraps: 0xFE, 0xFF, then 0x100, 0x101
+        self.assertEqual(bytes(cpu.mem[0xFE:0x102]), b"abcd")

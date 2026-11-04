@@ -21,7 +21,8 @@ from .opcodes import ADDRESS_SIZED, PREFIXES
 U16 = struct.Struct("<H")
 U32 = struct.Struct("<I")
 # the methods that are put in place of those of real mode
-FLAT_NAMES = ("rb", "rw", "rd", "wb", "ww", "wd", "addr", "fetch8", "fetch16", "fetch32", "step")
+FLAT_NAMES = ("rb", "rw", "rd", "wb", "ww", "wd", "write_bytes", "addr", "fetch8", "fetch16", "fetch32",
+              "step")
 
 
 class Bases(dict):
@@ -143,6 +144,18 @@ class FlatMemory:
             self.ww_flat(seg, off + 2, val >> 16)
         else:
             U32.pack_into(self.mem, address, val & 0xFFFFFFFF)
+
+    def write_bytes_flat(self, seg, off, data):
+        """Write the bytes of `data` from seg:off on, each one as wb does it (the offset wraps at 4 GB, an address that
+        is not in the memory stops the emulator, and the window of the video card takes its bytes). A run that is in the
+        memory and does not touch the window is one copy."""
+        start = self.bases[seg] + off
+        end = start + len(data)
+        if end <= len(self.mem) and (end <= self.video_start or start >= self.video_end):
+            self.mem[start:end] = data
+            return
+        for i, byte in enumerate(data):
+            self.wb_flat(seg, (off + i) & 0xFFFFFFFF, byte)
 
     # --- the program ---
     def fetch8_flat(self):

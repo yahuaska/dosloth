@@ -2267,3 +2267,53 @@ class TestAamAad(unittest.TestCase):
             self.run_one(cpu, code, 0x0529)
             self.assertEqual(cpu.r[1:], [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777])
             self.assertTrue(cpu.get_flag(flags.DF) and cpu.get_flag(flags.IF))
+
+
+class FakeWindow:
+    """A video card with a window: the bytes that are written in it go to the card, and not to the memory."""
+
+    def __init__(self):
+        self.cells = {}
+
+    def write_memory(self, offset, value):
+        self.cells[offset] = value
+
+
+class TestWriteBytes(unittest.TestCase):
+    """CPU.write_bytes: a run of bytes in the memory, with what wb does for each of them."""
+
+    def test_a_run_goes_into_the_memory_at_the_place(self):
+        cpu = CPU()
+        cpu.write_bytes(0x1000, 0x20, b"hello")
+        self.assertEqual(bytes(cpu.mem[0x10020:0x10025]), b"hello")
+        self.assertEqual(cpu.mem[0x10025], 0)
+
+    def test_an_empty_run_writes_nothing(self):
+        cpu = CPU()
+        cpu.write_bytes(0x1000, 0x20, b"")
+        self.assertEqual(cpu.mem[0x10020], 0)
+
+    def test_the_offset_wraps_at_64_kb_inside_the_segment(self):
+        cpu = CPU()
+        cpu.write_bytes(0x1000, 0xFFFE, b"abcd")
+        self.assertEqual((bytes(cpu.mem[0x1FFFE:0x20000]), bytes(cpu.mem[0x10000:0x10002])), (b"ab", b"cd"))
+
+    def test_the_address_wraps_at_1_mb(self):
+        cpu = CPU()
+        cpu.write_bytes(0xFFFF, 0x0008, b"xyz")  # 0xFFFF8, and on: three bytes that go over the end
+        cpu.write_bytes(0xFFFF, 0x0012, b"pq")  # starts at 0x100002: wraps to 2
+        self.assertEqual(bytes(cpu.mem[0xFFFF8:0xFFFFB]), b"xyz")
+        self.assertEqual(bytes(cpu.mem[2:4]), b"pq")
+        cpu.write_bytes(0xFFFF, 0x000E, b"1234")  # 0xFFFFE, 0xFFFFF, 0x100000, 0x100001: the last two wrap
+        self.assertEqual((bytes(cpu.mem[0xFFFFE:0x100000]), bytes(cpu.mem[0:2])), (b"12", b"34"))
+
+    def test_the_bytes_in_the_window_of_the_card_go_to_the_card(self):
+        cpu = CPU()
+        cpu.video = FakeWindow()
+        cpu.video_start, cpu.video_end = 0xA0000, 0xB0000
+        cpu.write_bytes(0xA000, 0x0000, b"ab")
+        self.assertEqual(cpu.video.cells, {0: ord("a"), 1: ord("b")})
+        cpu.write_bytes(0x9FFF, 0x000E, b"cdef")  # two bytes of memory, then two of the card
+        self.assertEqual(cpu.mem[0xA0000], 0)
+        self.assertEqual(bytes(cpu.mem[0x9FFFE:0xA0000]), b"cd")
+        self.assertEqual((cpu.video.cells[0], cpu.video.cells[1]), (ord("e"), ord("f")))
