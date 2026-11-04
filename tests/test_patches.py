@@ -388,10 +388,11 @@ def save_machine_at(volumes, path, segment, ip, number):
         patches.LATE_PATCHES[:] = saved
 
 
-def run_saved_machine(volumes, path, patched, segment, back, inside=None):
-    """Put the saved machine back, and run it until it returns (to `back`, with the stack as it was less the address): once
-    as the code is, once with the patch. `inside(cpu, ip)` is called at an address on the way, if it is given, to change
-    something (the same for both). Returns what is left: the registers, the flags, the count of instructions, the hash of
+def run_saved_machine(volumes, path, patched, segment, back, inside=None, pop=4, events=None):
+    """Put the saved machine back, and run it until it returns (to `back`, with the stack as it was less `pop` bytes): once
+    as the code is, once with the patch. `inside(cpu)` is called before every instruction, if it is given, to change
+    something (the same for both). `events` is a list: if it is given, a source of events that does nothing is there, and
+    the count of instructions at which it is asked is put in the list. Returns what is left: the registers, the flags, the count of instructions, the hash of
     the memory and that of the picture."""
     from mydos import machine, snapshot
     saved = list(patches.LATE_PATCHES)
@@ -409,17 +410,23 @@ def run_saved_machine(volumes, path, patched, segment, back, inside=None):
     if not patched:  # the code as it is: what the patch stood in the place of goes back
         cpu.mem[BLOCKS_AT:BLOCKS_AT + 2] = bytes((0x3C, 0x08))  # cmp al, 8
     cpu.event_sources, cpu.next_event = [], NEVER  # nothing of the devices comes in the middle
+    if events is not None:
+        def source(now):
+            events.append(now)
+            return (now // EVENTS_EVERY + 1) * EVENTS_EVERY  # (the times of a device are on its own grid)
+        cpu.event_sources.append(source)
+        cpu.wake()
     stack = cpu.wide(CPU.SP)
     start = cpu.instructions
 
     def trace(cpu):
         if inside is not None:
             inside(cpu)
-        if cpu.s[CPU.CS] == segment and cpu.ip == back and cpu.wide(CPU.SP) == stack + 4:
+        if cpu.s[CPU.CS] == segment and cpu.ip == back and cpu.wide(CPU.SP) == stack + pop:
             raise Exit(0)
     cpu.trace = trace
     cpu.run(1 << 30, lambda: None)
-    for place in (BLOCKS_AT, MIXER_AT + 0x46, MIXER_AT + 0xBB):  # (where the INTs stand)
+    for place in (BLOCKS_AT, MIXER_AT + 0x46, MIXER_AT + 0xBB, DELAY_AT):  # (where the INTs stand)
         cpu.mem[place:place + 2] = bytes(2)
     picture = hashlib.sha1(b"".join(bytes(plane) for plane in computer.card.planes)).hexdigest()
     return (cpu.r, cpu.rh, cpu.s[:], cpu.flags, cpu.ip, cpu.instructions - start, hashlib.sha1(cpu.mem).hexdigest(), picture)
@@ -451,6 +458,8 @@ class TestTheBlocksOfAFrame(unittest.TestCase):
 
 # --- the mixer of the sound, that comes with the driver, later than the program
 
+EVENTS_EVERY = 100_000  # for the test of a wait that must not go past an event
+DELAY_AT = 0x12B2FB  # where the outer loop of the wait of the reset is, in the run of the video 2
 MIXER_AT = 0x12E144  # where the procedure is, in the run of the video 2 (the driver is put there)
 MIXER_CALL, MIXER_LOOP = 0x2144, 0x217A  # the offsets in its segment: the procedure, and just before its first loop
 
@@ -547,3 +556,36 @@ class TestTheSmallTreeOfTheSound(Beside):
         for start, end in ((SMALL_OUT, SMALL_OUT + 0x2000), (0x114960, 0x114961), (STACK - 0x400, STACK)):
             self.assertEqual(bytes(original.mem[start:end]), bytes(patched.mem[start:end]), hex(start))
         return original, patched
+
+
+class TestTheWaitOfTheResetOfTheSoundBlaster(unittest.TestCase):
+    """The loop that does nothing, in the reset of the card, is run by the code and by the patch from the same saved
+    machine: the same registers, memory and count of instructions, with nothing to stop it, and with an event of the
+    devices every 100,000 instructions (the patch has to stop at it and go on, and not go past it)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.volumes = disc_machine()
+        cls.directory = tempfile.TemporaryDirectory()
+        cls.state = Path(cls.directory.name) / "reset.state"
+        save_machine_at(cls.volumes, cls.state, 0x2F, 0x2FB, 1)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.directory.cleanup()
+
+    def test_the_wait_takes_the_same_instructions(self):
+        original = run_saved_machine(self.volumes, self.state, False, 0x2F, 0x307, pop=0)
+        patched = run_saved_machine(self.volumes, self.state, True, 0x2F, 0x307, pop=0)
+        self.assertGreater(original[5], 2_000_000)  # 65535 rounds of 36 instructions
+        self.assertEqual(original, patched)
+
+    def test_an_event_that_comes_in_the_wait_is_taken_where_it_is_due(self):
+        before, after = [], []
+        original = run_saved_machine(self.volumes, self.state, False, 0x2F, 0x307, pop=0, events=before)
+        patched = run_saved_machine(self.volumes, self.state, True, 0x2F, 0x307, pop=0, events=after)
+        self.assertEqual(original, patched)
+        self.assertGreater(len(before), 20)
+        self.assertEqual(len(before), len(after))
+        for then, now in zip(before, after):  # (a round is not cut, so the event may come a round late)
+            self.assertLess(abs(then - now), 36)

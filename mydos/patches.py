@@ -849,7 +849,7 @@ PATCHES = [Patch("the tree of Smacker", 0x10DD90, 0x2F9,
 # The patches of code that is not in the program when it is loaded, but comes later: the driver of the sound is
 # read from a file by the player, and put where there is room. Such a piece is found by its bytes, and patched when it
 # is there (and again when a saved machine is put back, for it keeps the INTs, and does not know what they mean).
-LOOK_EVERY = 2_000_000  # the instructions between the looks, until all the pieces are found
+LOOK_EVERY = 50_000  # the instructions between the looks, until all the pieces are found
 SEARCH_FROM, SEARCH_TO = 0x100000, 0x800000  # where the program puts such code: above the first megabyte
 
 
@@ -941,13 +941,40 @@ def mix_samples(cpu, counter, after):
     cpu.ip = after
 
 
+# The reset of the Sound Blaster in the driver of the sound waits for the card by a loop that does nothing: ECX rounds,
+# and in each round the inner loop (`nop`, `loop`) goes 16 times: 36 instructions in a round, 2.2 million in all, when
+# ECX is FFFFh. It is the same time for the program, and no work for us, if the instruction count goes on by what the
+# loop would have run, up to the next event of the devices (a tick of the timer must come when it is due, to within a
+# round or two: a round is not cut).
+DELAY_ROUND = 36  # push, mov, 16 times (nop, loop), pop, loop
+DELAY_START, DELAY_END = 0x2FB, 0x307  # the offsets of the outer loop and of what comes after it, in the code of the driver
+
+
+def reset_delay(cpu):
+    """What the delay of the reset does: ECX rounds of 36 instructions that change nothing but ECX (it is 0 at the end),
+    and the stack below the pointer (the last ECX that was pushed). The rounds that go before the next event of the
+    devices are made at once, and the code is started again at the loop for the rest."""
+    rounds_left = cpu.wide(CPU.CX) or 1 << 32  # (ECX = 0 is a loop of 2**32 rounds)
+    room = cpu.next_event - cpu.instructions + 1  # the instructions that go before the event is looked at
+    rounds = max(1, min(rounds_left, room // DELAY_ROUND))
+    cpu.instructions += rounds * DELAY_ROUND - 1  # (the INT stands for the first one)
+    left = rounds_left - rounds
+    DWORD.pack_into(cpu.mem, cpu.bases[cpu.s[CPU.SS]] + cpu.wide(CPU.SP) - 4, left + 1 & MASK)  # the last `push ecx`
+    cpu.set32(CPU.CX, left & MASK)
+    cpu.ip = DELAY_START if left else DELAY_END
+
+
 # The mixer of the driver of the sound: the procedure at 2144 of its code, that mixes what is to be played into the
 # ring of the buffer; it has two loops, one up to the end of the ring, and one from its beginning.
 LATE_PATCHES = [LatePatch("the mixer of the sound",
                           "1e568b0d10130000890d141300000fb7463266f72dfc12000003d28bda668e05",
                           0x118, "5976e86960d7b54a2c51eb978f2d05c6875e674c7c48ba6af1b8a1d34ab75f8d",
                           [(0x46, bytes.fromhex("8a44"), mix_into_ring(0x130C, 0x21E4)),
-                           (0xBB, bytes.fromhex("8a44"), mix_into_ring(0x1314, 0x2259))])]
+                           (0xBB, bytes.fromhex("8a44"), mix_into_ring(0x1314, 0x2259))]),
+                LatePatch("the wait of the reset of the Sound Blaster",
+                          "a25f010000c6055e01000062c6053307000003a05e010000a230070000a05f01",
+                          0x72, "8b3007afa47d4324eddd4fe8218557408cb01581eaf66fd5f1bbc8ff40c34f36",
+                          [(0x3A, bytes.fromhex("51b9"), reset_delay)])]
 
 
 def apply(cpu, patches=None):
