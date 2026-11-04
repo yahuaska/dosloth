@@ -382,47 +382,36 @@ ROW_COUNTS = (6, 4, 4, 4, 4, 3, 4, 4, 3, 3, 2, 3, 4, 4, 4, 6)
 STRIP_ENDS = (0x10FF40, 0x1106F0, 0x1107E0, 0x110920)
 
 
+def _rol(value, count):
+    return (value << count | value >> 32 - count) & MASK
+
+
+def _swap_bytes(value):  # xchg ah, al
+    return value & 0xFFFF0000 | (value & 0xFF) << 8 | value >> 8 & 0xFF
+
+
+# what the 16 ways of the code of a row make of EAX, of the colors in EDX (the first in DL, the second in DH)
+ROW_WAYS = (lambda c: (c & 0xFF) * 0x01010101,
+            lambda c: _rol(c & 0xFFFF00FF | (c & 0xFF) << 8, 8),
+            lambda c: _rol(c & 0xFFFF00FF | (c & 0xFF) << 8, 16),
+            lambda c: _rol(_swap_bytes(c), 8),
+            lambda c: _rol(c & 0xFFFF00FF | (c & 0xFF) << 8, 24),
+            lambda c: _rol(c, 8),
+            lambda c: _swap_bytes(_rol(c, 8)),
+            lambda c: _rol(c & 0xFFFFFF00 | c >> 8 & 0xFF, 8),
+            lambda c: c & 0xFFFF00FF | (c & 0xFF) << 8,
+            _swap_bytes,
+            lambda c: c,
+            lambda c: c & 0xFFFFFF00 | c >> 8 & 0xFF,
+            lambda c: _rol(_swap_bytes(c), 24),
+            lambda c: _rol(c & 0xFFFFFF00 | c >> 8 & 0xFF, 24),
+            lambda c: _rol(c & 0xFFFFFF00 | c >> 8 & 0xFF, 16),
+            lambda c: (c >> 8 & 0xFF) * 0x01010101)
+
+
 def row_of_colors(way, colors):
     """What the way `way` of the code of a row makes of EAX, of the colors in `colors` (EDX)."""
-    low, high = colors & 0xFF, colors >> 8 & 0xFF
-
-    def rol(value, count):
-        return (value << count | value >> 32 - count) & MASK
-
-    def swap_bytes(value):  # xchg ah, al
-        return value & 0xFFFF0000 | (value & 0xFF) << 8 | value >> 8 & 0xFF
-
-    if way == 0:
-        return low * 0x01010101
-    if way == 15:
-        return high * 0x01010101
-    if way == 1:
-        return rol(colors & 0xFFFF00FF | low << 8, 8)
-    if way == 2:
-        return rol(colors & 0xFFFF00FF | low << 8, 16)
-    if way == 3:
-        return rol(swap_bytes(colors), 8)
-    if way == 4:
-        return rol(colors & 0xFFFF00FF | low << 8, 24)
-    if way == 5:
-        return rol(colors, 8)
-    if way == 6:
-        return swap_bytes(rol(colors, 8))
-    if way == 7:
-        return rol(colors & 0xFFFFFF00 | high, 8)
-    if way == 8:
-        return colors & 0xFFFF00FF | low << 8
-    if way == 9:
-        return swap_bytes(colors)
-    if way == 10:
-        return colors
-    if way == 11:
-        return colors & 0xFFFFFF00 | high
-    if way == 12:
-        return rol(swap_bytes(colors), 24)
-    if way == 13:
-        return rol(colors & 0xFFFFFF00 | high, 24)
-    return rol(colors & 0xFFFFFF00 | high, 16)  # 14
+    return ROW_WAYS[way](colors)
 
 
 def frame_blocks(cpu):
@@ -497,6 +486,48 @@ def draw_frame(cpu, dwords):
                 video.write_memory(address + number - window_start, dword >> 8 * number & 0xFF)
             else:
                 mem[address + number] = dword >> 8 * number & 0xFF
+
+    fast = None  # the planes of the card, if it is in the mode where a byte is a pixel, else False; None: not looked at yet
+
+    def look():
+        nonlocal fast
+        video.check_mode()
+        fast = tuple(video.planes) if video.chain_4() else False
+
+    def draw_block(address, pitch, row0, row1, row2, row3):
+        """The four rows of a block: dwords that are `pitch` apart."""
+        address = (base + address) & MASK
+        if fast is None:
+            look()
+        if fast and window_start <= address and address + 3 * pitch + 4 <= window_end and not (address | pitch) & 3:
+            at = address - window_start >> 2
+            step = pitch >> 2
+            plane0, plane1, plane2, plane3 = fast
+            for row in (row0, row1, row2, row3):
+                plane0[at] = row & 0xFF
+                plane1[at] = row >> 8 & 0xFF
+                plane2[at] = row >> 16 & 0xFF
+                plane3[at] = row >> 24
+                at += step
+            video.changed = True
+            return
+        for row in (row0, row1, row2, row3):
+            draw(address - base, row)
+            address = (address + pitch) & MASK
+
+    def fill(address, count, dword):
+        """`count` dwords that are the same, in a row."""
+        if fast is None:
+            look()
+        place = (base + address) & MASK
+        if fast and count and window_start <= place and place + 4 * count <= window_end and not place & 3:
+            at = place - window_start >> 2
+            for number, plane in enumerate(fast):
+                plane[at:at + count] = bytes((dword >> 8 * number & 0xFF,)) * count
+            video.changed = True
+            return
+        for number in range(count):
+            draw(address + 4 * number, dword)
 
     def value(kind, ror):
         """What the code that reads a value does. The value is in the upper 16 bits of the leaf: with `ror` it goes to AX,
@@ -581,45 +612,38 @@ def draw_frame(cpu, dwords):
                     value(kind_colors, False)
                     value(kind_mask, True)
                     ecx = eax
-                    edx = edx_mask = eax
+                    edx_mask = eax
                     eax = (eax >> 16 | eax << 16) & MASK
                     edx = edx_mask & 0xFFFF0000 | eax & 0xFFFF  # the colors, in both halves
                     eax = (eax >> 28 | ecx << 4) & MASK
                     way = eax >> 4 & 0xF
-                    executed += 8
-                    eax = row_of_colors(way, edx)
-                    executed += ROW_COUNTS[way]
-                    draw(edi, eax)
-                    edi = (edi + ebp) & MASK
+                    row0 = ROW_WAYS[way](edx)
+                    executed += 8 + ROW_COUNTS[way]
                     way = ecx >> 4 & 0xF
-                    executed += 6
-                    eax = row_of_colors(way, edx)
-                    executed += ROW_COUNTS[way]
-                    draw(edi, eax)
+                    row1 = ROW_WAYS[way](edx)
+                    executed += 6 + ROW_COUNTS[way]
                     way = ecx >> 8 & 0xF
-                    executed += 5
-                    eax = row_of_colors(way, edx)
-                    executed += ROW_COUNTS[way]
-                    draw(edi + ebp, eax)
+                    row2 = ROW_WAYS[way](edx)
+                    executed += 5 + ROW_COUNTS[way]
                     way = ecx >> 12 & 0xF
-                    executed += 5
-                    eax = row_of_colors(way, edx)
-                    executed += ROW_COUNTS[way]
+                    eax = row3 = ROW_WAYS[way](edx)
+                    executed += 5 + ROW_COUNTS[way]
                 else:
-                    for row in range(4):
-                        value(kind_full, False)
-                        value(kind_full, True)
-                        if row == 0:
-                            draw(edi, eax)
-                            edi = (edi + ebp) & MASK
-                            executed += 2
-                        elif row == 1:
-                            draw(edi, eax)
-                            executed += 1
-                        elif row == 2:
-                            draw(edi + ebp, eax)
-                            executed += 1
-                draw(edi + 2 * ebp, eax)
+                    value(kind_full, False)
+                    value(kind_full, True)
+                    row0 = eax
+                    value(kind_full, False)
+                    value(kind_full, True)
+                    row1 = eax
+                    value(kind_full, False)
+                    value(kind_full, True)
+                    row2 = eax
+                    value(kind_full, False)
+                    value(kind_full, True)
+                    row3 = eax
+                    executed += 4  # the stores of the first three rows, and the step of EDI after the first
+                draw_block(edi, ebp, row0, row1, row2, row3)
+                edi = (edi + ebp) & MASK
                 step = rd(BLOCK_STEP)
                 carry = edi < step
                 edi = (edi - step) & MASK
@@ -683,8 +707,7 @@ def draw_frame(cpu, dwords):
                 ebp = (ebp - edx) & MASK
                 edx = ecx
                 for row in range(4):
-                    for at in range(ecx):
-                        draw(edi + 4 * at, eax)
+                    fill(edi, ecx, eax)
                     edi = (edi + 4 * ecx) & MASK
                     if row < 3:
                         edi = (edi + ebp) & MASK
