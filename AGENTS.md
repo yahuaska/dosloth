@@ -127,20 +127,25 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `mydos/profile.py` - `-p REPORT`: counts every instruction by address through the trace hook and writes the hottest
   places (with the instructions and their counts) when the program ends; to see what is worth doing in Python
   (`tests/test_profile.py`)
-- `mydos/patches.py` - Python in the place of hot code: the first two bytes of a known piece of code (checked by a
+- `mydos/patches/` - Python in the place of hot code: the first two bytes of a known piece of code (checked by a
   SHA-256 of it, at its exact address) become `INT F0h`, whose handler does the work and sets the instruction pointer
-  where the code goes on (or, for a procedure, returns). So far eleven, all of SMKP.EXE (Smacker) and its driver of the
-  sound: the reader of the trees (10DD90), the reader of the small trees of the sound (10DCF0), the three procedures
-  that make tables of it (10E090, 10E1A0, 10E1D0), the loop of the blocks of a video frame
-  (10F7B0, the biggest: it draws into the window of the video card), the loop of the sound (16 bits, two
-  channels) at 11104C, the mixer of the sound and the wait of the reset of the Sound Blaster (a loop that does nothing, 2.2 million
-  instructions: the count goes on by them, up to the next event of the devices), both in the driver, which the player
-  reads from a file after the program is loaded: such a piece is looked for by its bytes (`LatePatch`), and the two descents of a tree to a leaf (11105B, 1110D9; the loop of the sound goes over them,
-  they stay for a run of the code from the middle). A patch adds to the count of instructions the ones that the code
-  would have run, so the time of the program is the same. `--no-patches` runs the code as it is. A patched program
-  shows `int F0` in the trace and the debugger; `tests/test_patches.py` runs the real code beside the patch on random
-  trees and sound data, and for a frame of the video 2 of the disc (the machine of `config_xcomapoc.toml`), when the game
-  is in XCOMA
+  where the code goes on (or, for a procedure, returns). A patch is a module of this package, and the package
+  knows none of them by name: when it is imported, once at the start, every module in it whose name does not begin
+  with an underscore is imported, and the `PATCHES` (pieces of code that the program has when it is loaded) and
+  `LATE_PATCHES` (pieces that come later, as a driver that the program reads from a file: they are looked for by their
+  bytes, `LatePatch`) that it has are put in the lists of the package. To make a patch is to put a module there. The
+  modules with an underscore are what they use: `_base` (`Patch`, `LatePatch`), `_common` (the structures of a dword and
+  the end of most patches), `_smacker` (what more than one patch of SMKP.EXE looks at). So far eleven patches, in
+  `smk_*`: the reader of the trees (10DD90), the small trees of the sound (10DCF0), the three procedures that make
+  tables of the trees (10E090, 10E1A0, 10E1D0), the loop of the blocks of a video frame (10F7B0, the biggest: it draws
+  into the window of the video card), the loop of the sound (11104C), the two descents of a tree to a leaf (11105B,
+  1110D9: the loop of the sound goes over them, they stay for a run of the code from the middle), and in the driver
+  of the sound the mixer and the wait of the reset of the Sound Blaster (a loop that does nothing, 2.2 million
+  instructions: the count goes on by them, up to the next event of the devices). A patch adds to the count of
+  instructions the ones that the code would have run, so the time of the program is the same. `--no-patches` runs the
+  code as it is. A patched program shows `int F0` in the trace and the debugger; `tests/test_patches.py` runs the real
+  code beside the patch on random trees and sound data, and for a frame of the video 2 of the disc (the machine of
+  `config_xcomapoc.toml`), when the game is in XCOMA
 - `mydos/__main__.py` - loads a .COM/.EXE and runs it: `python -m mydos tests/hello.com`; what is after the first
   `--` is the command line of the program (the options and the name come before it);
   `-d LOGFILE` writes every executed instruction to LOGFILE, e.g. `1773:0880  8B C3  mov ax, bx`;

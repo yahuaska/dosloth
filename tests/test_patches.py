@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from mydos import dos, loader, patches, psp
+from mydos.patches import smk_frame
 from mydos.cpu import CPU, Exit, NEVER
 from mydos.patches import PATCH_BYTES, Patch
 from mydos.xmem import ExtendedMemory
@@ -55,6 +56,28 @@ class TestMechanism(unittest.TestCase):
         cpu.ip = 0x2000
         with self.assertRaisesRegex(NotImplementedError, "no patch there"):
             cpu.step()
+
+    def test_every_module_of_the_package_that_is_not_private_is_loaded_and_its_patches_are_in_the_lists(self):
+        import importlib
+        import pkgutil
+        names = [info.name for info in pkgutil.iter_modules(patches.__path__) if not info.name.startswith("_")]
+        self.assertGreater(len(names), 1)
+        for name in names:
+            module = importlib.import_module(f"mydos.patches.{name}")
+            for patch in getattr(module, "PATCHES", ()):
+                self.assertIn(patch, patches.PATCHES, name)
+            for patch in getattr(module, "LATE_PATCHES", ()):
+                self.assertIn(patch, patches.LATE_PATCHES, name)
+        listed = [patch.name for patch in patches.PATCHES + patches.LATE_PATCHES]
+        self.assertEqual(len(listed), len(set(listed)))  # (no patch twice)
+
+    @unittest.skipUnless(SMKP.exists(), "the game is not here")
+    def test_the_patches_are_found_in_the_code_as_the_program_has_it_whatever_the_order(self):
+        cpu = game_machine(patch=False)
+        every = [patch.name for patch in patches.PATCHES]
+        self.assertEqual(sorted(patches.apply(cpu, list(reversed(patches.PATCHES)))), sorted(every))
+        again = game_machine(patch=False)
+        self.assertEqual(sorted(patches.apply(again)), sorted(every))
 
     def test_the_patches_that_there_are_name_their_code_by_a_hash(self):
         for patch in patches.PATCHES:
@@ -344,8 +367,8 @@ class TestTheRowsOfAMonoBlock(unittest.TestCase):
                 cpu.mem[0x10FB80] = 0xF4  # a HLT where the ways end
                 run_scenario(cpu, {}, {"edx": colors, "eax": rng.randrange(1 << 32)}, 0x10FA80 + 16 * way)
                 with self.subTest(way=way, colors=hex(colors)):
-                    self.assertEqual(cpu.wide(CPU.AX), patches.row_of_colors(way, colors))
-                    self.assertEqual(cpu.instructions, patches.ROW_COUNTS[way] + 1)  # (and the HLT)
+                    self.assertEqual(cpu.wide(CPU.AX), smk_frame.row_of_colors(way, colors))
+                    self.assertEqual(cpu.instructions, smk_frame.ROW_COUNTS[way] + 1)  # (and the HLT)
 
 
 def disc_machine():

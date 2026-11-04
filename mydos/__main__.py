@@ -60,7 +60,7 @@ def main():
     parser.add_argument("-p", metavar="REPORT", help="count how many times every instruction is executed, and write "
                         "the hottest places of the program to REPORT when it ends (about a third slower)")
     parser.add_argument("--no-patches", action="store_true", help="run the code of the program as it is, with no "
-                        "Python in its place (see patches.py): to trace it, or to compare with a patched run")
+                        "Python in its place (see the package mydos/patches): to trace it, or to compare with a patched run")
     parser.add_argument("-t", metavar="LOGFILE", help="write every call of the program to DOS (INT 21h, 2Fh, 25h, 20h) "
                         "to LOGFILE: what it asked, the names, and what DOS answered; to see what a program does "
                         "when it fails")
