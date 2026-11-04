@@ -6,16 +6,25 @@ and the answer in all of EAX), see `CPU.wide` and `CPU.address_mask`. Any other 
 number, and is done when a program asks for it.
 """
 from . import dpmi, flags
-from .cpu import CPU
+from .cpu import CPU, NEVER
 
-# A program that asks whether a key was pressed (INT 21h AH=0Bh) again and again has nothing to do but wait for the time
-# to come: a player that waits for the next frame, a game that waits for a tick. The machine is as slow as the emulator
-# is, so the wait would take as long as a real machine's wait times the number of times that the emulator is slower, and the
-# time that the wait takes is only the count of instructions (see timer.py). Each of these questions lets the time go on
-# by this many instructions, as if the program had spent them in its loop.
-IDLE_INSTRUCTIONS = 20_000
+# A program that asks whether a key was pressed (INT 21h AH=0Bh) again and again, with next to nothing done between the
+# questions, has nothing to do but wait for the time to come: a player that waits for the next frame, a game that waits
+# for a tick. The machine is as slow as the emulator is, and the time that the wait takes is only the count of
+# instructions (see timer.py), so the wait would take as long as the emulator is slow. When the questions come closer than
+# this many instructions, the time goes on at once to the next thing that is to happen (a tick of the timer, the end of a
+# block of sound), and no further: nothing is jumped over, and the program that is at work between its questions has its time.
+TIGHT_LOOP = 1000
 EXTENDER_QUESTION = 0xFF00  # AX, with 0078h in DX: is DOS/4G here?
 SHARED_WITH_REAL_MODE = (0x0B, 0x1A, 0x30, 0x3D, 0x3E, 0x3F, 0x40, 0x42, 0x44, 0x4C, 0x4E, 0x4F)
+
+
+def skip_idle_time(cpu):
+    """A question whether a key waits: if the one before it was a few instructions ago (see TIGHT_LOOP), the program is
+    waiting, and the time goes on to the next event of the devices, if there is one that is not past already."""
+    if cpu.last_poll is not None and cpu.instructions - cpu.last_poll < TIGHT_LOOP and cpu.next_event != NEVER:
+        cpu.instructions = max(cpu.instructions, cpu.next_event)
+    cpu.last_poll = cpu.instructions
 
 
 def int21(cpu, state, real):
@@ -36,7 +45,7 @@ def int21(cpu, state, real):
         cpu.set_flag(flags.CF, False)
     elif ax >> 8 in SHARED_WITH_REAL_MODE:
         if ax >> 8 == 0x0B:
-            cpu.instructions += IDLE_INSTRUCTIONS
+            skip_idle_time(cpu)
         real(cpu, state)
     else:
         raise NotImplementedError(f"INT 21h AX={ax:04X} in the flat mode")

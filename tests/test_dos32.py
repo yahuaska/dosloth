@@ -221,13 +221,56 @@ class TestFiles(FlatFiles):
         with self.assertRaisesRegex(NotImplementedError, "function of the emulator"):
             self.call32(0x3521)
 
-    def test_every_question_whether_a_key_waits_lets_the_time_go_on(self):
+    def ask_key(self):
         from types import SimpleNamespace
-        from mydos import dos32
         self.cpu.keyboard = SimpleNamespace(buffer=[])
-        before = self.cpu.instructions
         self.call32(0x0B00)
-        self.assertEqual(self.cpu.instructions - before, 1 + dos32.IDLE_INSTRUCTIONS)
+
+    def test_two_questions_close_together_let_the_time_go_on_to_the_next_event(self):
+        self.ask_key()
+        self.cpu.next_event = self.cpu.instructions + 50_000
+        self.ask_key()
+        self.assertEqual(self.cpu.instructions, self.cpu.next_event)
+
+    def test_the_first_question_does_not(self):
+        self.cpu.next_event = self.cpu.instructions + 50_000
+        before = self.cpu.instructions
+        self.ask_key()
+        self.assertEqual(self.cpu.instructions - before, 1)
+
+    def test_questions_that_come_with_work_between_them_do_not(self):
+        from mydos import dos32
+        self.ask_key()
+        self.cpu.instructions += dos32.TIGHT_LOOP
+        self.cpu.next_event = self.cpu.instructions + 50_000
+        before = self.cpu.instructions
+        self.ask_key()
+        self.assertEqual(self.cpu.instructions - before, 1)
+
+    def test_with_no_event_to_come_the_time_is_left_alone(self):
+        self.ask_key()
+        before = self.cpu.instructions
+        self.ask_key()
+        self.assertEqual(self.cpu.instructions - before, 1)
+
+    def test_an_event_that_is_past_already_does_not_take_the_time_back(self):
+        self.ask_key()
+        self.cpu.next_event = 0  # the devices are to be looked at at the next instruction
+        before = self.cpu.instructions
+        self.ask_key()
+        self.assertEqual(self.cpu.instructions - before, 1)
+
+    def test_the_event_that_the_time_went_to_is_taken_by_the_next_instruction(self):
+        seen = []
+        self.cpu.event_sources.append(lambda now: seen.append(now) or 5000)
+        self.cpu.wake()
+        self.ask_key()
+        self.ask_key()
+        self.assertEqual(self.cpu.instructions, 5000)
+        seen.clear()
+        self.cpu.ip = CODE_AT
+        self.cpu.step()  # any instruction: the devices are looked at before it, at the time of the event
+        self.assertEqual(seen, [5000])
 
     def test_the_other_calls_do_not(self):
         before = self.cpu.instructions

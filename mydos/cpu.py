@@ -106,6 +106,7 @@ class CPU(Ops32, Fpu, FlatMemory):
         self.pm_vectors = {}  # in the flat mode: interrupt number -> (selector, offset) of the handler a program has set
         self.pics = None  # the interrupt controllers (pic.Pics), when the machine has them
         self.event_sources = []  # fn(instructions) -> the instruction count of its next event, or None (see events())
+        self.last_poll = None  # the instruction count of the last question whether a key waits (see dos32.py)
         self.next_event = NEVER  # the instruction count at which events() is to look at the devices and the lines
         self.rep = None  # set by step(): the repeat prefix in front of this instruction (F3 or F2), or None
 
