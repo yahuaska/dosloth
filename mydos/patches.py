@@ -426,25 +426,50 @@ def row_of_colors(way, colors):
 
 
 def frame_blocks(cpu):
-    """What the loop that begins at 10F7B0 does (the patch is in the second instruction of it, for the first one has
-    an address that the loading of the program changes, and the INT would have been in the place of that): for every run of blocks that the stream says, reads the blocks and draws them (four
-    rows of a dword, EBP apart), goes on to the next row of blocks, and then to the next run, until the strip is over: then
-    the code goes on at the place that reads the next strip (STRIP_ENDS, one for each kind of block). The registers, the
-    flags and the variables are as the code leaves them, and the instructions are counted as the code would have run them."""
+    """What the loop that begins at 10F7B0 does (the patch is in the second instruction of it, for the first one has an
+    address that the loading of the program changes, and the INT would have been in the place of that): for every run of
+    blocks that the stream says, reads the blocks and draws them (four rows of a dword, EBP apart), goes on to the next
+    row of blocks, and then to the next run, until the strip is over: then the code goes on at the place that reads the
+    next strip (STRIP_ENDS, one for each kind of block). The registers, the flags and the variables are as the code
+    leaves them, and the instructions are counted as the code would have run them. The memory is looked at as dwords
+    (the tables, the trees and the cache are dword by dword); only the stream is read from places that are not."""
+    with memoryview(cpu.mem) as raw, raw.cast("I") as dwords:
+        draw_frame(cpu, dwords)
+
+
+def draw_frame(cpu, dwords):
     mem = cpu.mem
     base = cpu.bases[cpu.s[CPU.DS]]
+    if base & 3:
+        raise NotImplementedError("the blocks of a frame in a segment that is not at a dword")
+    base4 = base >> 2
     unpack, pack = DWORD.unpack_from, DWORD.pack_into
     eax, ecx, edx, ebx = cpu.wide(CPU.AX), cpu.wide(CPU.CX), cpu.wide(CPU.DX), cpu.wide(CPU.BX)
     esi, edi, ebp = cpu.wide(CPU.SI), cpu.wide(CPU.DI), cpu.wide(CPU.BP)
     default = WORD.unpack_from(mem, base + TREE_DEFAULT)[0]
-    area = unpack(mem, base + TREE_AREA)[0]
+    area = dwords[base4 + (TREE_AREA >> 2)]
+    bits_at = base + BITS_LEFT
+    swap_at = base4 + (CACHE_SWAP >> 2)
     executed = 0
 
     def rd(address):
-        return unpack(mem, base + address)[0]
+        return dwords[base4 + (address >> 2)]
 
     def wr(address, value):
-        pack(mem, base + (address & MASK), value & MASK)
+        dwords[base4 + (address >> 2)] = value & MASK
+
+    def resolve(kind):
+        """The pointers of a kind of value, as they are now (the code does not change them while the loop goes), and
+        the places of the dwords that they point at."""
+        table, cache0, cache1, cache2, limit, mask = kind
+        places = [rd(cache0), rd(cache1), rd(cache2)]
+        if any(place & 3 for place in places) or rd(table) & 3 or area & 3:
+            raise NotImplementedError("the tables of the values are not at dwords")
+        return (base4 + (rd(table) >> 2), places[0], base4 + (places[0] >> 2), places[1], base4 + (places[1] >> 2),
+                places[2], base4 + (places[2] >> 2), limit, mask)
+
+    kind_type, kind_colors, kind_mask, kind_full = (resolve(kind) for kind in (KIND_TYPE, KIND_COLORS, KIND_MASK,
+                                                                                KIND_FULL))
 
     video, window_start, window_end = cpu.video, cpu.video_start, cpu.video_end
     chain_4 = None  # whether the card is in the mode in which a byte is a pixel (it does not change while the loop goes)
@@ -477,64 +502,62 @@ def frame_blocks(cpu):
         """What the code that reads a value does. The value is in the upper 16 bits of the leaf: with `ror` it goes to AX,
         else the leaf is the whole EAX."""
         nonlocal eax, ecx, edx, ebx, esi, executed
-        table, cache0, cache1, cache2, limit, mask = kind
-        left = mem[base + BITS_LEFT]
-        refill = left <= limit  # fewer bits than the table looks at: 16 more from the stream
-        if refill:
-            edx = (rd(esi) << ((left - 1) & 31)) & MASK | ebx
-            ebx = edx
+        entries, place0, index0, place1, index1, place2, index2, limit, mask = kind
+        left = mem[bits_at]
+        if left <= limit:  # fewer bits than the table looks at: 16 more from the stream
+            at = base + esi
+            ebx = ((dwords[at >> 2] if not at & 3 else unpack(mem, at)[0]) << ((left - 1) & 31)) & MASK | ebx
             esi = (esi + 2) & MASK
             left = (left + 16) & 0xFF
             executed += 20
+            refill = 2
         else:
-            edx = ebx & mask
             executed += 13
-        entry = rd(rd(table) + 4 * (edx & mask))
+            refill = 1
+        entry = dwords[entries + (ebx & mask)]
         ebx >>= entry & 31
         left = (left - entry) & 0xFF
         ecx = ((entry >> 8) + area) & MASK
-        edx = rd(ecx)
+        edx = dwords[base4 + (ecx >> 2)]
         if edx & 0xFFFF == default:  # not a leaf: down the tree, a bit at a time
-            executed += 2 if refill else 1
+            executed += refill
             while True:
                 step = edx >> 13 & 0xFFFF8
                 left = (left - 1) & 0xFF
                 executed += 10
                 if left == 0:
-                    ebx = rd(esi)
+                    at = base + esi
+                    ebx = dwords[at >> 2] if not at & 3 else unpack(mem, at)[0]
                     esi = (esi + 4) & MASK
                     left = 0x20
                     executed += 3
-                bit = ebx & 1
-                ebx >>= 1
-                if not bit:
+                if not ebx & 1:
                     step = 4
                     executed += 1
+                ebx >>= 1
                 ecx = (ecx + step) & MASK
-                edx = rd(ecx)
+                edx = dwords[base4 + (ecx >> 2)]
                 if edx & 0xFFFF != default:
                     break
         else:
             executed += 1
-        pointer = rd(cache0)
-        mem[base + BITS_LEFT] = left
+        mem[bits_at] = left
         if ror:
             eax = eax & 0xFFFF0000 | edx >> 16
             executed += 7
         else:
             eax = edx
             executed += 5
-        ecx = pointer
-        if rd(ecx) != edx:  # not the first of the cache: it becomes the first, and the others go down
-            wr(CACHE_SWAP, eax)
-            eax = rd(ecx)
-            wr(ecx, edx)
-            ecx = rd(cache1)
-            edx = rd(ecx)
-            wr(ecx, eax)
-            ecx = rd(cache2)
-            eax = rd(CACHE_SWAP)
-            wr(ecx, edx)
+        ecx = place0
+        if dwords[index0] != edx:  # not the first of the cache: it becomes the first, and the others go down
+            dwords[swap_at] = eax
+            eax = dwords[index0]
+            dwords[index0] = edx
+            edx = dwords[index1]
+            dwords[index1] = eax
+            ecx = place2
+            eax = dwords[swap_at]
+            dwords[index2] = edx
             executed += 9
 
     def leave(label, carry):
@@ -546,7 +569,7 @@ def frame_blocks(cpu):
         cpu.ip = label
 
     while True:
-        value(KIND_TYPE, True)  # what the blocks of the run are, and how many
+        value(kind_type, True)  # what the blocks of the run are, and how many
         edx = rd(RUN_LENGTHS + (eax & 0xFC))
         kind = eax & 3
         ecx = kind
@@ -555,8 +578,8 @@ def frame_blocks(cpu):
         if kind <= 1:  # a mono block (0) or a full one (1)
             while True:
                 if kind == 0:
-                    value(KIND_COLORS, False)
-                    value(KIND_MASK, True)
+                    value(kind_colors, False)
+                    value(kind_mask, True)
                     ecx = eax
                     edx = edx_mask = eax
                     eax = (eax >> 16 | eax << 16) & MASK
@@ -584,8 +607,8 @@ def frame_blocks(cpu):
                     executed += ROW_COUNTS[way]
                 else:
                     for row in range(4):
-                        value(KIND_FULL, False)
-                        value(KIND_FULL, True)
+                        value(kind_full, False)
+                        value(kind_full, True)
                         if row == 0:
                             draw(edi, eax)
                             edi = (edi + ebp) & MASK
