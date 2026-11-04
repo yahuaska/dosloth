@@ -500,3 +500,50 @@ class TestTheMixerOfTheSound(unittest.TestCase):
         snapshot.load(str(self.state), computer)
         cpu = computer.cpu
         return cpu.rd(cpu.s[CPU.SS], cpu.wide(CPU.SP))
+
+
+# --- the small tree of the sound
+
+SMALL_OUT, SMALL_STREAM = 0x1D00000, 0x1D10000
+
+
+def small_tree_bits(rng, leaves):
+    """The bits of a small tree as the sound of Smacker has it: a node is a 1 (its left side, and its right side, come
+    after it), a leaf is a 0 and a byte (the lowest bit first), and a 0 ends it."""
+    def shape(count):
+        if count == 1:
+            return [0] + [rng.randrange(2) for _ in range(8)]
+        cut = rng.randrange(1, count)
+        return [1] + shape(cut) + shape(count - cut)
+    return shape(leaves) + [0]
+
+
+@unittest.skipUnless(SMKP.exists(), "the game is not here")
+class TestTheSmallTreeOfTheSound(Beside):
+    def test_the_tree_is_the_one_the_code_reads(self):
+        for seed in range(80):
+            rng = random.Random(seed)
+            bits = small_tree_bits(rng, rng.choice([1, 2, 3, 8, 40, 256]))
+            left = rng.choice([1, 2, 5, 8, 9, 17, 32])  # how much is in the buffer: one more than the bits that are
+            buffer = sum(bit << i for i, bit in enumerate(bits[:left - 1]))
+            rest = bits[left - 1:]
+            rest += [0] * (-len(rest) % 32)
+            stream = b"".join(struct.pack("<I", sum(bit << i for i, bit in enumerate(rest[at:at + 32])))
+                              for at in range(0, len(rest), 32)) + bytes(8)
+            memory = {SMALL_OUT: bytes(0x2000), SMALL_STREAM: stream, 0x114960: bytes([left])}
+            registers = {"esi": SMALL_STREAM, "ebx": buffer, "edi": SMALL_OUT, "eax": rng.randrange(1 << 32),
+                         "ecx": rng.randrange(1 << 32), "edx": rng.randrange(1 << 32)}
+            with self.subTest(seed=seed):
+                original, patched = self.small(memory, registers, rng.choice(FLAG_CHOICES))
+                self.assertGreater(original.instructions, 20)  # (a tree was read)
+
+    def small(self, memory, registers, flags):
+        original, patched = game_machine(patch=False), game_machine(patch=True)
+        run_scenario(original, memory, registers, 0x10DCF0, flags)
+        run_scenario(patched, memory, registers, 0x10DCF0, flags)
+        self.assertEqual((original.r, original.rh), (patched.r, patched.rh))
+        self.assertEqual((original.flags, original.ip), (patched.flags, patched.ip))
+        self.assertEqual(original.instructions, patched.instructions)  # the time is the same
+        for start, end in ((SMALL_OUT, SMALL_OUT + 0x2000), (0x114960, 0x114961), (STACK - 0x400, STACK)):
+            self.assertEqual(bytes(original.mem[start:end]), bytes(patched.mem[start:end]), hex(start))
+        return original, patched
