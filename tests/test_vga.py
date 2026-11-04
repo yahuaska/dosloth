@@ -1,10 +1,10 @@
 import random
 import unittest
 
-from mydos import vga
-from mydos.cpu import CPU
-from mydos.screen import EGA_COLORS
-from mydos.vga import DEFAULT_ATTRIBUTES, Vga
+from dosloth import vga
+from dosloth.cpu import CPU
+from dosloth.screen import EGA_COLORS
+from dosloth.vga import DEFAULT_ATTRIBUTES, Vga
 
 
 def machine():

@@ -1,7 +1,7 @@
 import mmap
 import unittest
 
-from mydos import pages
+from dosloth import pages
 
 MB = 1024 * 1024
 

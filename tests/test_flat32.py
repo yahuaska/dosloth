@@ -4,9 +4,9 @@ it leaves is checked against what Python says it must be."""
 import struct
 import unittest
 
-from mydos.cpu import CPU, MEMORY_SIZE, Exit
-from mydos.disasm import disasm
-from mydos.flat import REAL_MODE, Bases
+from dosloth.cpu import CPU, MEMORY_SIZE, Exit
+from dosloth.disasm import disasm
+from dosloth.flat import REAL_MODE, Bases
 
 FLAT = 0x10  # the selector of the code, the data and the stack: base 0, so an offset is an address
 STACK = 0x00900000

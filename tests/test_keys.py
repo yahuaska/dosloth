@@ -1,7 +1,7 @@
 import unittest
 
-from mydos import keys
-from mydos.keys import to_bios
+from dosloth import keys
+from dosloth.keys import to_bios
 
 
 class TestNamedKeys(unittest.TestCase):

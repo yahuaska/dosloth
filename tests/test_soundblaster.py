@@ -1,8 +1,8 @@
 import unittest
 
-from mydos import soundblaster
-from mydos.cpu import CPU
-from mydos.soundblaster import BASE, SoundBlaster
+from dosloth import soundblaster
+from dosloth.cpu import CPU
+from dosloth.soundblaster import BASE, SoundBlaster
 
 
 class DspTest(unittest.TestCase):
@@ -71,7 +71,7 @@ class TestTheDsp(DspTest):
 
 class TestTheInterrupt(unittest.TestCase):
     def setUp(self):
-        from mydos import pic
+        from dosloth import pic
         self.cpu = CPU()
         self.pics = pic.install(self.cpu)
         self.card = soundblaster.install(self.cpu, self.pics)
@@ -101,7 +101,7 @@ class TestThePlayingByDma(unittest.TestCase):
     """The card on a clock that the test moves: a byte of the time constant 0 takes 256 microseconds (12,800 instructions)."""
 
     def setUp(self):
-        from mydos import dma, pic
+        from dosloth import dma, pic
         self.cpu = CPU()
         self.pics = pic.install(self.cpu)
         self.pics.master.mask = 0

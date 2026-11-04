@@ -1,8 +1,8 @@
 """The commands of the debugger: a step, a step over, going on; and the breakpoints that it keeps."""
 import unittest
 
-from mydos.cpu import CPU
-from mydos.debugger import BREAKPOINT, EXIT, PAUSE, STEP, Debugger, Pause
+from dosloth.cpu import CPU
+from dosloth.debugger import BREAKPOINT, EXIT, PAUSE, STEP, Debugger, Pause
 from tests.test_breakpoints import machine
 
 # 0000 call 0008 / 0003 mov ax,4C07h / 0006 int 21h / 0008 nop / 0009 nop / 000A ret

@@ -1,12 +1,12 @@
 import random
 import unittest
 
-from mydos import screen
-from mydos.bios import Keyboard
-from mydos.cpu import Exit
-from mydos.display import Display
-from mydos.screen import EGA_COLORS, Frame, Monitor, render, render_256
-from mydos.vga import Vga
+from dosloth import screen
+from dosloth.bios import Keyboard
+from dosloth.cpu import Exit
+from dosloth.display import Display
+from dosloth.screen import EGA_COLORS, Frame, Monitor, render, render_256
+from dosloth.vga import Vga
 
 
 def reference(planes, palette, width, height):

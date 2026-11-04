@@ -3,9 +3,9 @@ the near jumps and calls, the string instructions and the loops. Each is checked
 Python numbers, with no help from the CPU class."""
 import unittest
 
-from mydos import flags
-from mydos.cpu import CPU, DivideError
-from mydos.regs import AX, BP, BX, CX, DI, DX, SI, SP
+from dosloth import flags
+from dosloth.cpu import CPU, DivideError
+from dosloth.regs import AX, BP, BX, CX, DI, DX, SI, SP
 from tests.test_cpu386 import NAMES, SAMPLES, Machine, le32
 
 MASK = 0xFFFFFFFF

@@ -25,9 +25,9 @@ The list has one mode, 0101h: 640 by 480 pixels in 256 colors, which X-COM: Apoc
 mode yet.
 """
 ROM_SEGMENT = 0xC000
-OEM_STRING = (0x0100, b"mydos VGA\0")
-VENDOR = (0x0120, b"mydos\0")
-PRODUCT = (0x0140, b"mydos VBE\0")
+OEM_STRING = (0x0100, b"dosloth VGA\0")
+VENDOR = (0x0120, b"dosloth\0")
+PRODUCT = (0x0140, b"dosloth VBE\0")
 REVISION = (0x0160, b"1.0\0")
 MODE_LIST = (0x0200, (0x0101).to_bytes(2, "little") + (0xFFFF).to_bytes(2, "little"))
 VERSION = 0x0200

@@ -1,8 +1,8 @@
 import unittest
 
-from mydos import timer
-from mydos.cpu import CPU
-from mydos.timer import Timer
+from dosloth import timer
+from dosloth.cpu import CPU
+from dosloth.timer import Timer
 
 
 class Clock:
@@ -287,8 +287,8 @@ class TestTheInterrupt(unittest.TestCase):
         self.assertEqual(self.chip.events(225, self.lines), 475)  # a count from here, not from the old start
 
     def test_the_machine_raises_the_timer_line_to_a_program_that_took_the_interrupt(self):
-        from mydos import pic
-        from mydos.flags import IF
+        from dosloth import pic
+        from dosloth.flags import IF
         cpu = CPU()
         pics = pic.install(cpu)
         chip = timer.install(cpu)

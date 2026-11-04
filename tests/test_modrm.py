@@ -1,8 +1,8 @@
 import unittest
 
-from mydos import modrm, regs
-from mydos.cpu import CPU
-from mydos.modrm import ModRM
+from dosloth import modrm, regs
+from dosloth.cpu import CPU
+from dosloth.modrm import ModRM
 
 
 def machine(code):

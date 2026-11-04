@@ -1,6 +1,6 @@
 """IN and OUT with the operand size of 32 bits (step 3c2): the byte forms are the same, a doubleword goes to four
 neighbouring ports, the low byte first, and the prefix 66h makes it a word again."""
-from mydos.disasm import disasm
+from dosloth.disasm import disasm
 from tests.test_cpu386 import Machine
 
 PORT = 0x0170

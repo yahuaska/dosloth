@@ -5,8 +5,8 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from mydos import command, config
-from mydos.volumes import Volumes
+from dosloth import command, config
+from dosloth.volumes import Volumes
 from tests.iso_builder import build
 
 TEXT = """

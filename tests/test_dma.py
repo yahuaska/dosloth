@@ -1,8 +1,8 @@
 import json
 import unittest
 
-from mydos import dma
-from mydos.cpu import CPU
+from dosloth import dma
+from dosloth.cpu import CPU
 
 
 class DmaTest(unittest.TestCase):

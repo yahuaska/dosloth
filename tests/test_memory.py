@@ -1,9 +1,9 @@
 import unittest
 
-from mydos import dos, flags
-from mydos.cpu import CPU
-from mydos.memory import Blocks
-from mydos.psp import PSP_SEG
+from dosloth import dos, flags
+from dosloth.cpu import CPU
+from dosloth.memory import Blocks
+from dosloth.psp import PSP_SEG
 
 
 def blocks():

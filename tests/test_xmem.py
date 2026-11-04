@@ -1,7 +1,7 @@
 import unittest
 
-from mydos.cpu import MEMORY_SIZE
-from mydos.xmem import PAGE, START, ExtendedMemory
+from dosloth.cpu import MEMORY_SIZE
+from dosloth.xmem import PAGE, START, ExtendedMemory
 
 
 class TestExtendedMemory(unittest.TestCase):

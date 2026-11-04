@@ -5,9 +5,9 @@ import random
 import struct
 import unittest
 
-from mydos import flags
-from mydos.cpu import CPU, MEMORY_SIZE, Exit
-from mydos.flat import Bases, RealModeBases
+from dosloth import flags
+from dosloth.cpu import CPU, MEMORY_SIZE, Exit
+from dosloth.flat import Bases, RealModeBases
 from tests import test_cpu386, test_cpu386_0f, test_cpu386_ops, test_cpu386_segments, test_cpu386_widths
 
 # Every test of a class made of test_cpu386.Machine, once more with FLAT set: the classes below are those, as

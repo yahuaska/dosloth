@@ -1,7 +1,7 @@
 import unittest
 
-from mydos import loader
-from mydos.cpu import CPU
+from dosloth import loader
+from dosloth.cpu import CPU
 from tests.test_process import exe
 
 
@@ -58,7 +58,7 @@ class TestAnLeProgram(unittest.TestCase):
             loader.memory_needed(bytes(data))
 
     def test_load_puts_it_in_the_extended_memory_and_starts_it_in_the_flat_mode(self):
-        from mydos.xmem import START, ExtendedMemory
+        from dosloth.xmem import START, ExtendedMemory
         for kind, data in self.programs().items():
             cpu, extended = CPU(), ExtendedMemory()
             loader.load(cpu, data, 0x3000, extended)
@@ -79,7 +79,7 @@ class TestAnLeProgram(unittest.TestCase):
         self.assertEqual(loader.memory_needed(exe(b"", minalloc=0x10, maxalloc=0x20)), (0x12 + 0x10, 0x12 + 0x20))
 
     def test_a_program_of_real_mode_does_not_need_the_extended_memory_given_nor_uses_it(self):
-        from mydos.xmem import ExtendedMemory
+        from dosloth.xmem import ExtendedMemory
         extended = ExtendedMemory()
         loader.load(CPU(), exe(b"\xB8\x00\x4C"), 0x4000, extended)
         self.assertEqual(extended.blocks, {})
@@ -87,7 +87,7 @@ class TestAnLeProgram(unittest.TestCase):
 
 class TestLoad(unittest.TestCase):
     def test_a_program_of_real_mode_starts_in_real_mode_whatever_the_machine_was_in(self):
-        from mydos.flat import REAL_MODE, Bases
+        from dosloth.flat import REAL_MODE, Bases
         for data in (b"\xB8\x00\x4C", exe(b"\xB8\x00\x4C")):
             cpu = CPU()
             cpu.use_flat_memory(Bases({0x10: 0}))

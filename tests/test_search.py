@@ -1,9 +1,9 @@
 import time
 import unittest
 
-from mydos import search
-from mydos.filesystem import ATTR_ARCHIVE, ATTR_DIRECTORY, ATTR_HIDDEN, ATTR_READONLY, ATTR_SYSTEM, ATTR_VOLUME, Entry
-from mydos.search import MAX_SEARCHES, RECORD_SIZE, Searches, attributes_allow, find, mask_matches, record
+from dosloth import search
+from dosloth.filesystem import ATTR_ARCHIVE, ATTR_DIRECTORY, ATTR_HIDDEN, ATTR_READONLY, ATTR_SYSTEM, ATTR_VOLUME, Entry
+from dosloth.search import MAX_SEARCHES, RECORD_SIZE, Searches, attributes_allow, find, mask_matches, record
 
 
 def entry(name, size=0, attributes=ATTR_ARCHIVE, mtime=0.0):
@@ -179,7 +179,7 @@ class TestTheRecord(unittest.TestCase):
     def test_a_leap_second_does_not_overflow_the_field(self):
         from unittest import mock
         leap = time.struct_time((1999, 12, 31, 23, 59, 60, 4, 365, 0))
-        with mock.patch("mydos.search.time.localtime", return_value=leap):
+        with mock.patch("dosloth.search.time.localtime", return_value=leap):
             data = record(1, entry("A"))
         self.assertEqual(int.from_bytes(data[0x16:0x18], "little"), 23 << 11 | 59 << 5 | 29)
 

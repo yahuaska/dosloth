@@ -3,9 +3,9 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from mydos import config
-from mydos.filesystem import DRIVE_NOT_READY, INVALID_DRIVE, PATH_NOT_FOUND, FsError, HostDir, MemFs
-from mydos.volumes import Volumes
+from dosloth import config
+from dosloth.filesystem import DRIVE_NOT_READY, INVALID_DRIVE, PATH_NOT_FOUND, FsError, HostDir, MemFs
+from dosloth.volumes import Volumes
 
 
 class VolumesTest(unittest.TestCase):

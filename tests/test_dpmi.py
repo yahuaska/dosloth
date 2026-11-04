@@ -2,10 +2,10 @@
 asks if DOS/4G is there, and the answers of INT 2Fh in the flat mode."""
 import unittest
 
-from mydos import dos, dpmi, flags
-from mydos.xmem import PAGE, START, ExtendedMemory
-from mydos.cpu import CPU, Exit
-from mydos.loader import CODE_SELECTOR, DATA_SELECTOR
+from dosloth import dos, dpmi, flags
+from dosloth.xmem import PAGE, START, ExtendedMemory
+from dosloth.cpu import CPU, Exit
+from dosloth.loader import CODE_SELECTOR, DATA_SELECTOR
 
 CODE_AT = 0x00200000
 

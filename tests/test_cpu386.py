@@ -1,9 +1,9 @@
 import unittest
 
-from mydos import flags, modrm
-from mydos.cpu import CPU, Exit
-from mydos.flat import RealModeBases
-from mydos.regs import AX, BP, BX, CX, DI, DX, SI, SP
+from dosloth import flags, modrm
+from dosloth.cpu import CPU, Exit
+from dosloth.flat import RealModeBases
+from dosloth.regs import AX, BP, BX, CX, DI, DX, SI, SP
 
 # the routine of install.exe that tells the 8086, the 286, the 386 and the 486 from each other: from its memory, as it
 # is (the bytes of 19B7:0048 to 19B7:012C). It returns the number 0, 2, 3 or 4 in AL, and leaves it in DS:[0] too.
@@ -134,7 +134,7 @@ class TestTheRegisters(Machine):
         self.assertEqual(cpu.rd(0x2000, 0x0100), 0xFFFFFFFF)
 
     def test_the_modrm_operand_reads_and_writes_32_bits(self):
-        from mydos import modrm
+        from dosloth import modrm
         cpu = self.start(bytes([0xC1]), ecx=0xDEADBEEF)  # the ModRM byte C1: the r/m operand is register 1, ECX
         m = modrm.decode(cpu)
         self.assertEqual(m.read(cpu, 32), 0xDEADBEEF)

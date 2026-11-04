@@ -5,8 +5,8 @@ import unittest
 import zlib
 from pathlib import Path
 
-from mydos.display import Display, PngFile, png_bytes
-from mydos.screen import Frame
+from dosloth.display import Display, PngFile, png_bytes
+from dosloth.screen import Frame
 
 
 def decode(data):

@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mydos import iso
-from mydos.filesystem import (ACCESS_DENIED, ATTR_DIRECTORY, ATTR_HIDDEN, ATTR_READONLY, FILE_NOT_FOUND,
+from dosloth import iso
+from dosloth.filesystem import (ACCESS_DENIED, ATTR_DIRECTORY, ATTR_HIDDEN, ATTR_READONLY, FILE_NOT_FOUND,
                               PATH_NOT_FOUND, SECTOR_NOT_FOUND, FsError)
 from tests.iso_builder import DEFAULT_DATE, Item, build
 

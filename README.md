@@ -86,20 +86,18 @@ The video 2 of X-COM: Apocalypse (83 seconds) plays in about 75–83 seconds of 
 
 ## Quick start
 
-The project is DOSloth; the Python package is still called `mydos`.
-
 ```sh
 # a program in the current directory, no configuration: the current directory is the hard disk C:
-python -m mydos hello.com
+python -m dosloth hello.com
 
 # a configuration: drives and what is in them (see config.example.toml), the screen in a window
-python -m mydos -c config.example.toml -w samples/some.exe
+python -m dosloth -c config.example.toml -w samples/some.exe
 
 # arguments of the program go after --
-python -m mydos -c config.toml -w ufoexe/smkp.exe -- 2 GOFORIT
+python -m dosloth -c config.toml -w ufoexe/smkp.exe -- 2 GOFORIT
 
 # the screen in a PNG file that is written again whenever the picture changes (no display needed)
-python -m mydos -s screen.png hello.com
+python -m dosloth -s screen.png hello.com
 ```
 
 `config.example.toml` explains the drives (`floppy`, `hdd`, `cdrom`) and what can be mounted in them (`dir`,
@@ -125,7 +123,7 @@ failure) and `PROGRAM.crash.mem` (the memory, sparse), and a state to go on from
 
 ## Patches
 
-A patch is a module of the package [`mydos/patches/`](mydos/patches): it replaces the first two bytes of a known
+A patch is a module of the package [`dosloth/patches/`](dosloth/patches): it replaces the first two bytes of a known
 piece of code with `INT F0h`, and the handler of that interrupt does what the code would have done, in Python.
 The code is found by a hash of its bytes and its exact address, so a patch never touches what it was not made for.
 Pieces of code that arrive later (a driver that a program reads from a file) are found by their bytes.
@@ -149,12 +147,12 @@ needed to run them) and check the result against what Python says it must be. Th
 
 | Path | What is in it |
 |---|---|
-| `mydos/cpu.py`, `ops32.py`, `flat.py`, `modrm.py`, `fpu.py` | the CPU: real mode, the 386 part, the flat memory, the coprocessor |
-| `mydos/dos.py`, `dos32.py`, `dpmi.py`, `loader.py`, `le.py` | DOS, its flat-mode form, DPMI, the loaders |
-| `mydos/bios.py`, `vga.py`, `vesa.py`, `timer.py`, `pic.py`, `dma.py`, `soundblaster.py` | the BIOS and the hardware |
-| `mydos/filesystem.py`, `iso.py`, `volumes.py`, `config.py` | drives, host directories, ISO 9660, the configuration |
-| `mydos/patches/` | Python in the place of hot code |
-| `mydos/debugger.py`, `debugwindow.py`, `profile.py`, `calllog.py`, `snapshot.py`, `dump.py` | the tools |
+| `dosloth/cpu.py`, `ops32.py`, `flat.py`, `modrm.py`, `fpu.py` | the CPU: real mode, the 386 part, the flat memory, the coprocessor |
+| `dosloth/dos.py`, `dos32.py`, `dpmi.py`, `loader.py`, `le.py` | DOS, its flat-mode form, DPMI, the loaders |
+| `dosloth/bios.py`, `vga.py`, `vesa.py`, `timer.py`, `pic.py`, `dma.py`, `soundblaster.py` | the BIOS and the hardware |
+| `dosloth/filesystem.py`, `iso.py`, `volumes.py`, `config.py` | drives, host directories, ISO 9660, the configuration |
+| `dosloth/patches/` | Python in the place of hot code |
+| `dosloth/debugger.py`, `debugwindow.py`, `profile.py`, `calllog.py`, `snapshot.py`, `dump.py` | the tools |
 | `tests/` | the tests |
 | `AGENTS.md` | the detailed map of the code and the rules of the project |
 

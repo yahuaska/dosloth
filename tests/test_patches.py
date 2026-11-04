@@ -7,11 +7,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mydos import dos, loader, patches, psp
-from mydos.patches import smk_frame
-from mydos.cpu import CPU, Exit, NEVER
-from mydos.patches import PATCH_BYTES, Patch
-from mydos.xmem import ExtendedMemory
+from dosloth import dos, loader, patches, psp
+from dosloth.patches import smk_frame
+from dosloth.cpu import CPU, Exit, NEVER
+from dosloth.patches import PATCH_BYTES, Patch
+from dosloth.xmem import ExtendedMemory
 
 SMKP = Path(__file__).resolve().parent.parent / "XCOMA" / "UFOEXE" / "SMKP.EXE"
 
@@ -63,7 +63,7 @@ class TestMechanism(unittest.TestCase):
         names = [info.name for info in pkgutil.iter_modules(patches.__path__) if not info.name.startswith("_")]
         self.assertGreater(len(names), 1)
         for name in names:
-            module = importlib.import_module(f"mydos.patches.{name}")
+            module = importlib.import_module(f"dosloth.patches.{name}")
             for patch in getattr(module, "PATCHES", ()):
                 self.assertIn(patch, patches.PATCHES, name)
             for patch in getattr(module, "LATE_PATCHES", ()):
@@ -373,8 +373,8 @@ class TestTheRowsOfAMonoBlock(unittest.TestCase):
 
 def disc_machine():
     """The volumes of the machine with the disc of the game, or a SkipTest if they are not here."""
-    from mydos import config
-    from mydos.volumes import Volumes
+    from dosloth import config
+    from dosloth.volumes import Volumes
     if not SMKP.exists() or not CONFIG.exists():
         raise unittest.SkipTest("the game and the machine for it are not here")
     try:
@@ -388,7 +388,7 @@ def disc_machine():
 def save_machine_at(volumes, path, segment, ip, number):
     """Play the video 2 up to the `number`th time that the code is at segment:ip, and save the machine in `path`. The
     patches of the pieces that come later are not made: the machine is one that nothing has changed."""
-    from mydos import machine, snapshot
+    from dosloth import machine, snapshot
     saved = list(patches.LATE_PATCHES)
     patches.LATE_PATCHES.clear()
     try:
@@ -417,7 +417,7 @@ def run_saved_machine(volumes, path, patched, segment, back, inside=None, pop=4,
     something (the same for both). `events` is a list: if it is given, a source of events that does nothing is there, and
     the count of instructions at which it is asked is put in the list. Returns what is left: the registers, the flags, the count of instructions, the hash of
     the memory and that of the picture."""
-    from mydos import machine, snapshot
+    from dosloth import machine, snapshot
     saved = list(patches.LATE_PATCHES)
     if not patched:
         patches.LATE_PATCHES.clear()
@@ -527,7 +527,7 @@ class TestTheMixerOfTheSound(unittest.TestCase):
                 self.assertEqual(original, patched)
 
     def return_address(self):
-        from mydos import machine, snapshot
+        from dosloth import machine, snapshot
         computer = machine.build(self.volumes)
         snapshot.load(str(self.state), computer)
         cpu = computer.cpu

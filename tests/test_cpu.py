@@ -1,7 +1,7 @@
 import unittest
 
-from mydos import flags
-from mydos.cpu import CPU, DivideError, Exit
+from dosloth import flags
+from dosloth.cpu import CPU, DivideError, Exit
 
 
 class TestSegmentOverrideMov(unittest.TestCase):
@@ -1873,7 +1873,7 @@ class TestInterruptsThroughTheTable(unittest.TestCase):
         self.assertEqual((cpu.instructions, cpu.start_ip), (2, 0x0100))
 
     def test_dos_sets_a_vector_and_int_goes_there(self):
-        from mydos import dos
+        from dosloth import dos
         # mov ax, 2560h ; mov dx, 0100h ; (DS = 2000h) ; int 21h ; int 60h
         cpu = machine(bytes([0xB8, 0x60, 0x25, 0xBA, 0x00, 0x01, 0xCD, 0x21, 0xCD, 0x60]), False)
         dos.install(cpu)

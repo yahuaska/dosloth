@@ -3,9 +3,9 @@ counts of 32 bits in the flat mode (EDX, ECX), and give a count in all of EAX. T
 above 64 KB, behind a selector that has a base, so that a 16-bit offset or a base that is forgotten shows."""
 import unittest
 
-from mydos import flags
-from mydos.cpu import CPU, Exit
-from mydos.loader import CODE_SELECTOR, DATA_SELECTOR
+from dosloth import flags
+from dosloth.cpu import CPU, Exit
+from dosloth.loader import CODE_SELECTOR, DATA_SELECTOR
 from tests import test_dos
 
 BASED = 0x2F  # a selector with a base: what is at its offset 0 is at BASE
@@ -239,7 +239,7 @@ class TestFiles(FlatFiles):
         self.assertEqual(self.cpu.instructions - before, 1)
 
     def test_questions_that_come_with_work_between_them_do_not(self):
-        from mydos import dos32
+        from dosloth import dos32
         self.ask_key()
         self.cpu.instructions += dos32.TIGHT_LOOP
         self.cpu.next_event = self.cpu.instructions + 50_000

@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mydos import dump
-from mydos.cpu import CPU, MEMORY_SIZE
-from mydos.flat import Bases
+from dosloth import dump
+from dosloth.cpu import CPU, MEMORY_SIZE
+from dosloth.flat import Bases
 
 
 class DumpTest(unittest.TestCase):
@@ -104,7 +104,7 @@ class TestWhereItGoes(DumpTest):
                 file.write = mock.Mock(side_effect=OSError(28, "No space left on device"))
             return file
 
-        with mock.patch("mydos.dump.open", flaky_open, create=True):
+        with mock.patch("dosloth.dump.open", flaky_open, create=True):
             base, said = self.write(self.program_dir / "T.COM")
         self.assertEqual(base, str(self.here / "T.COM"))
         self.assertEqual(os.listdir(self.program_dir), [])  # neither the json nor the empty memory file

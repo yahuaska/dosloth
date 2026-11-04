@@ -7,11 +7,11 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from mydos import bios, config, dos, flags, vga
-from mydos.cpu import CPU, Exit
-from mydos.filesystem import SECTOR_NOT_FOUND
-from mydos.handles import OpenFile
-from mydos.volumes import Volumes
+from dosloth import bios, config, dos, flags, vga
+from dosloth.cpu import CPU, Exit
+from dosloth.filesystem import SECTOR_NOT_FOUND
+from dosloth.handles import OpenFile
+from dosloth.volumes import Volumes
 
 
 def stat_mode(path):
@@ -285,7 +285,7 @@ class TestGetCurrentDrive(unittest.TestCase):
         self.assertEqual(cpu.get8(0), 2)  # 0 is A:, 1 is B:, 2 is C:
 
     def test_it_agrees_with_the_drive_in_the_environment_the_program_is_given(self):
-        from mydos import psp
+        from dosloth import psp
         drive_letter = psp.environment("x.exe").split(b"=")[1][:1]  # the C of COMSPEC=C:\...
         self.assertEqual(chr(ord("A") + int21(0x1900).get8(0)).encode(), drive_letter)
 
@@ -1583,7 +1583,7 @@ class TestGetTime(unittest.TestCase):
     def test_a_leap_second_is_shown_as_the_last_second_of_the_minute(self):
         from unittest import mock
         leap = time.struct_time((2016, 12, 31, 23, 59, 60, 5, 366, 0))  # some systems have a second 60
-        with mock.patch("mydos.dos.time.localtime", return_value=leap):
+        with mock.patch("dosloth.dos.time.localtime", return_value=leap):
             self.assertEqual(self.call()[:3], (23, 59, 59))
 
 
@@ -2973,7 +2973,7 @@ class TestMakeDirectory(FileFunctionsTest):
         self.assertEqual(self.mkdir("Z:\\X"), 15)
 
     def test_a_disc_cannot_be_written_to(self):
-        from mydos.iso import IsoFs, IsoImage
+        from dosloth.iso import IsoFs, IsoImage
         from tests.iso_builder import build
         (self.base / "disc.iso").write_bytes(build({"A.TXT": b"abc"}))
         self.volumes.filesystems[3] = IsoFs(IsoImage(self.base / "disc.iso"))
@@ -3155,7 +3155,7 @@ class TestDeleteFile(FileFunctionsTest):
     def test_a_disc_cannot_be_written_to(self):
         from tests.iso_builder import build
         (self.base / "disc.iso").write_bytes(build({"A.TXT": b"abc"}))
-        from mydos.iso import IsoFs, IsoImage
+        from dosloth.iso import IsoFs, IsoImage
         self.volumes.filesystems[3] = IsoFs(IsoImage(self.base / "disc.iso"))
         self.assertEqual(self.delete("D:\\A.TXT"), 5)
 

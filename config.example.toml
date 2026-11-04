@@ -1,4 +1,4 @@
-# An example configuration for the emulator: python -m mydos -c config.example.toml PROGRAM
+# An example configuration for the emulator: python -m dosloth -c config.example.toml PROGRAM
 #
 # A drive and the medium in it are described apart. [disks] says what kind of device each drive is, and
 # [mounts] says what is in it. A drive with no entry in [mounts] has nothing in it, like an empty floppy

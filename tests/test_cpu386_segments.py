@@ -2,8 +2,8 @@
 a segment register, PUSH and POP of one, LES, LDS, LSS, LFS and LGS."""
 import unittest
 
-from mydos.cpu import CPU
-from mydos.regs import AX, BX, CX, DI, SI, SP
+from dosloth.cpu import CPU
+from dosloth.regs import AX, BX, CX, DI, SI, SP
 from tests.test_cpu386 import Machine, le32
 
 FS, GS = CPU.FS, CPU.GS

@@ -1,9 +1,9 @@
 import json
 import unittest
 
-from mydos import flags, pic
-from mydos.cpu import CPU
-from mydos.flat import RealModeBases
+from dosloth import flags, pic
+from dosloth.cpu import CPU
+from dosloth.flat import RealModeBases
 
 
 class PicTest(unittest.TestCase):

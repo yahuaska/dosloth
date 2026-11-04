@@ -1,7 +1,7 @@
 import unittest
 
-from mydos import bios, vesa
-from mydos.cpu import CPU
+from dosloth import bios, vesa
+from dosloth.cpu import CPU
 
 
 def machine():
@@ -74,7 +74,7 @@ class TestControllerInformation(unittest.TestCase):
         block = ask(cpu)
         segment, offset = far_pointer(block, 0x06)
         self.assertEqual((segment, offset), (0xC000, 0x0100))
-        self.assertEqual(string_at(cpu, segment, offset), b"mydos VGA")
+        self.assertEqual(string_at(cpu, segment, offset), b"dosloth VGA")
 
     def test_the_list_of_modes_has_0101h_and_ends_with_ffffh_as_the_installer_reads_it(self):
         cpu = machine()
@@ -93,7 +93,7 @@ class TestControllerInformation(unittest.TestCase):
         block = ask(cpu, signature=b"VBE2")
         self.assertEqual(block[0:4], b"VESA")  # the signature is changed from VBE2 to VESA
         self.assertEqual(int.from_bytes(block[0x14:0x16], "little"), 0x0100)
-        for offset, text in ((0x16, b"mydos"), (0x1A, b"mydos VBE"), (0x1E, b"1.0")):
+        for offset, text in ((0x16, b"dosloth"), (0x1A, b"dosloth VBE"), (0x1E, b"1.0")):
             segment, where = far_pointer(block, offset)
             self.assertEqual((segment, string_at(cpu, segment, where)), (0xC000, text), hex(offset))
         self.assertEqual(block[0x22:512], bytes(512 - 0x22))

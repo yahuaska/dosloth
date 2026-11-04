@@ -1,8 +1,8 @@
 import unittest
 
-from mydos import mouse
-from mydos.cpu import CPU
-from mydos.mouse import Mouse
+from dosloth import mouse
+from dosloth.cpu import CPU
+from dosloth.mouse import Mouse
 
 
 class TestTheState(unittest.TestCase):

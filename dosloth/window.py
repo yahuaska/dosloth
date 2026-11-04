@@ -34,7 +34,7 @@ class TkWindow(Display):
     # the button numbers of Tk (1 left, 2 middle, 3 right) and their bits in a mask
     BUTTON_BITS = {1: 0b001, 3: 0b010, 2: 0b100}
 
-    def __init__(self, press, pointer=None, title="mydos", hidden=False, save=None):
+    def __init__(self, press, pointer=None, title="DOSloth", hidden=False, save=None):
         """Open the window. `hidden` keeps it off the screen, for tests. `save()` is called when F12 is pressed, a key
         that the program does not get. Raises WindowError when it cannot be done."""
         try:

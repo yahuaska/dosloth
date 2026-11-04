@@ -2,8 +2,8 @@
 and CPU.ip_mask makes the targets of jumps, calls and returns as wide as the pointer. Real mode has 16 bits of both."""
 import unittest
 
-from mydos.cpu import CPU
-from mydos.regs import AX, BP, BX, CX, SP
+from dosloth.cpu import CPU
+from dosloth.regs import AX, BP, BX, CX, SP
 from tests.test_cpu386 import Machine, le32
 
 SS_BASE = 0x40000  # SS = 4000h

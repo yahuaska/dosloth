@@ -10,10 +10,10 @@ import zipfile
 from collections import deque
 from pathlib import Path
 
-from mydos import config, dos, machine, psp, snapshot
-from mydos.cpu import CPU
-from mydos.handles import OpenFile
-from mydos.volumes import Volumes
+from dosloth import config, dos, machine, psp, snapshot
+from dosloth.cpu import CPU
+from dosloth.handles import OpenFile
+from dosloth.volumes import Volumes
 
 # mov si,300h ; loop: in al,40h ; mov [si],al ; inc si ; jmp loop      writes what the timer says, byte after byte
 TIMER_LOOP = bytes([0xBE, 0x00, 0x03, 0xE4, 0x40, 0x88, 0x04, 0x46, 0xEB, 0xF9])
@@ -485,13 +485,13 @@ class TestWhatIsPutBack(SnapshotTest):
     def test_the_rom_is_the_one_of_the_code_and_not_of_the_snapshot(self):
         a = self.make()
         a.cpu.mem[0xF0000] = 0x00  # as in a snapshot of a time before there was a routine there
-        a.cpu.mem[0xC0100:0xC0109] = bytes(9)
+        a.cpu.mem[0xC0100:0xC010B] = bytes(11)
         path = str(self.out / "x.state")
         snapshot.save(path, a)
         b = self.make()
         snapshot.load(path, b)
         self.assertEqual(b.cpu.mem[0xF0000], 0xCB)
-        self.assertEqual(bytes(b.cpu.mem[0xC0100:0xC0109]), b"mydos VGA")
+        self.assertEqual(bytes(b.cpu.mem[0xC0100:0xC010B]), b"dosloth VGA")
 
     def test_a_snapshot_from_before_the_386_leaves_the_high_halves_as_built(self):
         a = self.make()
@@ -513,7 +513,7 @@ class TestWhatIsPutBack(SnapshotTest):
         self.assertEqual((b.cpu.mem[0x400], b.cpu.mem[0x12345]), (0x77, 0x99))
 
     def test_the_flat_mode_comes_back_with_its_selectors_and_its_widths(self):
-        from mydos.flat import Bases
+        from dosloth.flat import Bases
         a = self.make()
         a.cpu.use_flat_memory(Bases({0x10: 0, 0x18: 0x30000}))
         a.cpu.ip_mask, a.cpu.stack32, a.cpu.code32 = 0xFFFFFFFF, True, True
@@ -528,7 +528,7 @@ class TestWhatIsPutBack(SnapshotTest):
             b.cpu.rb(0x47, 0)
 
     def test_a_snapshot_from_before_the_modes_is_one_of_real_mode_even_on_a_machine_that_was_in_another(self):
-        from mydos.flat import REAL_MODE, Bases
+        from dosloth.flat import REAL_MODE, Bases
         a = self.make()
         packed, blobs = self.tampered(a, lambda data: data["cpu"].pop("mode"))
         b = self.make()

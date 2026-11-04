@@ -2,8 +2,8 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from mydos import config, dos, psp, sysvars
-from mydos.cpu import CPU
+from dosloth import config, dos, psp, sysvars
+from dosloth.cpu import CPU
 
 # The routine of install.exe that adds up the entries of the system file table (from 19B7:01E5):
 #   push es ; push bx ; mov bx, FFFFh ; mov ah, 52h ; int 21h ; cmp bx, -1 ; je failed
@@ -18,7 +18,7 @@ def machine(text=None):
     cpu = CPU()
     volumes = None
     if text is not None:
-        from mydos.volumes import Volumes
+        from dosloth.volumes import Volumes
         volumes = Volumes(config.parse(tomllib.loads(text), Path(".")))
     state = dos.install(cpu, volumes)
     return cpu, state

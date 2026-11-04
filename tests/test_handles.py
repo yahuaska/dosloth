@@ -1,6 +1,6 @@
 import unittest
 
-from mydos.handles import TABLE_SIZE, Console, HandleTable, NullDevice, OpenFile
+from dosloth.handles import TABLE_SIZE, Console, HandleTable, NullDevice, OpenFile
 
 
 class SpyFile:

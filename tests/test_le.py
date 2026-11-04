@@ -2,7 +2,7 @@ import struct
 import unittest
 from pathlib import Path
 
-from mydos import le
+from dosloth import le
 from tests.le_builder import F, Obj, PAGE, RW, RX, build_bound, build_program, mz_stub
 
 REPOSITORY = Path(__file__).resolve().parent.parent

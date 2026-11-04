@@ -38,7 +38,7 @@ class CommandLineTest(unittest.TestCase):
     def run_emulator(self, *arguments, cwd=None):
         """Run the emulator from a directory (by default the temporary one, where the programs are)."""
         environment = {**os.environ, "PYTHONPATH": str(REPOSITORY)}
-        return subprocess.run([sys.executable, "-m", "mydos", *map(str, arguments)], capture_output=True, text=True,
+        return subprocess.run([sys.executable, "-m", "dosloth", *map(str, arguments)], capture_output=True, text=True,
                               timeout=30, cwd=cwd or self.dir, env=environment)
 
     # a hard disk C: that is the directory of the config, and a memory disk D:
@@ -228,7 +228,7 @@ class TestTheWindow(CommandLineTest):
         environment = {name: value for name, value in os.environ.items()
                        if name not in ("DISPLAY", "WAYLAND_DISPLAY")}
         environment["PYTHONPATH"] = str(REPOSITORY)
-        result = subprocess.run([sys.executable, "-m", "mydos", "-w", "t.com"], capture_output=True, text=True,
+        result = subprocess.run([sys.executable, "-m", "dosloth", "-w", "t.com"], capture_output=True, text=True,
                                 timeout=30, cwd=self.dir, env=environment)
         self.assertEqual(result.returncode, 2)
         self.assertIn("cannot open a window", result.stderr)
@@ -274,7 +274,7 @@ class TestTheScreenFile(CommandLineTest):
         # draw a pixel, then loop for ever: only the periodic showing can put the picture in the file
         loop = bytes([0xEB, 0xFE])  # jmp $
         self.program(WHITE_PIXEL[:-4] + loop)
-        process = subprocess.Popen([sys.executable, "-m", "mydos", "-s", "screen.png", "t.com"], cwd=self.dir,
+        process = subprocess.Popen([sys.executable, "-m", "dosloth", "-s", "screen.png", "t.com"], cwd=self.dir,
                                    env={**os.environ, "PYTHONPATH": str(REPOSITORY)}, stderr=subprocess.PIPE)
         try:
             for _ in range(200):
@@ -393,9 +393,9 @@ class TestGoingOnFromAState(CommandLineTest):
 
     def machine_with(self, code, steps):
         """A machine that has run `steps` instructions of the program `code`, as the emulator would load it."""
-        from mydos import config as settings, dos, loader, machine, psp
-        from mydos.psp import ENV_SEG, PSP_SEG
-        from mydos.volumes import Volumes
+        from dosloth import config as settings, dos, loader, machine, psp
+        from dosloth.psp import ENV_SEG, PSP_SEG
+        from dosloth.volumes import Volumes
         computer = machine.build(Volumes(settings.default(self.dir)))
         psp.build(computer.cpu, PSP_SEG, ENV_SEG, dos.MEMORY_TOP_SEG, "C:\\T.COM")
         loader.load(computer.cpu, code, PSP_SEG)
@@ -404,7 +404,7 @@ class TestGoingOnFromAState(CommandLineTest):
         return computer
 
     def test_the_program_goes_on_where_it_was_with_what_it_had(self):
-        from mydos import snapshot
+        from dosloth import snapshot
         # mov al,7 ; mov ah,4Ch ; int 21h     the exit code is what AL had
         code = bytes([0xB0, 0x07, 0xB4, 0x4C, 0xCD, 0x21])
         computer = self.machine_with(code, 1)
@@ -413,14 +413,14 @@ class TestGoingOnFromAState(CommandLineTest):
         self.assertEqual((result.returncode, result.stderr), (7, ""))
 
     def test_the_same_state_can_be_gone_on_from_again_and_again(self):
-        from mydos import snapshot
+        from dosloth import snapshot
         computer = self.machine_with(bytes([0xB0, 0x09, 0xB4, 0x4C, 0xCD, 0x21]), 1)
         snapshot.save(str(self.dir / "t.state"), computer)
         for _ in range(2):
             self.assertEqual(self.run_emulator("-r", "t.state").returncode, 9)
 
     def test_a_crash_leaves_a_state_to_go_on_from_at_the_instruction_that_failed(self):
-        from mydos import snapshot
+        from dosloth import snapshot
         self.program(bytes([0xB0, 0x07]) + CRASH)  # mov al,7 ; and then an opcode that is not there
         result = self.run_emulator("t.com")
         self.assertEqual(result.returncode, 1)
@@ -471,7 +471,7 @@ class TestGoingOnFromAState(CommandLineTest):
             self.assertNotIn("Traceback", result.stderr)
 
     def test_a_state_made_with_other_drives_is_refused_by_the_drives_it_names(self):
-        from mydos import snapshot
+        from dosloth import snapshot
         computer = self.machine_with(bytes([0xB4, 0x4C, 0xCD, 0x21]), 0)
         snapshot.save(str(self.dir / "t.state"), computer)
         other = self.config("[disks.C]\ntype = 'hdd'\n[mounts]\nC = { type = 'dir', path = '.' }\n")
@@ -481,7 +481,7 @@ class TestGoingOnFromAState(CommandLineTest):
         self.assertNotIn("Traceback", result.stderr)
 
     def test_a_file_that_was_open_and_is_gone_is_said_by_name(self):
-        from mydos import snapshot
+        from dosloth import snapshot
         (self.dir / "DATA.TXT").write_bytes(b"data")
         # mov ax,3D00h ; mov dx,0109h ; int 21h ; nop ; the name follows
         code = bytes([0xB8, 0x00, 0x3D, 0xBA, 0x09, 0x01, 0xCD, 0x21, 0x90]) + b"DATA.TXT\0"

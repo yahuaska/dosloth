@@ -125,8 +125,8 @@ import struct
 import unittest
 import zlib
 
-from mydos.cpu import CPU, Exit
-from mydos.flat import Bases
+from dosloth.cpu import CPU, Exit
+from dosloth.flat import Bases
 
 FLAT = 0x10
 BASE = 0x400000  # where the code is linked
@@ -560,7 +560,7 @@ class Functions:
 
 
     def test_the_whole_of_the_code_is_known_to_the_disassembler_and_the_functions_begin_where_the_symbols_say(self):
-        from mydos.disasm import disasm
+        from dosloth.disasm import disasm
         starts = set(self.symbols.values())
         at, found = BASE, set()
         while at < BASE + self.text_size:  # the code only: the data of the program follows it

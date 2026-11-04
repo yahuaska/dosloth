@@ -4,10 +4,10 @@ import struct
 import unittest
 from pathlib import Path
 
-from mydos import flags, le, loader, psp
-from mydos.cpu import CPU, Exit
-from mydos.flat import REAL_MODE, Bases
-from mydos.xmem import PAGE, START, ExtendedMemory
+from dosloth import flags, le, loader, psp
+from dosloth.cpu import CPU, Exit
+from dosloth.flat import REAL_MODE, Bases
+from dosloth.xmem import PAGE, START, ExtendedMemory
 from tests.le_builder import F, Obj, RW, RX, build_bound, build_program
 
 SMKP = Path(__file__).resolve().parent.parent / "XCOMA" / "UFOEXE" / "SMKP.EXE"
@@ -221,7 +221,7 @@ class TestTheGame(Machine):
         self.assertEqual(self.cpu.get32(CPU.SP), bases[image.stack_object] + image.stack_offset)
 
     def test_the_start_code_is_answered_by_the_extender_that_the_machine_plays(self):
-        from mydos import dos
+        from dosloth import dos
         dos.install(self.cpu)
         answers = []
 

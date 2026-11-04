@@ -1,7 +1,7 @@
 import unittest
 
-from mydos import sysport, timer
-from mydos.cpu import CPU, Exit
+from dosloth import sysport, timer
+from dosloth.cpu import CPU, Exit
 
 
 class Clock:

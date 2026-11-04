@@ -1,9 +1,9 @@
 """Breakpoints: the address as it is written, and what CPU.run does with it."""
 import unittest
 
-from mydos import breakpoints
-from mydos.breakpoints import BreakpointHit
-from mydos.cpu import CPU
+from dosloth import breakpoints
+from dosloth.breakpoints import BreakpointHit
+from dosloth.cpu import CPU
 
 # three nops, then mov ax,4C07h / int 21h: the program ends with 7 (the handler of INT 21h is set by the tests)
 PROGRAM = bytes.fromhex("90 90 90 b8 07 4c cd 21")
@@ -16,7 +16,7 @@ def machine(code=PROGRAM):
     cpu.r[CPU.SP] = 0xFFFE
 
     def dos(cpu):
-        from mydos.cpu import Exit
+        from dosloth.cpu import Exit
         raise Exit(cpu.get8(0))
     cpu.int_handlers[0x21] = dos
     return cpu
@@ -135,7 +135,7 @@ class TestStopping(unittest.TestCase):
         self.assertEqual(cpu.run(), 7)
 
     def test_a_32_bit_program_has_its_address_with_8_digits(self):
-        from mydos.flat import Bases
+        from dosloth.flat import Bases
         cpu = machine()
         cpu.enter_flat(Bases({0x0F: 0}))
         cpu.s[CPU.CS] = cpu.s[CPU.DS] = cpu.s[CPU.SS] = 0x0F

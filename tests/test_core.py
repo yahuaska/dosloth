@@ -2,8 +2,8 @@
 fast, so each is held against what it is meant to do, worked out in a plainer way."""
 import unittest
 
-from mydos import flags, pages
-from mydos.cpu import CONDITION_FLAGS, CPU, EVEN_PARITY, PREFIXES, condition_holds, signed
+from dosloth import flags, pages
+from dosloth.cpu import CONDITION_FLAGS, CPU, EVEN_PARITY, PREFIXES, condition_holds, signed
 
 ALL_CLEAR = 0x0002
 ALL_RAISED = 0x0002 | flags.CF | flags.PF | flags.AF | flags.ZF | flags.SF | flags.OF | flags.DF | flags.IF

@@ -4,10 +4,10 @@ of the instructions in inline assembly, run on the host); the control word is wh
 import math
 import unittest
 
-from mydos import fpu
-from mydos.cpu import CPU
-from mydos.disasm import disasm
-from mydos.flat import Bases
+from dosloth import fpu
+from dosloth.cpu import CPU
+from dosloth.disasm import disasm
+from dosloth.flat import Bases
 
 FLAT = 0x10
 AT = 0x00400000

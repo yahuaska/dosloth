@@ -1,8 +1,8 @@
 import unittest
 
-from mydos import fpu
-from mydos.cpu import ADDRESS_SIZED, CPU
-from mydos.disasm import disasm
+from dosloth import fpu
+from dosloth.cpu import ADDRESS_SIZED, CPU
+from dosloth.disasm import disasm
 
 
 # A ModRM byte that is valid after the opcode: a register operand, and the 'reg' field the opcode needs.

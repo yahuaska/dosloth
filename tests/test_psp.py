@@ -4,8 +4,8 @@ import sys
 import tempfile
 import unittest
 
-from mydos import psp
-from mydos.cpu import CPU
+from dosloth import psp
+from dosloth.cpu import CPU
 
 
 def word(cpu, seg, off):
@@ -121,7 +121,7 @@ class TestAProgramSeesIt(unittest.TestCase):
             repository = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             environment = {**os.environ, "PYTHONPATH": repository}
             # the program is C:\T.COM: the directory it was written to is the root of the built-in drive C:
-            result = subprocess.run([sys.executable, "-m", "mydos", "t.com"], capture_output=True, timeout=30,
+            result = subprocess.run([sys.executable, "-m", "dosloth", "t.com"], capture_output=True, timeout=30,
                                     cwd=directory, env=environment)
             self.assertEqual(result.stderr, b"", result.stderr)
             return result.returncode

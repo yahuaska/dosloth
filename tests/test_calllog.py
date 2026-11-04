@@ -3,8 +3,8 @@ import io
 import re
 import unittest
 
-from mydos import bios, calllog, dos
-from mydos.cpu import CPU, Exit
+from dosloth import bios, calllog, dos
+from dosloth.cpu import CPU, Exit
 from tests import test_dos
 
 ARROW = " " * 22 + "-> "  # the second line of a call begins like this

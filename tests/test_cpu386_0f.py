@@ -2,8 +2,8 @@
 BT and its kin, BSF, BSR and BSWAP. Each is checked against a definition written out on Python numbers."""
 import unittest
 
-from mydos import flags
-from mydos.regs import AX, BX, CX, DX, SI
+from dosloth import flags
+from dosloth.regs import AX, BX, CX, DX, SI
 from tests.test_cpu386 import SAMPLES, Machine, le32
 
 MASK = 0xFFFFFFFF

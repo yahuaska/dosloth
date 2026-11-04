@@ -1,11 +1,11 @@
 """What the debugger window says (the plain functions), and that its buttons drive the program (a hidden window)."""
 import unittest
 
-from mydos.cpu import CPU
-from mydos.debugger import Debugger
-from mydos.debugwindow import (DebugWindow, breakpoint_text, changed_registers, hexdump, listing, register_lines,
+from dosloth.cpu import CPU
+from dosloth.debugger import Debugger
+from dosloth.debugwindow import (DebugWindow, breakpoint_text, changed_registers, hexdump, listing, register_lines,
                                register_values, set_register, write_memory)
-from mydos.window import WindowError
+from dosloth.window import WindowError
 from tests.test_breakpoints import machine
 
 try:

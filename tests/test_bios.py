@@ -2,8 +2,8 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from mydos import bios, config, flags, vga
-from mydos.cpu import CPU
+from dosloth import bios, config, flags, vga
+from dosloth.cpu import CPU
 
 
 class TestKeyboard(unittest.TestCase):
@@ -576,7 +576,7 @@ class TestEquipmentAndMemory(unittest.TestCase):
         self.assertEqual(self.call(cpu, 0x12), 512)
 
     def test_the_640_kb_are_the_memory_dos_gives_to_programs(self):
-        from mydos import dos
+        from dosloth import dos
         self.assertEqual(bios.CONVENTIONAL_MEMORY_KB * 1024 // 16, dos.MEMORY_TOP_SEG)
 
     def test_int_12h_changes_no_other_register_and_no_flag(self):
@@ -864,7 +864,7 @@ class TestTimeOfDay(unittest.TestCase):
 
     def ticks_at(self, seconds):
         from unittest import mock
-        with mock.patch("mydos.bios._seconds_since_midnight", return_value=seconds):
+        with mock.patch("dosloth.bios._seconds_since_midnight", return_value=seconds):
             self.call(0x0000)
         return self.cpu.r[CPU.CX] << 16 | self.cpu.r[CPU.DX]
 

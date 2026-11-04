@@ -1,9 +1,9 @@
 import struct
 import unittest
 
-from mydos import command, dos, flags, process, psp
-from mydos.cpu import CPU
-from mydos.handles import OpenFile
+from dosloth import command, dos, flags, process, psp
+from dosloth.cpu import CPU
+from dosloth.handles import OpenFile
 from tests import test_dos
 
 PARENT = 0x1000  # the PSP of the program that starts the others
@@ -427,7 +427,7 @@ class TestThe32BitRegistersOfAChild(ProcessTest):
         self.assertEqual(self.cpu.get32(0), 0x11110000)  # EAX: the high half of the parent and the AX of the exec
 
     def test_the_mode_of_the_parent_is_kept_and_comes_back(self):
-        from mydos.flat import REAL_MODE, Bases
+        from dosloth.flat import REAL_MODE, Bases
         self.program("CHILD.COM", com(bytes([0xB8, 0x00, 0x4C, 0xCD, 0x21])))
         self.start("CHILD.COM")
         self.assertEqual(self.state.parents[-1].mode, REAL_MODE)  # what the parent was in when it started the child
@@ -603,7 +603,7 @@ class TestThePocketCommandCom(ProcessTest):
             self.assertEqual(out.getvalue(), shown, line)
 
     def test_in_the_child_the_standard_output_is_the_nul_device_and_the_rest_is_as_it_was(self):
-        from mydos.handles import Console, NullDevice
+        from dosloth.handles import Console, NullDevice
         self.program("CHILD.COM", com(self.TAIL_LENGTH))
         self.shell("/c child>nul")
         handles = self.state.handles
@@ -694,7 +694,7 @@ class TestThePocketCommandCom(ProcessTest):
         self.assertEqual(self.state.psp_seg, PARENT)
 
     def test_a_file_the_parent_had_as_its_standard_output_is_closed_when_the_parent_lets_go_after_the_child(self):
-        from mydos.handles import OpenFile
+        from dosloth.handles import OpenFile
         self.program("CHILD.COM", com(self.TAIL_LENGTH))
         file = self.volumes.filesystems[3].create(["OUT.TXT"])
         redirected = OpenFile(file, "D:\\OUT.TXT")
@@ -763,7 +763,7 @@ class TestAnLeProgram(ProcessTest):
         return build_bound(plain) if bound else plain
 
     def test_it_starts_in_the_flat_mode_with_its_psp_and_the_objects_above_1_mb(self):
-        from mydos.xmem import START
+        from dosloth.xmem import START
         self.start("GAME.EXE", self.le_program())
         self.assertIsNone(self.failed())
         cpu, child = self.cpu, self.state.psp_seg
@@ -781,7 +781,7 @@ class TestAnLeProgram(ProcessTest):
         self.assertTrue(self.cpu.flat)
 
     def test_it_runs_and_its_exit_code_goes_to_the_parent_which_finds_everything_as_it_was(self):
-        from mydos.flat import REAL_MODE
+        from dosloth.flat import REAL_MODE
         cpu = self.cpu
         cpu.r[CPU.SI], cpu.rh[CPU.SI] = 0x1234, 0x5678
         blocks = dict(self.state.memory.blocks)
@@ -794,7 +794,7 @@ class TestAnLeProgram(ProcessTest):
         self.assertEqual(self.state.memory.blocks, blocks)
 
     def test_the_child_of_an_le_program_goes_above_it_and_leaves_it_in_the_flat_mode_when_it_ends(self):
-        from mydos.xmem import START
+        from dosloth.xmem import START
         self.start("GAME.EXE", self.le_program())
         self.state.memory.resize(self.state.psp_seg, 0x1000)  # the program gives back what it does not need
         parent_state = (self.cpu.ip, list(self.cpu.s), self.cpu.get_mode())
@@ -817,7 +817,7 @@ class TestAnLeProgram(ProcessTest):
                          ([], PARENT, {}, False))
 
     def test_a_program_that_has_not_room_in_the_extended_memory_is_error_8_and_nothing_is_taken(self):
-        from mydos.xmem import START, ExtendedMemory
+        from dosloth.xmem import START, ExtendedMemory
         blocks = dict(self.state.memory.blocks)
         self.state.extended = ExtendedMemory(START, START + 0x1000)  # one page: the code goes in, the data does not
         self.start("BIG.EXE", self.le_program())
@@ -829,7 +829,7 @@ class TestAnLeProgram(ProcessTest):
 
 class TestWithoutAParent(unittest.TestCase):
     def test_the_first_program_ends_the_emulator_with_its_code(self):
-        from mydos.cpu import Exit
+        from dosloth.cpu import Exit
         cpu = CPU()
         dos.install(cpu)
         cpu.s[CPU.CS] = 0x0800
@@ -840,7 +840,7 @@ class TestWithoutAParent(unittest.TestCase):
         self.assertEqual(caught.exception.code, 3)
 
     def test_int_20h_ends_it_with_code_0(self):
-        from mydos.cpu import Exit
+        from dosloth.cpu import Exit
         cpu = CPU()
         dos.install(cpu)
         cpu.s[CPU.CS] = 0x0800

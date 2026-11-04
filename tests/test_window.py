@@ -1,9 +1,9 @@
 import unittest
 from types import SimpleNamespace
 
-from mydos.display import Display
-from mydos.screen import Frame
-from mydos.window import zoom_for
+from dosloth.display import Display
+from dosloth.screen import Frame
+from dosloth.window import zoom_for
 
 try:
     import tkinter
@@ -21,7 +21,7 @@ def frame_of(width, height, pixel):
 @unittest.skipIf(tkinter is None, "this Python has no tkinter")
 class TestTkWindow(unittest.TestCase):
     def setUp(self):
-        from mydos.window import TkWindow, WindowError
+        from dosloth.window import TkWindow, WindowError
         self.keys = []
         try:
             self.window = TkWindow(lambda scan, ascii_code: self.keys.append((scan, ascii_code)), hidden=True)
@@ -161,7 +161,7 @@ class TestTkWindow(unittest.TestCase):
         self.assertEqual(self.keys, [])
 
     def test_the_window_is_given_what_to_call_for_f12_when_it_is_made(self):
-        from mydos.window import TkWindow
+        from dosloth.window import TkWindow
         saved = []
         window = TkWindow(lambda scan, ascii_code: None, hidden=True, save=lambda: saved.append(1))
         self.addCleanup(window.close)
@@ -220,7 +220,7 @@ class TestWithoutTk(unittest.TestCase):
     def test_a_python_without_tkinter_gives_a_window_error_that_says_so(self):
         import sys
         from unittest import mock
-        from mydos.window import TkWindow, WindowError
+        from dosloth.window import TkWindow, WindowError
         with mock.patch.dict(sys.modules, {"tkinter": None}):  # an import of it now fails, as on such a Python
             with self.assertRaises(WindowError) as caught:
                 TkWindow(lambda scan, ascii_code: None, hidden=True)
@@ -232,7 +232,7 @@ class TestWithoutAScreen(unittest.TestCase):
     def test_a_window_cannot_be_opened_where_there_is_no_screen(self):
         import os
         from unittest import mock
-        from mydos.window import TkWindow, WindowError
+        from dosloth.window import TkWindow, WindowError
         if os.name != "posix":
             self.skipTest("a screen is always there")
         with mock.patch.dict(os.environ):

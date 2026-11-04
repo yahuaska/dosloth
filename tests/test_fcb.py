@@ -1,7 +1,7 @@
 import unittest
 
-from mydos import dos, fcb
-from mydos.cpu import CPU
+from dosloth import dos, fcb
+from dosloth.cpu import CPU
 
 
 def parse(text, control=0, old=b"\x07ABCDEFGHXYZ", drives=(1, 2, 3, 4)):

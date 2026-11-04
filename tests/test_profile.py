@@ -1,8 +1,8 @@
 """The count of the instructions by address, the places it gathers, and what the report says."""
 import unittest
 
-from mydos.cpu import CPU
-from mydos.profile import GAP, Profile
+from dosloth.cpu import CPU
+from dosloth.profile import GAP, Profile
 from tests.test_breakpoints import machine
 
 # 0000 mov cx,5 / 0003 nop / 0004 loop 0003 / 0006 mov ax,4C07h / 0009 int 21h : the nop and the loop run five times

@@ -43,10 +43,10 @@ def make_trace(log):
 def main():
     """Run the program named on the command line; exit with the program's exit code."""
     parser = argparse.ArgumentParser(
-        prog="python -m mydos", description="Run a DOS .COM or .EXE program.",
+        prog="python -m dosloth", description="Run a DOS .COM or .EXE program.",
         epilog="The options and the name of the program come first, in any order. After `--` is the command line of "
                "the program, as it would be typed after its name in DOS, whatever the words are: "
-               "python -m mydos -w smkp.exe -d trace.log -- 0 GOFORIT -w")
+               "python -m dosloth -w smkp.exe -d trace.log -- 0 GOFORIT -w")
     parser.add_argument("-c", metavar="FILE", help="the configuration (TOML): drives, mounts, starting directory; "
                         "without it the current directory is the hard disk C:")
     parser.add_argument("-d", metavar="LOGFILE", help="write every executed instruction to LOGFILE")
@@ -60,7 +60,7 @@ def main():
     parser.add_argument("-p", metavar="REPORT", help="count how many times every instruction is executed, and write "
                         "the hottest places of the program to REPORT when it ends (about a third slower)")
     parser.add_argument("--no-patches", action="store_true", help="run the code of the program as it is, with no "
-                        "Python in its place (see the package mydos/patches): to trace it, or to compare with a patched run")
+                        "Python in its place (see the package dosloth/patches): to trace it, or to compare with a patched run")
     parser.add_argument("-t", metavar="LOGFILE", help="write every call of the program to DOS (INT 21h, 2Fh, 25h, 20h) "
                         "to LOGFILE: what it asked, the names, and what DOS answered; to see what a program does "
                         "when it fails")

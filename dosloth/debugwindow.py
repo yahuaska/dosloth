@@ -177,7 +177,7 @@ class DebugWindow(Display):
             self.root = tkinter.Tk()
         except tkinter.TclError as error:
             raise WindowError(str(error)) from None
-        self.root.title("mydos debugger")
+        self.root.title("DOSloth debugger")
         self.build()
         self.root.protocol("WM_DELETE_WINDOW", self.on_delete)
         for key, command in (("<F7>", self.on_step), ("<F8>", self.on_over), ("<F9>", self.on_go),

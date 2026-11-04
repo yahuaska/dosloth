@@ -6,9 +6,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from mydos import filesystem
-from mydos.config import Mount
-from mydos.filesystem import (ACCESS_DENIED, ATTR_ARCHIVE, ATTR_DIRECTORY, ATTR_HIDDEN, ATTR_READONLY, ATTR_SYSTEM,
+from dosloth import filesystem
+from dosloth.config import Mount
+from dosloth.filesystem import (ACCESS_DENIED, ATTR_ARCHIVE, ATTR_DIRECTORY, ATTR_HIDDEN, ATTR_READONLY, ATTR_SYSTEM,
                               ATTR_VOLUME, FILE_NOT_FOUND, PATH_NOT_FOUND, FsError, HostDir, MemFs, find_ignoring_case,
                               is_dos_name)
 
@@ -471,13 +471,13 @@ class TestMemFs(Contract, unittest.TestCase):
         self.assertEqual(self.fs.free_space(), (total, free - 1000))
 
     def test_the_time_of_a_file_is_when_it_was_made_and_when_it_was_last_written(self):
-        with mock.patch("mydos.filesystem.time.time", return_value=1000.0):
+        with mock.patch("dosloth.filesystem.time.time", return_value=1000.0):
             f = self.fs.create(["F"])
             self.assertEqual(self.fs.stat(["F"]).mtime, 1000.0)
-        with mock.patch("mydos.filesystem.time.time", return_value=2000.0):
+        with mock.patch("dosloth.filesystem.time.time", return_value=2000.0):
             f.write(b"x")
             self.assertEqual(self.fs.stat(["F"]).mtime, 2000.0)
-        with mock.patch("mydos.filesystem.time.time", return_value=3000.0):
+        with mock.patch("dosloth.filesystem.time.time", return_value=3000.0):
             self.fs.open(["F"]).read()  # reading does not change it
             self.assertEqual(self.fs.stat(["F"]).mtime, 2000.0)
             f.truncate(0)
@@ -487,7 +487,7 @@ class TestMemFs(Contract, unittest.TestCase):
         self.assertEqual(self.fs.free_space()[0], 32 * 1024 * 1024)
 
     def filled(self):
-        with mock.patch("mydos.filesystem.time.time", return_value=1000.0):
+        with mock.patch("dosloth.filesystem.time.time", return_value=1000.0):
             self.fs.mkdir(["D"])
             self.fs.mkdir(["D", "E"])
             self.put(["D", "F.TXT"], b"in a directory")
@@ -557,7 +557,7 @@ class TestForMount(unittest.TestCase):
 
 class TestForAnImage(unittest.TestCase):
     def test_an_image_mount_is_an_isofs_on_that_file(self):
-        from mydos.iso import IsoFs
+        from dosloth.iso import IsoFs
         from tests.iso_builder import build
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "disc.iso"

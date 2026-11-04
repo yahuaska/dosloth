@@ -4,8 +4,8 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from mydos import config
-from mydos.config import ConfigError
+from dosloth import config
+from dosloth.config import ConfigError
 from tests.iso_builder import build
 
 REPOSITORY = Path(__file__).resolve().parent.parent
