@@ -350,6 +350,8 @@ class Ops32:
 
         kind = op & 0xFE
         compares = kind in (0xA6, 0xAE)
+        if self.rep is not None and wide and self.flat and kind in (0xA4, 0xAA) and self.rep_block(kind, bits):
+            return
 
         def one():
             if kind == 0xA4:  # movs
@@ -378,6 +380,40 @@ class Ops32:
             put(counter, get(counter) - 1)
             if compares and (self.rep == Op.REPNE_PREFIX) == self.get_flag(flags.ZF):
                 break
+
+    def rep_block(self, kind, bits):
+        """REP MOVS (A4) and REP STOS (AA) of the flat mode with 32-bit addresses, as one copy or one fill when the result
+        is what the element-by-element loop gives: the direction is up, the whole run is in the memory and does not wrap at
+        4 GB, the window of the video card is not touched, and for MOVS the target is not inside what is read after it
+        (a copy that goes over its source repeats it). Then ESI and EDI are moved on, and ECX is 0; the flags do not
+        change. Returns False when the run is not one of them, and nothing is done: the loop goes element by element."""
+        if self.get_flag(flags.DF):
+            return False
+        count = self.get32(self.CX)
+        if count == 0:
+            return True  # the loop would do nothing
+        size = bits // 8
+        total = count * size
+        memory = len(self.mem)
+        target_offset = self.get32(self.DI)
+        target = self.bases[self.s[self.ES]] + target_offset
+        if (target_offset + total > 1 << 32 or target + total > memory
+                or target < self.video_end and target + total > self.video_start):
+            return False
+        if kind == 0xA4:
+            source_offset = self.get32(self.SI)
+            source = self.bases[self.data_segment()] + source_offset
+            if (source_offset + total > 1 << 32 or source + total > memory
+                    or source < self.video_end and source + total > self.video_start
+                    or source < target < source + total):
+                return False
+            self.mem[target:target + total] = self.mem[source:source + total]
+            self.set32(self.SI, source_offset + total)
+        else:
+            self.mem[target:target + total] = self.get_reg(self.AX, bits).to_bytes(size, "little") * count
+        self.set32(self.DI, target_offset + total)
+        self.set32(self.CX, 0)
+        return True
 
     def loop_a32(self, op):
         """LOOPNE, LOOPE, LOOP and JCXZ (E0-E3) with 32-bit addresses: the counter is ECX, and JCXZ is JECXZ."""

@@ -1,6 +1,7 @@
 """The flat memory (step 3a2): selectors and their bases, the reads and writes, the fetch of the program, and the same
 tests as for the instructions of the 386 run on it (with the base of a selector being the selector times 16, as in
 real mode, so that every one of them must give the same answer)."""
+import random
 import struct
 import unittest
 
@@ -412,3 +413,91 @@ class TestWriteBytesOfTheFlatMemory(unittest.TestCase):
         cpu = flat_cpu(Bases({0x10: 0x100}))
         cpu.write_bytes(0x10, 0xFFFFFFFE, b"abcd")  # the sum is 0x100000000FE... it wraps: 0xFE, 0xFF, then 0x100, 0x101
         self.assertEqual(bytes(cpu.mem[0xFE:0x102]), b"abcd")
+
+
+class TestRepMovsAndStosAsOneBlock(unittest.TestCase):
+    """REP MOVS and REP STOS of the flat mode: when the run can be done as one copy or one fill, the registers, the flags
+    and the memory are what the loop of single elements gives (it is run beside, with the block turned off)."""
+
+    REGION = 0x20000
+
+    def machine(self, bases=None, block=True):
+        cpu = CPU()
+        cpu.enter_flat(Bases({0x10: 0, 0x18: self.REGION, 0x20: 0x80000}) if bases is None else bases)
+        cpu.s[CPU.CS], cpu.s[CPU.DS], cpu.s[CPU.ES], cpu.s[CPU.SS] = 0x10, 0x18, 0x18, 0x10
+        rng = random.Random(9)
+        cpu.mem[self.REGION:self.REGION + 0x2000] = bytes(rng.randrange(256) for _ in range(0x2000))
+        if not block:
+            cpu.rep_block = lambda kind, bits: False
+        return cpu
+
+    def execute(self, code, esi=0, edi=0, ecx=0, eax=0, df=False, block=True, bases=None, card=False):
+        cpu = self.machine(bases, block)
+        if card:
+            cpu.video = FakeCard()
+            cpu.video_start, cpu.video_end = 0xA0000, 0xB0000
+        cpu.mem[0x1000:0x1000 + len(code)] = code
+        cpu.ip = 0x1000
+        for number, value in ((CPU.SI, esi), (CPU.DI, edi), (CPU.CX, ecx), (CPU.AX, eax)):
+            cpu.set32(number, value)
+        cpu.set_flag(flags.DF, df)
+        try:
+            cpu.step()
+            outcome = None
+        except Exception as error:  # an address out of the memory: the same error
+            outcome = type(error)
+        return (cpu.r[:], cpu.rh[:], cpu.flags, outcome, bytes(cpu.mem[self.REGION:self.REGION + 0x2000]),
+                bytes(cpu.mem[0x80000:0x80100]), dict(cpu.video.cells) if card else None)
+
+    def same(self, code, **registers):
+        self.assertEqual(self.execute(code, block=True, **registers), self.execute(code, block=False, **registers))
+
+    def test_a_copy_of_dwords_words_and_bytes_that_does_not_touch_itself(self):
+        for code in (b"\xF3\xA5", b"\x66\xF3\xA5", b"\xF3\xA4"):
+            self.same(code, esi=0x100, edi=0x900, ecx=37)
+
+    def test_a_copy_that_goes_down_over_its_source_is_the_copy_of_a_block(self):
+        self.same(b"\xF3\xA5", esi=0x200, edi=0x100, ecx=60)
+
+    def test_a_copy_that_goes_up_over_its_source_repeats_it(self):
+        self.same(b"\xF3\xA4", esi=0x100, edi=0x104, ecx=0x40)  # the first four bytes, again and again
+        self.same(b"\xF3\xA5", esi=0x100, edi=0x108, ecx=0x40)
+
+    def test_a_fill_with_a_byte_a_word_and_a_dword(self):
+        for code in (b"\xF3\xAA", b"\x66\xF3\xAB", b"\xF3\xAB"):
+            self.same(code, edi=0x300, ecx=50, eax=0x8899AABB)
+
+    def test_nothing_is_done_with_a_count_of_zero_and_the_flags_stay(self):
+        self.same(b"\xF3\xA5", esi=1, edi=2, ecx=0)
+        self.same(b"\xF3\xAB", edi=2, ecx=0, eax=7)
+
+    def test_the_direction_down_is_the_loop_of_elements(self):
+        self.same(b"\xF3\xA5", esi=0x400, edi=0x800, ecx=20, df=True)
+        self.same(b"\xF3\xAB", edi=0x800, ecx=20, eax=0x01020304, df=True)
+
+    def test_a_fill_with_a_count_that_has_nothing_in_the_high_half(self):
+        self.same(b"\xF3\xAB", edi=0, ecx=0x30, eax=5)
+
+    def test_a_run_in_the_window_of_the_card_goes_to_the_card(self):
+        self.same(b"\xF3\xAB", edi=0xA0000 - self.REGION + 0x10, ecx=12, eax=0x11223344, card=True)
+        self.same(b"\xF3\xA5", esi=0x100, edi=0xA0000 - self.REGION, ecx=8, card=True)
+        self.same(b"\xF3\xA5", esi=0xA0000 - self.REGION, edi=0x100, ecx=8, card=True)  # the card is read
+        self.same(b"\xF3\xAB", edi=0xA0000 - self.REGION - 8, ecx=6, eax=0x55667788, card=True)  # over its edge
+
+    def test_a_run_that_goes_over_the_end_of_the_memory_or_wraps_at_4_gb_is_as_the_loop_has_it(self):
+        self.same(b"\xF3\xAB", edi=MEMORY_SIZE - self.REGION - 8, ecx=4, eax=1)
+        self.same(b"\xF3\xAB", edi=MEMORY_SIZE - self.REGION - 8, ecx=2, eax=1)
+        bases = Bases({0x10: 0, 0x18: 0x20000, 0x20: 0x80000})
+        self.same(b"\xF3\xAA", edi=0xFFFFFFF0, ecx=0x20, eax=0x99, bases=bases)  # the offset wraps: 0x20000 - 0x10 on
+
+    def test_the_block_is_made_when_it_can_be(self):
+        cpu = self.machine()
+        seen = []
+        real = cpu.rep_block
+        cpu.rep_block = lambda kind, bits: seen.append(real(kind, bits)) or seen[-1]
+        cpu.mem[0x1000:0x1002] = b"\xF3\xA5"
+        cpu.ip = 0x1000
+        cpu.set32(CPU.CX, 100)
+        cpu.set32(CPU.DI, 0x800)
+        cpu.step()
+        self.assertEqual(seen, [True])
