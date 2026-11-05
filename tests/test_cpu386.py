@@ -523,7 +523,7 @@ class TestSignExtensions(Machine):
 
 class TestWhatIsNotDoneYet(Machine):
     def test_an_instruction_with_the_prefix_66_that_has_no_32_bit_form_yet_stops_the_emulator(self):
-        for opcode in (0x9A, 0xEA, 0x6D, 0x6F, 0xD8):
+        for opcode in (0x9A, 0xEA, 0x6D, 0x6F, 0xDA):
             cpu = self.start(bytes([0x66, opcode, 0xC0, 0, 0, 0, 0]))
             with self.assertRaisesRegex(NotImplementedError, f"opcode 66 {opcode:02X}, the 32-bit form, at 1000:0000"):
                 cpu.step()

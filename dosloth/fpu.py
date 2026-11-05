@@ -15,6 +15,7 @@ the `reg` field. Each form is in a table with its text (for the disassembler) an
 that is not in the tables stops the emulator, with its bytes.
 """
 import math
+import struct
 
 from . import modrm
 from .regs import AX
@@ -40,10 +41,16 @@ SINGLES = {
 }
 FAMILIES = {
     (0xD9, 0xC0): ("fld st({i})", "fld_st"),
+    (0xD9, 0xC8): ("fxch st({i})", "fxch"),
+    (0xD8, 0xF0): ("fdiv st, st({i})", "fdiv_st"),
+    (0xDE, 0xC8): ("fmulp st({i}), st", "fmulp"),
+    (0xDE, 0xE8): ("fsubp st({i}), st", "fsubp"),
     (0xDE, 0xF8): ("fdivp st({i}), st", "fdivp"),
 }
 # the forms with memory: (opcode, the reg field) -> (text with the size, method)
 MEMORY = {
+    (0xDD, 0): ("fld qword", "fld_m64"),
+    (0xDC, 3): ("fcomp qword", "fcomp_m64"),
     (0xD9, 5): ("fldcw word", "fldcw"),
     (0xD9, 7): ("fnstcw word", "fnstcw"),
     (0xDD, 7): ("fnstsw word", "fnstsw_m"),
@@ -164,6 +171,45 @@ class Fpu:
 
     def fchs(self):
         self.set_st(0, -self.st(0))
+
+    def read_double(self, m):
+        """The 64-bit real that the memory operand is."""
+        low, high = m.read(self, 32), self.rd(m.seg, (m.off + 4) & 0xFFFFFFFF)
+        return struct.unpack("<d", struct.pack("<II", low, high))[0]
+
+    def fld_m64(self, m):
+        self.fpu_push(self.read_double(m))
+
+    def fxch(self, i):
+        top, other = self.st(0), self.st(i)
+        self.set_st(0, other)
+        self.set_st(i, top)
+
+    def fdiv_st(self, i):
+        quotient, raised = divide(self.st(0), self.st(i))
+        self.fsw |= raised
+        self.set_st(0, quotient)
+
+    def fmulp(self, i):
+        a, b = self.st(i), self.st(0)
+        if (math.isinf(a) and b == 0) or (a == 0 and math.isinf(b)):  # an infinity by a zero is not a number
+            self.fsw |= INVALID_OPERATION
+        self.set_st(i, a * b)
+        self.fpu_pop()
+
+    def fsubp(self, i):
+        a, b = self.st(i), self.st(0)
+        if math.isinf(a) and math.isinf(b) and a == b:  # an infinity less the same one is not a number
+            self.fsw |= INVALID_OPERATION
+        self.set_st(i, a - b)
+        self.fpu_pop()
+
+    def fcomp_m64(self, m):
+        codes = compare(self.st(0), self.read_double(m))
+        if codes == C0 | C2 | C3:  # the comparison with a number that is not one is an invalid operation
+            self.fsw |= INVALID_OPERATION
+        self.set_conditions(codes)
+        self.fpu_pop()
 
     def fdivp(self, i):
         quotient, raised = divide(self.st(i), self.st(0))

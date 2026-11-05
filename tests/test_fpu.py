@@ -2,6 +2,7 @@
 status words are what the coprocessor of a real machine answered to the same instructions (a C program with the bytes
 of the instructions in inline assembly, run on the host); the control word is what it reads back."""
 import math
+import struct
 import unittest
 
 from dosloth import fpu
@@ -245,11 +246,11 @@ class TestComparison(FpuMachine):
 
 class TestWhatIsNotThere(FpuMachine):
     def test_a_form_that_is_not_done_stops_with_its_bytes(self):
-        cpu = self.machine(bytes_of("d9 c8"))  # fxch st(1)
-        with self.assertRaisesRegex(NotImplementedError, "x87 instruction at 0010:400000: d9 c8"):
+        cpu = self.machine(bytes_of("d9 d0"))  # fnop
+        with self.assertRaisesRegex(NotImplementedError, "x87 instruction at 0010:400000: d9 d0"):
             cpu.step()
-        cpu = self.machine(bytes_of("d8 05 00 00 50 00"))  # fadd dword [00500000]: no form of D8 is done
-        with self.assertRaisesRegex(NotImplementedError, "opcode D8 at 0010:400000: d8 05 00 00 50 00"):
+        cpu = self.machine(bytes_of("da 05 00 00 50 00"))  # fiadd dword [00500000]: no form of DA is done
+        with self.assertRaisesRegex(NotImplementedError, "opcode DA at 0010:400000: da 05 00 00 50 00"):
             cpu.step()
 
     def test_real_mode_has_no_coprocessor_and_the_instructions_do_nothing_but_take_their_bytes(self):
@@ -263,6 +264,117 @@ class TestWhatIsNotThere(FpuMachine):
         self.assertEqual((cpu.ip, cpu.fcw), (6, 0x0C7F))  # the length was right, and nothing was done
 
 
+class TestTheRealsOfTheStack(FpuMachine):
+    """The loads and the arithmetic of the stack that the check of the divide of a Pentium in the runtime of the game
+    uses (fld qword, fxch, fdiv st,st(i), fmulp, fsubp, fcomp qword). Which register is the dividend and which is taken
+    from which is what the chip of the host answered to the bytes of the instructions (fdiv st,st(1) with 8 over 2 is 4,
+    fsubp st(1),st with 3 and 10 is 7, fmulp with 6 and 7 is 42); the numbers are chosen to be the same in doubles."""
+
+    def with_reals(self, *reals, code=()):
+        """A machine with the doubles at [esp], [esp+8], ... and the code ready to run."""
+        cpu = self.machine(bytes_of(*code))
+        for number, real in enumerate(reals):
+            cpu.mem[STACK + 8 * number:STACK + 8 * number + 8] = struct.pack("<d", real)
+        return cpu
+
+    def pushed(self, *reals, code):
+        """A machine with the reals pushed (the last is the top) and the code ready."""
+        cpu = self.machine(bytes_of(*code))
+        for real in reals:
+            cpu.fpu_push(real)
+        return cpu
+
+    def test_fld_qword_pushes_the_real_in_memory(self):
+        cpu = self.with_reals(1.5, -2.25, code=("dd 44 24 08", "dd 04 24"))
+        cpu.step()
+        self.assertEqual((cpu.st(0), cpu.ftop), (-2.25, 7))
+        cpu.step()
+        self.assertEqual((cpu.st(0), cpu.st(1), cpu.ftop), (1.5, -2.25, 6))
+
+    def test_fld_qword_takes_the_real_from_any_form_of_the_address(self):
+        cpu = self.machine(bytes_of("dd 05 00 00 60 00"))  # fld qword [00600000]
+        cpu.mem[0x00600000:0x00600008] = struct.pack("<d", 3.5)
+        cpu.step()
+        self.assertEqual(cpu.st(0), 3.5)
+
+    def test_fxch_swaps_the_top_with_a_register(self):
+        cpu = self.pushed(1.0, 2.0, 3.0, code=("d9 c9",))
+        cpu.step()
+        self.assertEqual((cpu.st(0), cpu.st(1), cpu.st(2)), (2.0, 3.0, 1.0))
+        cpu = self.pushed(1.0, 2.0, 3.0, code=("d9 ca",))
+        cpu.step()
+        self.assertEqual((cpu.st(0), cpu.st(1), cpu.st(2)), (1.0, 2.0, 3.0))
+
+    def test_fxch_takes_the_sign_of_a_zero_with_it(self):
+        cpu = self.pushed(-0.0, 1.0, code=("d9 c9",))
+        cpu.step()
+        self.assertEqual(math.copysign(1, cpu.st(0)), -1.0)
+
+    def test_fdiv_st_divides_the_top_by_a_register_and_nothing_is_popped(self):
+        cpu = self.pushed(2.0, 8.0, code=("d8 f1",))  # the top is 8, st(1) is 2
+        cpu.step()
+        self.assertEqual((cpu.st(0), cpu.st(1), cpu.ftop), (4.0, 2.0, 6))
+
+    def test_fdiv_st_by_a_zero_is_an_infinity_and_the_flag(self):
+        cpu = self.pushed(0.0, 1.0, code=("d8 f1",))
+        cpu.step()
+        self.assertEqual(cpu.st(0), math.inf)
+        self.assertEqual(cpu.fsw & fpu.ZERO_DIVIDE, fpu.ZERO_DIVIDE)
+
+    def test_fmulp_multiplies_the_register_by_the_top_and_takes_the_top_off(self):
+        cpu = self.pushed(6.0, 7.0, code=("de c9",))
+        cpu.step()
+        self.assertEqual((cpu.st(0), cpu.ftop), (42.0, 7))
+
+    def test_an_infinity_by_a_zero_is_not_a_number_and_the_flag_is_raised(self):
+        for infinity, zero in ((math.inf, 0.0), (0.0, math.inf)):
+            cpu = self.pushed(infinity, zero, code=("de c9",))
+            cpu.step()
+            self.assertTrue(math.isnan(cpu.st(0)))
+            self.assertEqual(cpu.fsw & fpu.INVALID_OPERATION, fpu.INVALID_OPERATION)
+
+    def test_fsubp_takes_the_top_from_the_register_and_takes_the_top_off(self):
+        cpu = self.pushed(10.0, 3.0, code=("de e9",))  # st(1) = 10 less the top, 3
+        cpu.step()
+        self.assertEqual((cpu.st(0), cpu.ftop), (7.0, 7))
+
+    def test_two_infinities_of_the_same_sign_less_each_other_are_not_a_number_and_the_flag_is_raised(self):
+        cpu = self.pushed(math.inf, math.inf, code=("de e9",))
+        cpu.step()
+        self.assertTrue(math.isnan(cpu.st(0)))
+        self.assertEqual(cpu.fsw & fpu.INVALID_OPERATION, fpu.INVALID_OPERATION)
+        cpu = self.pushed(math.inf, -math.inf, code=("de e9",))
+        cpu.step()
+        self.assertEqual((cpu.st(0), cpu.fsw & fpu.INVALID_OPERATION), (math.inf, 0))
+
+    def test_fcomp_qword_compares_the_top_with_memory_and_takes_it_off(self):
+        for top, real, codes in ((1.0, 2.0, fpu.C0), (2.0, 2.0, fpu.C3), (3.0, 2.0, 0)):
+            cpu = self.pushed(top, code=("dc 1d 00 00 60 00",))  # fcomp qword [00600000]
+            cpu.mem[0x00600000:0x00600008] = struct.pack("<d", real)
+            cpu.step()
+            self.assertEqual((cpu.fsw & fpu.CONDITIONS, cpu.ftop), (codes, 0), (top, real))
+
+    def test_fcomp_qword_with_a_number_that_is_not_one_is_c0_c2_c3_and_the_flag(self):
+        cpu = self.pushed(1.0, code=("dc 1d 00 00 60 00",))
+        cpu.mem[0x00600000:0x00600008] = struct.pack("<d", math.nan)
+        cpu.step()
+        self.assertEqual(cpu.fsw & fpu.CONDITIONS, fpu.C0 | fpu.C2 | fpu.C3)
+        self.assertEqual(cpu.fsw & fpu.INVALID_OPERATION, fpu.INVALID_OPERATION)
+
+    def test_the_check_of_the_divide_of_the_pentium_in_the_runtime_finds_no_fault(self):
+        """From the game: a / b * b - a for 4195835 and 3145727, compared with a constant (here 1.0): the difference is 0
+        (the chip of the host: 0, and the same in doubles), it is less than the constant, and all the stack is taken off."""
+        code = bytes_of("dd 44 24 08", "d9 c0", "dd 04 24", "d9 c9", "d8 f1", "de c9", "de e9",
+                        "dc 1d 00 00 60 00", FNSTSW_AX)
+        cpu = self.with_reals(3145727.0, 4195835.0, code=())  # [esp] = the divisor, [esp+8] = the dividend
+        cpu.mem[AT:AT + len(code)] = code
+        cpu.mem[0x00600000:0x00600008] = struct.pack("<d", 1.0)
+        for _ in range(9):
+            cpu.step()
+        self.assertEqual(cpu.r[CPU.AX] & fpu.CONDITIONS, fpu.C0)
+        self.assertEqual(cpu.ftop, 0)
+
+
 class TestTheDisassembler(FpuMachine):
     def text(self, *instruction):
         cpu = self.machine(bytes_of(*instruction))
@@ -273,24 +385,27 @@ class TestTheDisassembler(FpuMachine):
                                ("d9 c0", "fld st(0)"), ("d9 c3", "fld st(3)"), ("de f9", "fdivp st(1), st"),
                                ("de fa", "fdivp st(2), st"), (FCOMPP, "fcompp"), (FNSTSW_AX, "fnstsw ax"),
                                ("d9 3c 24", "fnstcw word [esp]"), ("d9 2c 24", "fldcw word [esp]"),
-                               (FNSTSW_MEM, "fnstsw word [00500000]"), ("d9 7c 24 04", "fnstcw word [esp+4]")):
+                               (FNSTSW_MEM, "fnstsw word [00500000]"), ("d9 7c 24 04", "fnstcw word [esp+4]"),
+                               ("dd 44 24 08", "fld qword [esp+8]"), ("d9 c9", "fxch st(1)"),
+                               ("d8 f1", "fdiv st, st(1)"), ("de c9", "fmulp st(1), st"),
+                               ("de e9", "fsubp st(1), st"), ("dc 1d 18 4a 1c 00", "fcomp qword [001C4A18]")):
             length, shown = self.text(hexbytes)
             self.assertEqual((length, shown), (len(bytes.fromhex(hexbytes)), text), hexbytes)
 
     def test_a_form_that_is_not_done_is_a_db_in_the_32_bit_code_where_the_cpu_stops_at_it(self):
-        self.assertEqual(self.text("d9 c8"), (1, "db D9"))
-        self.assertEqual(self.text("d8 c1"), (1, "db D8"))  # an opcode that has no form at all
+        self.assertEqual(self.text("d9 d0"), (1, "db D9"))
+        self.assertEqual(self.text("da c1"), (1, "db DA"))  # an opcode that has no form at all
 
     def test_in_the_16_bit_code_where_the_cpu_does_nothing_with_them_they_are_written_as_esc(self):
         cpu = CPU()
-        cpu.mem[0x10100:0x10102] = b"\xD9\xC8"
+        cpu.mem[0x10100:0x10102] = b"\xD9\xD0"
         cpu.s[CPU.CS] = 0x1000
-        self.assertEqual(disasm(cpu, 0x1000, 0x100), (2, "esc 09, ax"))
+        self.assertEqual(disasm(cpu, 0x1000, 0x100), (2, "esc 0A, ax"))
 
 
 class TestTheTables(unittest.TestCase):
     def test_the_opcodes_are_those_of_the_forms_and_only_them(self):
-        self.assertEqual(fpu.OPCODES, [0xD9, 0xDB, 0xDD, 0xDE, 0xDF])
+        self.assertEqual(fpu.OPCODES, [0xD8, 0xD9, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF])
         self.assertEqual(sorted(op for op in range(0xD8, 0xE0) if op in CPU().ops32), fpu.OPCODES)
 
     def test_every_form_in_the_tables_names_a_method_of_the_cpu(self):
