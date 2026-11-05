@@ -237,6 +237,18 @@ class TestFiles(FlatFiles):
         with self.assertRaisesRegex(NotImplementedError, "no key can be pressed"):
             self.call32(0x0800)
 
+    def test_the_time_of_day_comes_in_ch_cl_dh_dl_and_the_rest_of_ecx_and_edx_stays(self):
+        import time
+        from dosloth import dos
+        real_now = dos.now
+        self.addCleanup(setattr, dos, "now", real_now)
+        dos.now = lambda: time.mktime((2026, 10, 22, 13, 45, 59, 0, 0, -1)) + 0.5
+        self.call32(0x12342C58, ecx=0x55556666, edx=0x77778888)
+        cpu = self.cpu
+        self.assertEqual((cpu.get8(5), cpu.get8(1), cpu.get8(6), cpu.get8(2)), (13, 45, 59, 50))  # CH CL DH DL
+        self.assertEqual((cpu.rh[CPU.CX], cpu.rh[CPU.DX], cpu.rh[CPU.AX]), (0x5555, 0x7777, 0x1234))
+        self.assertEqual(cpu.r[CPU.AX], 0x2C58)  # AX is not an answer here, and is left as it was
+
     def test_a_vector_is_set_to_ds_edx_and_given_back_in_es_ebx(self):
         self.call32(0x250F, edx=0x00123456)
         self.assertIsNone(self.failed())
