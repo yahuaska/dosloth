@@ -2,7 +2,7 @@
 asks if DOS/4G is there, and the answers of INT 2Fh in the flat mode."""
 import unittest
 
-from dosloth import dos, dpmi, flags
+from dosloth import bios, dos, dpmi, flags
 from dosloth.xmem import PAGE, START, ExtendedMemory
 from dosloth.cpu import CPU, Exit
 from dosloth.loader import CODE_SELECTOR, DATA_SELECTOR
@@ -387,8 +387,8 @@ class TestTheCall(FlatMachine):
         self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (0x0009, 0x0001, 4, 0x0870))
 
     def test_a_call_that_is_not_done_stops_the_emulator_with_its_number(self):
-        with self.assertRaisesRegex(NotImplementedError, "INT 31h AX=0300"):
-            self.call(0x31, 0x0300)
+        with self.assertRaisesRegex(NotImplementedError, "INT 31h AX=0301"):
+            self.call(0x31, 0x0301)
 
     def test_a_successful_call_clears_the_carry_and_leaves_the_other_registers(self):
         cpu = self.cpu
@@ -406,6 +406,67 @@ class TestTheCall(FlatMachine):
         cpu.mem[0x10000:0x10002] = b"\xCD\x31"
         with self.assertRaisesRegex(NotImplementedError, "INT 31h from real mode"):
             cpu.step()
+
+
+class TestInterruptOfTheRealMode(FlatMachine):
+    """AX=0300h: the program fills the structure of registers and a buffer below 1 MB, and the interrupt is done."""
+    STRUCTURE = 0x00300000
+    BUFFER_SEGMENT = 0x1815
+
+    def setUp(self):
+        super().setUp()
+        bios.install(self.cpu)
+
+    def simulate(self, number, eax, buffer_segment=BUFFER_SEGMENT, **registers):
+        cpu = self.cpu
+        data = bytearray(dpmi.REAL_CALL_SIZE)
+        data[0x1C:0x20] = eax.to_bytes(4, "little")
+        data[0x22:0x24] = buffer_segment.to_bytes(2, "little")
+        for offset, value in registers.items():
+            data[int(offset[1:], 16):int(offset[1:], 16) + 4] = value.to_bytes(4, "little")
+        cpu.mem[self.STRUCTURE:self.STRUCTURE + len(data)] = data
+        cpu.s[CPU.ES] = DATA_SELECTOR
+        cpu.rh[CPU.DI] = self.STRUCTURE >> 16
+        self.call(0x31, 0x0300, bx=number, di=self.STRUCTURE & 0xFFFF)
+        return bytes(cpu.mem[self.STRUCTURE:self.STRUCTURE + len(data)])
+
+    def test_the_vesa_question_fills_the_buffer_as_it_does_in_the_real_mode(self):
+        base = self.BUFFER_SEGMENT * 16
+        self.cpu.mem[base:base + 4] = b"VBE2"
+        real = CPU()
+        dos.install(real)
+        bios.install(real)
+        real.mem[base:base + 4] = b"VBE2"
+        real.s[CPU.CS], real.s[CPU.ES] = 0x1000, self.BUFFER_SEGMENT
+        real.mem[0x10000:0x10002] = b"\xCD\x10"
+        real.r[CPU.AX], real.r[CPU.DI] = 0x4F00, 0
+        real.step()
+        data = self.simulate(0x10, 0x4F00)
+        self.assertEqual(self.cpu.mem[base:base + 512], real.mem[base:base + 512])
+        self.assertEqual(self.cpu.mem[base:base + 4], b"VESA")
+        self.assertEqual(int.from_bytes(data[0x1C:0x20], "little"), 0x004F)
+
+    def test_the_registers_of_the_program_are_as_they_were_and_the_mode_is_the_flat_one(self):
+        cpu = self.cpu
+        cpu.set32(CPU.SI, 0x11223344)
+        cpu.set32(CPU.BP, 0x55667788)
+        cpu.set_flag(flags.CF, True)
+        self.simulate(0x10, 0x4F00)
+        self.assertEqual((cpu.get32(CPU.SI), cpu.get32(CPU.BP), cpu.get_flag(flags.CF)),
+                         (0x11223344, 0x55667788, False))
+        self.assertTrue(cpu.flat)
+        self.assertEqual(cpu.r[CPU.AX], 0x0300)
+        self.assertEqual(cpu.bases[DATA_SELECTOR], 0)
+
+    def test_the_registers_that_the_interrupt_leaves_go_to_the_structure(self):
+        data = self.simulate(0x10, 0x0F00)  # the video mode: AL = the mode, AH = columns, BH = the page
+        mode = self.cpu.mem[0x449]
+        self.assertEqual(data[0x1C], mode)
+        self.assertEqual(data[0x1D], self.cpu.mem[0x44A])
+
+    def test_an_interrupt_that_is_not_done_stops_the_emulator(self):
+        with self.assertRaisesRegex(NotImplementedError, "interrupt 21"):
+            self.simulate(0x21, 0x0900)
 
 
 class TestTheExtenderQuestion(FlatMachine):

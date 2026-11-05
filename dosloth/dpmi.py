@@ -104,6 +104,44 @@ def memory_information(cpu, state):
         cpu.wd(cpu.s[CPU.ES], cpu.get32(CPU.DI) + 4 * i, value)
 
 
+REAL_CALL_SIZE = 0x32  # the structure of AX=0300h: the registers of the real mode, 50 bytes
+REAL_CALL_REGISTERS = ((0x00, CPU.DI), (0x04, CPU.SI), (0x08, CPU.BP), (0x10, CPU.BX), (0x14, CPU.DX),
+                       (0x18, CPU.CX), (0x1C, CPU.AX))  # the offset in the structure, and the register
+REAL_CALL_SEGMENTS = ((0x22, CPU.ES), (0x24, CPU.DS), (0x26, CPU.FS), (0x28, CPU.GS))
+REAL_CALL_FLAGS = 0x20
+REAL_CALLS = (0x10,)  # the interrupts that a program may call so: the video BIOS, and no other so far
+
+
+def real_mode_interrupt(cpu):
+    """AX=0300h: call the interrupt BL of the real mode, with the registers that the structure at ES:EDI has, and
+    put the registers that it left back into the structure. The interrupts are ours (Python), so the handler runs
+    with the machine put in real mode for the time of the call, and the registers of the program are as they were."""
+    number = cpu.get8(3)
+    if number not in REAL_CALLS:
+        raise NotImplementedError(f"INT 31h AX=0300 of the interrupt {number:02X}")
+    structure = cpu.wide(CPU.DI)
+    selector = cpu.s[CPU.ES]
+    data = bytes(cpu.rb(selector, structure + i) for i in range(REAL_CALL_SIZE))
+    saved = (list(cpu.r), list(cpu.rh), list(cpu.s), cpu.flags, cpu.get_mode())
+    cpu.use_real_memory()
+    try:
+        for offset, n in REAL_CALL_REGISTERS:
+            cpu.set32(n, int.from_bytes(data[offset:offset + 4], "little"))
+        for offset, n in REAL_CALL_SEGMENTS:
+            cpu.s[n] = int.from_bytes(data[offset:offset + 2], "little")
+        cpu.flags = int.from_bytes(data[REAL_CALL_FLAGS:REAL_CALL_FLAGS + 2], "little") | 0x0002
+        cpu.int_handlers[number](cpu)
+        out = bytearray(data)
+        for offset, n in REAL_CALL_REGISTERS:
+            out[offset:offset + 4] = cpu.get32(n).to_bytes(4, "little")
+        out[REAL_CALL_FLAGS:REAL_CALL_FLAGS + 2] = (cpu.flags & 0xFFFF).to_bytes(2, "little")
+    finally:
+        cpu.r[:], cpu.rh[:], cpu.s[:], cpu.flags = saved[:4]
+        cpu.set_mode(saved[4])
+    for i, value in enumerate(out):
+        cpu.wb(selector, structure + i, value)
+
+
 def int31(cpu, state):
     """INT 31h: the calls to the DPMI host. AX picks the call, and CF is 1 when it failed, and AX is the error.
 
@@ -111,7 +149,7 @@ def int31(cpu, state):
     base of BX in CX:DX, get and set), 0008h and 0009h (the limit in CX:DX and the rights in CX: taken and not kept);
     0400h, the version; the memory: 0500h (what there is), 0501h and 0502h (a block above 1 MB, and its return),
     0100h and 0101h (a block below it, with its selector, and its return), 0600h and 0601h (locking: nothing to lock),
-    0800h (a device's memory: the physical address is the linear one), 0200h and 0201h (the handlers of the interrupts of the real mode, the table at address 0), 0204h and 0205h
+    0300h (an interrupt of the real mode: the video BIOS only), 0800h (a device's memory: the physical address is the linear one), 0200h and 0201h (the handlers of the interrupts of the real mode, the table at address 0), 0204h and 0205h
     (those of the protected mode: get, set). A call that is not here stops the emulator.
     """
     if not cpu.flat:
@@ -178,6 +216,8 @@ def int31(cpu, state):
         cpu.set32(CPU.DX, selector_offset)
     elif ax == 0x0205:  # set it, to CX:EDX
         cpu.pm_vectors[cpu.get8(3)] = (cpu.r[CPU.CX], cpu.get32(CPU.DX))
+    elif ax == 0x0300:
+        real_mode_interrupt(cpu)
     elif ax == 0x0400:
         cpu.r[CPU.AX], cpu.r[CPU.BX] = VERSION, FLAGS_386
         cpu.r[CPU.CX], cpu.r[CPU.DX] = PROCESSOR_486, PIC_BASES
