@@ -156,7 +156,9 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `tests/`        - tiny test programs (`make_hello.py` builds `hello.com`)
 
 ## Memory model
-1 MB flat bytearray, address = seg*16 + off (no A20 wrap yet).
+The memory is a 256 MB private anonymous `mmap` (`pages.py`; costs nothing until written). In real mode the address is
+seg*16 + off, wrapped at 1 MB (no A20); in the flat mode of a 32-bit program it is the base of the selector (`cpu.bases`)
+plus the offset, and the memory above 1 MB is handed out in blocks by `xmem.py`.
 .COM loads at PSP:0100, CS=DS=ES=SS=PSP segment, SP=FFFE.
 The PSP is at segment 1000 (psp.py fills in the fields programs read: top of memory at PSP:0002, the
 environment segment at PSP:002C, the handle table, the command line: what comes after `--` on the

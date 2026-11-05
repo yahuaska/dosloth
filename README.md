@@ -158,4 +158,5 @@ needed to run them) and check the result against what Python says it must be. Th
 
 ## License
 
-Not chosen yet.
+[MIT](LICENSE). It covers the code of this project only: the DOS programs and the game that it runs are not part of it,
+and are not here.
