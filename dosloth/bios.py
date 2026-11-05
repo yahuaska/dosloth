@@ -168,10 +168,13 @@ def int10(cpu):
         cpu.set8(0, cpu.mem[BDA_VIDEO_MODE])
         cpu.set8(4, cpu.mem[BDA_COLUMNS])
         cpu.set8(7, cpu.mem[BDA_PAGE])
-    elif ah == 0x4F:  # the VESA extensions, picked by AL; only AL=00h so far (see vesa.py)
-        if al != 0x00:
+    elif ah == 0x4F:  # the VESA extensions, picked by AL; only AL=00h and 01h so far (see vesa.py)
+        if al == 0x00:
+            cpu.r[CPU.AX] = vesa.controller_information(cpu, cpu.s[CPU.ES], cpu.r[CPU.DI])
+        elif al == 0x01:
+            cpu.r[CPU.AX] = vesa.mode_information(cpu, cpu.s[CPU.ES], cpu.r[CPU.DI], cpu.r[CPU.CX])
+        else:
             raise NotImplementedError(f"INT 10h AH=4F AL={al:02X}")
-        cpu.r[CPU.AX] = vesa.controller_information(cpu, cpu.s[CPU.ES], cpu.r[CPU.DI])
     elif ah == 0x12:  # the alternate functions of the EGA and VGA, picked by BL; only 10h so far
         if cpu.get8(3) != 0x10:
             raise NotImplementedError(f"INT 10h AH=12 BL={cpu.get8(3):02X}")

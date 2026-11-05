@@ -153,9 +153,69 @@ class TestControllerInformation(unittest.TestCase):
         self.assertEqual(two.rw(segment, offset), 0x0101)
 
 
+def word(block, offset):
+    return int.from_bytes(block[offset:offset + 2], "little")
+
+
+def ask_mode(mode):
+    cpu = machine()
+    for i in range(300):
+        cpu.wb(0x2000, 0x0100 + i, 0xA5)
+    cpu.r[CPU.AX], cpu.r[CPU.CX], cpu.r[CPU.DI], cpu.s[CPU.ES] = 0x4F01, mode, 0x0100, 0x2000
+    cpu.ip = 0
+    cpu.step()
+    return cpu, bytes(cpu.rb(0x2000, 0x0100 + i) for i in range(300))
+
+
+class TestTheInformationOfAMode(unittest.TestCase):
+    def test_the_mode_0101_is_640_by_480_in_256_colors_with_the_window_at_a000(self):
+        cpu, block = ask_mode(0x0101)
+        self.assertEqual(cpu.r[CPU.AX], 0x004F)
+        self.assertEqual((word(block, 0x12), word(block, 0x14), word(block, 0x10)), (640, 480, 640))
+        self.assertEqual((block[0x18], block[0x19], block[0x1B]), (1, 8, 4))  # one plane, 8 bits, packed pixels
+        self.assertEqual((word(block, 0x04), word(block, 0x06), word(block, 0x08)), (64, 64, 0xA000))
+        self.assertEqual((block[0x02], block[0x03], word(block, 0x0A)), (0x07, 0, 0))  # the window A, and no B
+
+    def test_there_is_no_function_for_the_window_so_a_program_asks_the_bios(self):
+        _, block = ask_mode(0x0101)
+        self.assertEqual(block[0x0C:0x10], bytes(4))
+
+    def test_the_attributes_say_graphics_color_a_window_and_no_linear_frame_buffer(self):
+        _, block = ask_mode(0x0101)
+        attributes = word(block, 0x00)
+        self.assertEqual(attributes & 0x01, 0x01)  # the mode can be set
+        self.assertEqual(attributes & 0x18, 0x18)  # color, graphics
+        self.assertEqual(attributes & 0xC0, 0)  # a window, no linear frame buffer
+        self.assertEqual(attributes, 0x001B)
+
+    def test_it_fits_5_banks_of_64_kb_and_the_memory_has_room_for_3_pages(self):
+        _, block = ask_mode(0x0101)
+        self.assertEqual((block[0x1A], block[0x1C]), (5, 64))
+        self.assertEqual(block[0x1D], 2)  # 1 MB holds 3 screens of 300 KB: the byte is the number less one
+
+    def test_the_block_is_256_bytes_and_what_is_after_it_is_left_alone(self):
+        _, block = ask_mode(0x0101)
+        self.assertEqual(block[256:], bytes([0xA5]) * 44)
+        self.assertNotIn(0xA5, block[0x1E:0x28])  # the reserved bytes are cleared, not left as they were
+
+    def test_a_mode_that_is_not_there_is_error_014f_and_the_buffer_is_left_alone(self):
+        for mode in (0x0100, 0x0102, 0x0013, 0x4101, 0x0000):
+            with self.subTest(mode=mode):
+                cpu, block = ask_mode(mode)
+                self.assertEqual(cpu.r[CPU.AX], 0x014F)
+                self.assertEqual(block, bytes([0xA5]) * 300)
+
+    def test_the_mode_in_the_list_of_the_modes_is_the_one_that_is_answered(self):
+        cpu = machine()
+        block = ask(cpu)
+        segment, offset = far_pointer(block, 0x0E)
+        mode = cpu.rw(segment, offset)
+        self.assertEqual(ask_mode(mode)[0].r[CPU.AX], 0x004F)
+
+
 class TestTheOtherVesaFunctions(unittest.TestCase):
     def test_everything_but_the_first_question_stops_the_emulator_and_says_which(self):
-        for al in (0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x10, 0xFF):
+        for al in (0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x10, 0xFF):
             cpu = machine()
             with self.assertRaises(NotImplementedError) as caught:
                 ask(cpu, ax=0x4F00 | al)
