@@ -52,6 +52,8 @@ GRAPHICS = 0x3CE
 WINDOW_START = 0xA0000  # where the planes show in the address space,
 WINDOW_END = 0xB0000  # 64 KB of it
 PLANE_SIZE = 0x10000
+VBE_PLANE_SIZE = 0x40000  # in a VESA mode the four planes hold 1 MB, the memory that the BIOS says the card has
+BANK_SHIFT = 16  # a bank is the 64 KB of the window
 UNSUPPORTED_MODE_BITS = 0x30  # in graphics controller register 5: odd/even, interleaved shift
 COLORS_256 = 0x40  # in the same register: the pixels of the screen are 8 bits wide
 CHAIN_4 = 0x08  # in the sequencer's memory mode register (4): the two low bits of an address say the plane
@@ -107,6 +109,7 @@ class Vga:
         self.status = 0
         self.planes = [bytearray(PLANE_SIZE) for _ in range(4)]
         self.latches = [0, 0, 0, 0]
+        self.bank = 0  # in a VESA mode: which 64 KB of the screen the window shows (see set_mode_vbe)
         self.changed = False  # the picture may be another since whoever shows the screen last looked
         self.reset_palette()
 
@@ -214,6 +217,7 @@ class Vga:
         latches are empty, and the planes are empty too, unless the mode set is to keep the picture."""
         self.registers = dict(POWER_ON)
         self.latches = [0, 0, 0, 0]
+        self.bank = 0
         self.reset_palette()
         self.changed = True
         if not keep_planes:
@@ -237,6 +241,15 @@ class Vga:
             self.dac[number * 3:number * 3 + 3] = bytes(color)
         for number, gray in enumerate(GRAYS):
             self.dac[(16 + number) * 3:(16 + number) * 3 + 3] = bytes((gray, gray, gray))
+
+    def set_mode_vbe(self):
+        """What the BIOS does to the card for a VESA mode of 256 colors, on top of clear(): the registers and the colors
+        of mode 13h, and the planes made big enough for the whole screen. The pixels are in the planes as in mode 13h,
+        the byte at the linear address `a` is in the plane `a & 3` at `a >> 2`; the window shows 64 KB of them, from
+        the bank (a multiple of 64 KB). What the picture had before stays where it is, if clear() kept it."""
+        self.set_mode_13h()
+        for plane in self.planes:
+            plane.extend(bytes(VBE_PLANE_SIZE - len(plane)))
 
     def mode_256(self):
         """Whether the pixels of the screen are 8 bits wide, a byte of each of the four planes in turn."""
@@ -264,6 +277,7 @@ class Vga:
         self.check_mode()
         planes = self.planes
         if self.chain_4():
+            offset += self.bank << BANK_SHIFT
             return planes[offset & 3][offset >> 2]
         self.latches = [plane[offset] for plane in planes]
         if not self.graphics(5) & 0x08:
@@ -281,6 +295,7 @@ class Vga:
         self.check_mode()
         self.changed = True
         if self.chain_4():  # one byte to one plane: what the other registers say does not count
+            offset += self.bank << BANK_SHIFT
             self.planes[offset & 3][offset >> 2] = value
             return
         mode = self.graphics(5) & 3

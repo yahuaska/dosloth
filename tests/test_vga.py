@@ -853,5 +853,71 @@ class TestWhatTheCardDoesNotKnow(unittest.TestCase):
             chip.write_memory(0, 0)
 
 
+def mode_vbe():
+    chip = Vga()
+    chip.clear()
+    chip.set_mode_vbe()
+    return chip
+
+
+class TestModeVbe(unittest.TestCase):
+    """A VESA mode of 256 colors: the pixels of mode 13h, the screen up to 1 MB, and the window at a bank of it."""
+
+    def test_the_registers_and_the_colors_are_those_of_mode_13h(self):
+        chip, reference = mode_vbe(), mode_13h()
+        self.assertEqual((chip.registers, chip.attributes, chip.dac), (reference.registers, reference.attributes,
+                                                                        reference.dac))
+        self.assertTrue(chip.mode_256() and chip.chain_4())
+
+    def test_the_planes_hold_a_megabyte_between_them_and_stay_the_same_objects(self):
+        chip = Vga()
+        held = chip.planes[2]
+        chip.clear()
+        chip.set_mode_vbe()
+        self.assertEqual([len(plane) for plane in chip.planes], [0x40000] * 4)
+        self.assertIs(chip.planes[2], held)
+
+    def test_the_window_shows_the_64_kb_of_the_bank(self):
+        chip = mode_vbe()
+        for bank in (0, 1, 4, 15):
+            chip.bank = bank
+            for offset in (0, 1, 2, 3, 0x1234, 0xFFFF):
+                address = bank * 0x10000 + offset
+                chip.write_memory(offset, (address ^ bank) & 0xFF | 1)
+                self.assertEqual(chip.planes[address & 3][address >> 2], (address ^ bank) & 0xFF | 1,
+                                 (bank, hex(offset)))
+                self.assertEqual(chip.read_memory(offset), (address ^ bank) & 0xFF | 1, (bank, hex(offset)))
+
+    def test_a_byte_of_one_bank_is_not_seen_in_another(self):
+        chip = mode_vbe()
+        chip.bank = 2
+        chip.write_memory(0x100, 0x77)
+        chip.bank = 3
+        self.assertEqual(chip.read_memory(0x100), 0)
+        chip.bank = 2
+        self.assertEqual(chip.read_memory(0x100), 0x77)
+
+    def test_the_bank_is_not_in_mode_13h_and_clear_takes_it_back(self):
+        chip = mode_vbe()
+        chip.bank = 3
+        chip.clear()
+        self.assertEqual((chip.bank, [len(plane) for plane in chip.planes]), (0, [0x10000] * 4))
+
+    def test_keeping_the_planes_keeps_what_the_screen_had(self):
+        chip = mode_13h()
+        chip.write_memory(0x1234, 0x42)
+        chip.clear(keep_planes=True)
+        chip.set_mode_vbe()
+        self.assertEqual(chip.read_memory(0x1234), 0x42)
+        self.assertEqual(len(chip.planes[0]), 0x40000)
+
+    def test_the_planes_are_what_the_card_shows_so_the_far_end_of_the_screen_is_in_bank_4(self):
+        chip = mode_vbe()
+        chip.bank = 4
+        offset = 640 * 480 - 4 * 0x10000 - 1  # the last pixel of 640 by 480
+        chip.write_memory(offset, 0xEE)
+        self.assertEqual(chip.planes[(640 * 480 - 1) & 3][(640 * 480 - 1) >> 2], 0xEE)
+
+
 if __name__ == "__main__":
     unittest.main()
