@@ -237,6 +237,18 @@ class TestFiles(FlatFiles):
         with self.assertRaisesRegex(NotImplementedError, "no key can be pressed"):
             self.call32(0x0800)
 
+    def test_the_date_comes_in_cx_dh_dl_and_al_and_the_rest_of_ecx_and_edx_stays(self):
+        import time
+        from dosloth import dos
+        real_now = dos.now
+        self.addCleanup(setattr, dos, "now", real_now)
+        dos.now = lambda: time.mktime((2026, 10, 22, 13, 45, 59, 0, 0, -1))  # a Thursday
+        self.call32(0x12342A58, ecx=0x55556666, edx=0x77778888)
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.CX], cpu.get8(6), cpu.get8(2), cpu.get8(0)), (2026, 10, 22, 4))
+        self.assertEqual((cpu.rh[CPU.CX], cpu.rh[CPU.DX], cpu.rh[CPU.AX]), (0x5555, 0x7777, 0x1234))
+        self.assertEqual(cpu.get8(4), 0x2A)  # AH stays
+
     def test_the_time_of_day_comes_in_ch_cl_dh_dl_and_the_rest_of_ecx_and_edx_stays(self):
         import time
         from dosloth import dos
