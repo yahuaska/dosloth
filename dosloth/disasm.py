@@ -446,7 +446,7 @@ def _decode_opcode(r, op, seg_override):
         word = f"{'dword' if bits == 32 else 'word'} {rm}" if is_mem else rm
         if reg in (0, 1, 2, 4, 6):
             return f"{['inc', 'dec', 'call', None, 'jmp', None, 'push'][reg]} {word}"
-        if reg in (3, 5) and is_mem and bits == 16:  # a far pointer needs memory (and a 16:32 one has no form yet)
+        if reg in (3, 5) and is_mem:  # a far pointer needs memory: 16:16, or 16:32 with operands of 32 bits
             return f"{'call' if reg == 3 else 'jmp'} far {rm}"
         return None
     if op in (Op.GROUP3_RM, Op.GROUP3_RM + 1):
