@@ -410,11 +410,14 @@ def int21(cpu, state):
         if entry is None:
             cpu.set_flag(flags.CF, True)
             cpu.r[CPU.AX] = INVALID_HANDLE
-        elif not isinstance(entry, OpenFile):  # the console and the devices have no position
-            raise NotImplementedError(f"INT 21h AH=42 on the handle {cpu.r[CPU.BX]}: {type(entry).__name__}")
         elif whence > 2:
             cpu.set_flag(flags.CF, True)
             cpu.r[CPU.AX] = INVALID_FUNCTION
+        elif not isinstance(entry, OpenFile):  # the console and the devices have no position: it is 0, and it is all right
+            # (the runtime of a program asks for the position of the five handles that it has at the start, to know
+            # which of them are files)
+            cpu.r[CPU.AX] = cpu.r[CPU.DX] = 0
+            cpu.set_flag(flags.CF, False)
         else:
             before = entry.file.tell()
             base = (0, before, None)[whence]

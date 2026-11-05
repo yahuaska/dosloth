@@ -2639,10 +2639,14 @@ class TestSeek(FileFunctionsTest):
         for number in (handle, 6, 19, 20, 0xFFFF):
             self.assertEqual(self.seek(number, 0, 0)[0], 6, number)
 
-    def test_the_console_and_the_devices_have_no_position_to_move(self):
+    def test_the_console_and_the_devices_have_no_position_it_is_0_and_it_is_not_an_error(self):
         for number in (0, 1, 2, 3, 4):
-            with self.assertRaises(NotImplementedError, msg=number):
-                self.seek(number, 0, 0)
+            for whence in (0, 1, 2):
+                self.assertEqual(self.seek(number, whence, 5), (None, 0), (number, whence))
+
+    def test_a_way_to_seek_that_does_not_exist_is_error_1_for_the_devices_too(self):
+        for number in (0, 3, 4):
+            self.assertEqual(self.seek(number, 3, 0)[0], 1, number)
 
     def test_each_handle_of_a_file_has_a_position_of_its_own(self):
         first, second = self.open(), self.open()
