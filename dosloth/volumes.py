@@ -65,7 +65,7 @@ class Volumes:
                     raise FsError(PATH_NOT_FOUND, "the path goes above the root of the drive")
                 parts.pop()
             else:
-                parts.append(name)
+                parts.append(name[:-1] if name.endswith(".") else name)  # "MUSIC." is the file "MUSIC": no extension
         return Location(drive, filesystem, parts)
 
     def chdir(self, text):

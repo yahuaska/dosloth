@@ -91,6 +91,12 @@ class TestResolving(VolumesTest):
         self.assertEqual(self.resolve("sub\\deep\\..\\..\\x"), (2, ["SETUP", "x"]))
         self.assertEqual(self.resolve("\\a\\b\\..\\c"), (2, ["a", "c"]))
 
+    def test_a_dot_at_the_end_of_a_name_is_no_extension_and_is_dropped(self):
+        self.assertEqual(self.resolve("music."), (2, ["SETUP", "music"]))
+        self.assertEqual(self.resolve("D:Music."), (3, ["Music"]))
+        self.assertEqual(self.resolve("sub.\\deep.\\x.txt"), (2, ["SETUP", "sub", "deep", "x.txt"]))
+        self.assertEqual(self.resolve("a\\.\\..\\b"), (2, ["SETUP", "b"]))  # "." and ".." are as they were
+
     def test_the_path_cannot_go_above_the_root(self):
         for text in ("..\\..", "\\..", "D:..", "\\a\\..\\..", "../../x"):
             with self.subTest(text=text):
