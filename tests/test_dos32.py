@@ -204,6 +204,39 @@ class TestFiles(FlatFiles):
         self.cpu.step()
         self.assertEqual(self.cpu.get32(CPU.AX), 0x12340BFF)
 
+    def keyboard(self, *words, waiter=None):
+        from collections import deque
+        from types import SimpleNamespace
+        self.cpu.keyboard = SimpleNamespace(buffer=deque(words), waiter=waiter)
+
+    def test_a_key_is_taken_and_given_in_al_and_the_rest_of_eax_stays(self):
+        self.keyboard(0x1E61)
+        self.call32(0x12340800)
+        self.assertEqual(self.cpu.get32(CPU.AX), 0x12340861)
+        self.assertEqual(len(self.cpu.keyboard.buffer), 0)
+
+    def test_a_key_with_no_character_comes_as_0_and_then_its_scan_code(self):
+        self.keyboard(0x3B00)  # F1
+        self.call32(0x0800)
+        self.assertEqual(self.cpu.get8(0), 0)
+        self.call32(0x0800)
+        self.assertEqual(self.cpu.get8(0), 0x3B)
+
+    def test_the_wait_for_a_key_goes_on_until_the_window_gives_one(self):
+        def waiter():
+            if len(calls) == 2:
+                self.cpu.keyboard.buffer.append(0x1C0D)
+            calls.append(1)
+        calls = []
+        self.keyboard(waiter=waiter)
+        self.call32(0x0800)
+        self.assertEqual((self.cpu.get8(0), len(calls)), (0x0D, 3))
+
+    def test_with_no_key_and_nothing_to_press_it_the_emulator_stops(self):
+        self.keyboard()
+        with self.assertRaisesRegex(NotImplementedError, "no key can be pressed"):
+            self.call32(0x0800)
+
     def test_a_vector_is_set_to_ds_edx_and_given_back_in_es_ebx(self):
         self.call32(0x250F, edx=0x00123456)
         self.assertIsNone(self.failed())
