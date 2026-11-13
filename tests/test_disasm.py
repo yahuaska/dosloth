@@ -294,8 +294,9 @@ class TestInstructions32(unittest.TestCase):
                     ("66 8F C3", "pop ebx"), ("66 8F 06 00 01", "pop dword [0100]"),
                     ("FF 36 00 01", "push word [0100]")))
 
-    def test_group_5_far_forms_have_no_32_bit_text(self):
-        self.assertEqual(dis(bytes.fromhex("66 FF 1E 00 01")), (1, "db 66"))
+    def test_group_5_far_forms_of_32_bits(self):
+        self.check((("66 FF 1E 00 01", "call far [0100]"), ("66 FF 2E 00 01", "jmp far [0100]")))
+        self.assertEqual(dis(bytes.fromhex("66 FF D8")), (1, "db 66"))  # a far pointer in a register: no such thing
         self.assertEqual(dis(bytes.fromhex("66 8F C8")), (1, "db 66"))
 
     def test_the_stack(self):
@@ -405,6 +406,8 @@ class TestWideInstructionPointer(unittest.TestCase):
         self.assertEqual(self.wide("66 E8 F0 FF FF FF"), (6, "call 000000F6"))
         self.assertEqual(self.wide("66 0F 84 10 00 00 00"), (7, "je 00000117"))
         self.assertEqual(self.wide("E8 00 01 00 00", code32=True), (5, "call 00000205"))
+        self.assertEqual(self.wide("FF 1D 00 01 00 00", code32=True), (6, "call far [00000100]"))
+        self.assertEqual(self.wide("FF 2D 00 01 00 00", code32=True), (6, "jmp far [00000100]"))
         self.assertEqual(self.wide("0F 85 00 01 00 00", code32=True), (6, "jne 00000206"))
 
     def test_the_distances_of_16_bits_are_cut_to_16_bits_with_4_digits(self):
