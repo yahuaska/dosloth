@@ -135,11 +135,12 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   `LATE_PATCHES` (pieces that come later, as a driver that the program reads from a file: they are looked for by their
   bytes, `LatePatch`) that it has are put in the lists of the package. To make a patch is to put a module there. The
   modules with an underscore are what they use: `_base` (`Patch`, `LatePatch`), `_common` (the structures of a dword and
-  the end of most patches), `_smacker` (what more than one patch of SMKP.EXE looks at). So far thirteen patches, in
+  the end of most patches), `_smacker` (what more than one patch of SMKP.EXE looks at). So far fourteen patches, in
   `smk_*`: the reader of the trees (10DD90), the small trees of the sound (10DCF0), the three procedures that make
   tables of the trees (10E090, 10E1A0, 10E1D0), the loop of the blocks of a video frame (10F7B0, the biggest: it draws
   into the window of the video card), the loop of the sound (11104C), the two descents of a tree to a leaf (11105B,
-  1110D9: the loop of the sound goes over them, they stay for a run of the code from the middle), and in the driver
+  1110D9: the loop of the sound goes over them, they stay for a run of the code from the middle), the loop over the
+  16 events of the timer of the sound system (1022E9: the empty ones are gone over at once), and in the driver
   of the sound the mixer, the choice of the voices that play (the loop at 1527 of its service) and the two waits of
   the reset of the Sound Blaster, when the driver is started and when it is ended (a loop that does nothing, 2.2
   million instructions each: the count goes on by them, up to the next event of the devices). Six more, in

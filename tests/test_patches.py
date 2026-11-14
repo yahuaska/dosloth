@@ -434,6 +434,7 @@ def run_saved_machine(volumes, path, patched, segment, back, inside=None, pop=4,
         patches.LATE_PATCHES[:] = saved
     if not patched:  # the code as it is: what the patch stood in the place of goes back
         cpu.mem[BLOCKS_AT:BLOCKS_AT + 2] = bytes((0x3C, 0x08))  # cmp al, 8
+        cpu.mem[TIMER_EVENTS_AT:TIMER_EVENTS_AT + 2] = bytes((0x83, 0x3D))  # cmp dword [...], 10h
     if start is not None:
         cpu.ip = start
     cpu.event_sources, cpu.next_event = [], NEVER  # nothing of the devices comes in the middle
@@ -454,7 +455,7 @@ def run_saved_machine(volumes, path, patched, segment, back, inside=None, pop=4,
     cpu.trace = trace
     cpu.run(1 << 30, lambda: None)
     for place in (BLOCKS_AT, MIXER_AT + 0x46, MIXER_AT + 0xBB, DELAY_AT, END_DELAY_AT,
-                  VOICES_AT):  # (where the INTs stand)
+                  VOICES_AT, TIMER_EVENTS_AT):  # (where the INTs stand)
         cpu.mem[place:place + 2] = bytes(2)
     picture = hashlib.sha1(b"".join(bytes(plane) for plane in computer.card.planes)).hexdigest()
     return (cpu.r, cpu.rh, cpu.s[:], cpu.flags, cpu.ip, cpu.instructions - start, hashlib.sha1(cpu.mem).hexdigest(), picture)
@@ -490,6 +491,7 @@ EVENTS_EVERY = 100_000  # for the test of a wait that must not go past an event
 DELAY_AT = 0x12B2FB  # where the outer loop of the wait of the reset is, in the run of the video 2
 END_DELAY_AT = 0x12B558  # and that of the reset when the driver is ended
 VOICES_AT = 0x12D527  # where the loop of the choice of the voices that play is
+TIMER_EVENTS_AT = 0x1022E9  # where the loop over the events of the timer of the sound system is, in the program
 MIXER_AT = 0x12E144  # where the procedure is, in the run of the video 2 (the driver is put there)
 MIXER_CALL, MIXER_LOOP = 0x2144, 0x217A  # the offsets in its segment: the procedure, and just before its first loop
 
@@ -707,6 +709,64 @@ class TestTheChoiceOfTheVoices(unittest.TestCase):
                 self.assertGreater(original[5], 32 * 5)
                 self.assertEqual(after[0], 2)  # the INT, and the look at where it goes on: the code of the loop is not run
                 self.assertEqual(original, patched)
+
+
+# --- the events of the timer of the sound system
+
+class TestTheEventsOfTheTimer(unittest.TestCase):
+    """The loop over the 16 events of the timer is run by the code and by the patch from the same saved machine, up to
+    the first event that has a handler or to the end, with the number of the event it is at and the far pointers of
+    the handlers made random (empty, an offset, or only a selector): the same registers, memory and count of
+    instructions."""
+
+    @classmethod
+    def setUpClass(cls):
+        from dosloth.patches import smk_timer
+        cls.timer = smk_timer
+        cls.volumes = disc_machine()
+        cls.directory = tempfile.TemporaryDirectory()
+        cls.state = Path(cls.directory.name) / "timer.state"
+        save_machine_at(cls.volumes, cls.state, 0x0F, TIMER_EVENTS_AT, 1)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.directory.cleanup()
+
+    def randomized(self, seed, steps):
+        rng = random.Random(seed)
+        done = []
+        timer = self.timer
+
+        def inside(cpu):
+            steps[0] += 1
+            if not done:
+                done.append(True)
+                base = cpu.bases[cpu.s[CPU.DS]]
+                struct.pack_into("<I", cpu.mem, base + timer.SLOT, rng.choice((0, 0, rng.randrange(17), 16, 17)))
+                for event in range(timer.EVENTS):
+                    kind = rng.choice(("empty",) * 6 + ("offset", "selector"))
+                    offset = rng.randrange(1, 1 << 32) if kind == "offset" else 0
+                    selector = rng.randrange(1, 1 << 16) if kind == "selector" else rng.randrange(1 << 16) * (kind == "offset")
+                    struct.pack_into("<IH", cpu.mem, base + timer.HANDLERS + 6 * event, offset, selector)
+            elif cpu.ip == timer.HANDLER_CODE:
+                raise Exit(0)  # (the code of the event: past what the patch stands for)
+        return inside
+
+    def test_the_way_over_the_events_is_the_one_of_the_code(self):
+        reached = set()
+        for seed in range(40):
+            with self.subTest(seed=seed):
+                before, after = [0], [0]
+                original = run_saved_machine(self.volumes, self.state, False, 0x0F, self.timer.LOOP_END,
+                                             self.randomized(seed, before), pop=0)
+                patched = run_saved_machine(self.volumes, self.state, True, 0x0F, self.timer.LOOP_END,
+                                            self.randomized(seed, after), pop=0)
+                self.assertEqual(after[0], 2)  # the INT, and where it goes on: the code of the loop is not run
+                self.assertEqual(original, patched)
+                reached.add((original[4], original[5] > 20))
+        # it went to an event, and to the end, after a few empty events and at once
+        self.assertEqual(reached, {(self.timer.HANDLER_CODE, True), (self.timer.HANDLER_CODE, False),
+                                   (self.timer.LOOP_END, True), (self.timer.LOOP_END, False)})
 
 
 # --- the procedures of the strings of the C library in UFO2P.EXE, against the code they stand in for
