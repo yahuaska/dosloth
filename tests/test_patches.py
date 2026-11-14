@@ -453,7 +453,8 @@ def run_saved_machine(volumes, path, patched, segment, back, inside=None, pop=4,
             raise Exit(0)
     cpu.trace = trace
     cpu.run(1 << 30, lambda: None)
-    for place in (BLOCKS_AT, MIXER_AT + 0x46, MIXER_AT + 0xBB, DELAY_AT, END_DELAY_AT):  # (where the INTs stand)
+    for place in (BLOCKS_AT, MIXER_AT + 0x46, MIXER_AT + 0xBB, DELAY_AT, END_DELAY_AT,
+                  VOICES_AT):  # (where the INTs stand)
         cpu.mem[place:place + 2] = bytes(2)
     picture = hashlib.sha1(b"".join(bytes(plane) for plane in computer.card.planes)).hexdigest()
     return (cpu.r, cpu.rh, cpu.s[:], cpu.flags, cpu.ip, cpu.instructions - start, hashlib.sha1(cpu.mem).hexdigest(), picture)
@@ -488,6 +489,7 @@ class TestTheBlocksOfAFrame(unittest.TestCase):
 EVENTS_EVERY = 100_000  # for the test of a wait that must not go past an event
 DELAY_AT = 0x12B2FB  # where the outer loop of the wait of the reset is, in the run of the video 2
 END_DELAY_AT = 0x12B558  # and that of the reset when the driver is ended
+VOICES_AT = 0x12D527  # where the loop of the choice of the voices that play is
 MIXER_AT = 0x12E144  # where the procedure is, in the run of the video 2 (the driver is put there)
 MIXER_CALL, MIXER_LOOP = 0x2144, 0x217A  # the offsets in its segment: the procedure, and just before its first loop
 
@@ -638,7 +640,8 @@ class TestTheWaitOfTheResetWhenTheDriverIsEnded(TestTheWaitOfTheResetOfTheSoundB
 class TestThePiecesOfTheDriverAreFoundAgain(unittest.TestCase):
     """A piece of the driver is found by its first bytes, and no INT is in them: a machine that is put back with the
     INTs in it is patched again at the same places. The code of the driver is put where the player puts it, from the
-    file of the driver."""
+    file of the driver (the parts that are in the file as they are in the memory: not the mixer, which comes from
+    another place of the file)."""
 
     def test_after_the_patch_the_pieces_are_where_they_were(self):
         driver = Path(__file__).resolve().parent.parent / "XCOMA" / "UFOEXE" / "HMIDRV.386"
@@ -647,15 +650,63 @@ class TestThePiecesOfTheDriverAreFoundAgain(unittest.TestCase):
         data = driver.read_bytes()
         cpu = CPU()
         cpu.patch_sites = {}
-        for address, start, size in ((0x12B000, 0x174D0, 0x1000),):  # 002F
+        for address, start, size in ((0x12B000, 0x174D0, 0x1000), (0x12C000, 0x35379, 0x3000)):  # 002F and 0047
             cpu.mem[address:address + size] = data[start:start + size]
-        from dosloth.patches import smk_reset_delay
-        for piece in smk_reset_delay.LATE_PATCHES:
+        from dosloth.patches import smk_reset_delay, smk_voices
+        for piece in smk_reset_delay.LATE_PATCHES + smk_voices.LATE_PATCHES:
             found = piece.find(cpu)
             self.assertIsNotNone(found, piece.name)
             self.assertTrue(piece.apply(cpu))
             self.assertEqual(piece.find(cpu), found, piece.name)
-        self.assertEqual(sorted(cpu.patch_sites), [DELAY_AT, END_DELAY_AT])
+        self.assertEqual(sorted(cpu.patch_sites), [DELAY_AT, END_DELAY_AT, VOICES_AT])
+
+
+# --- the choice of the voices that play, in the driver
+
+class TestTheChoiceOfTheVoices(unittest.TestCase):
+    """The loop that makes the list of the voices that play is run by the code and by the patch from the same saved
+    machine, with the flags of the 32 voices and the count made random (the three ways of a round, in any order): the
+    same registers, memory and count of instructions."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.volumes = disc_machine()
+        cls.directory = tempfile.TemporaryDirectory()
+        cls.state = Path(cls.directory.name) / "voices.state"
+        save_machine_at(cls.volumes, cls.state, 0x47, VOICES_AT - 0x12C000, 1)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.directory.cleanup()
+
+    def randomized(self, seed, steps):
+        rng = random.Random(seed)
+        done = []
+
+        def inside(cpu):
+            steps[0] += 1
+            if not done:
+                done.append(True)
+                base = cpu.bases[cpu.s[CPU.DS]]
+                esi = cpu.wide(CPU.SI)
+                for voice in range(32):
+                    at = base + esi + voice * 0x6C + 0x30
+                    word = rng.randrange(0x10000) & ~0x9000 | rng.choice((0, 0x8000, 0x9000, 0x1000))
+                    struct.pack_into("<H", cpu.mem, at, word)
+                struct.pack_into("<I", cpu.mem, base + 0x1270, rng.randrange(1 << 32))
+        return inside
+
+    def test_the_list_is_the_one_of_the_code(self):
+        for seed in range(6):
+            with self.subTest(seed=seed):
+                before, after = [0], [0]
+                original = run_saved_machine(self.volumes, self.state, False, 0x47, 0x154A,
+                                             self.randomized(seed, before), pop=0)
+                patched = run_saved_machine(self.volumes, self.state, True, 0x47, 0x154A,
+                                            self.randomized(seed, after), pop=0)
+                self.assertGreater(original[5], 32 * 5)
+                self.assertEqual(after[0], 2)  # the INT, and the look at where it goes on: the code of the loop is not run
+                self.assertEqual(original, patched)
 
 
 # --- the procedures of the strings of the C library in UFO2P.EXE, against the code they stand in for
