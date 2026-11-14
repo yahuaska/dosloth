@@ -151,6 +151,7 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   `-d LOGFILE` writes every executed instruction to LOGFILE, e.g. `1773:0880  8B C3  mov ax, bx`;
   `-s PNGFILE` keeps the screen in a PNG file, written again when the picture changes and at the end;
   `-t LOGFILE` writes the calls of the program to DOS (see calllog.py);
+  `--dump` writes the dump of a crash (`.crash.json`, `.crash.mem`) also when the program ends as it should;
   `-w` shows the screen in a window and takes the keys typed in it (closing the window stops the program; F12 saves
   the state as PROGRAM.state); `-r STATE` goes on from a saved state (a crash leaves PROGRAM.crash.state)
 - `tests/`        - tiny test programs (`make_hello.py` builds `hello.com`)

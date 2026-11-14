@@ -518,6 +518,21 @@ class TestBreakpoints(CommandLineTest):
         self.assertEqual((self.dir / "BP.COM.crash.mem").stat().st_size, 256 * 1024 * 1024)
         self.assertTrue((self.dir / "BP.COM.crash.state").exists())
 
+    def test_with_dump_a_program_that_ends_as_it_should_leaves_the_dump_too(self):
+        import json
+        result = self.run_stopped("--dump")
+        self.assertEqual(result.returncode, 7)
+        info = json.loads((self.dir / "BP.COM.crash.json").read_text())
+        self.assertEqual(info["error"], "Ended: the program ended with the exit code 7")
+        self.assertEqual(info["registers"]["AX"], "4C07")
+        memory = (self.dir / "BP.COM.crash.mem").read_bytes()
+        self.assertEqual(memory[0x10100:0x10100 + len(self.CODE)], self.CODE)
+        self.assertFalse((self.dir / "BP.COM.crash.state").exists())
+
+    def test_without_dump_a_program_that_ends_as_it_should_leaves_nothing(self):
+        self.assertEqual(self.run_stopped().returncode, 7)
+        self.assertEqual(sorted(os.listdir(self.dir)), ["BP.COM"])
+
     def test_the_offset_alone_is_any_segment(self):
         result = self.run_stopped("-b", "0103")
         self.assertEqual(result.returncode, 3)
