@@ -920,3 +920,51 @@ class TestTheDebugPrintfOfUFO2P(unittest.TestCase):
 
     def test_a_call_that_does_not_take_arguments_off_the_stack_is_not_a_printf(self):
         self.assertEqual(self.call(self.patched, [], b"\x90"), "")  # (as `mov eax, 7Fh; call 1026E0`)
+
+
+@unittest.skipUnless(UFO2P.exists(), "the game is not here")
+class TestTheFgetcOfUFO2P(unittest.TestCase):
+    """fgetc (1B1238) on a FILE with a buffer: the patch takes the byte itself in binary mode, and leaves every other
+    way to the code; the same registers, flags, FILE and count of instructions either way."""
+    STREAM, BUFFER = 0x1640000, 0x1650000
+
+    @classmethod
+    def setUpClass(cls):
+        cls.original, cls.patched = ufo_machine(patch=False), ufo_machine(patch=True)
+
+    def beside(self, file_flags, count, at, data, registers, cpu_flags):
+        stream = struct.pack("<II", self.BUFFER + at, count) + bytes(4) + bytes([file_flags]) + bytes(3)
+        for cpu in (self.original, self.patched):
+            cpu.instructions = 0
+            cpu.mem[self.BUFFER:self.BUFFER + 0x400] = bytes(0x400)
+            run_scenario(cpu, {self.STREAM: stream, self.BUFFER + at: data},
+                         {"eax": self.STREAM, **registers}, 0x1B1238, cpu_flags)
+        original, patched = self.original, self.patched
+        self.assertEqual(bytes(patched.mem[0x1B1238:0x1B123A]), PATCH_BYTES)
+        self.assertEqual((original.r, original.rh), (patched.r, patched.rh))
+        self.assertEqual((hex(original.flags), original.ip), (hex(patched.flags), patched.ip))
+        self.assertEqual(bytes(original.mem[self.STREAM:self.STREAM + 16]), bytes(patched.mem[self.STREAM:self.STREAM + 16]))
+        self.assertEqual(original.instructions, patched.instructions)
+        return patched
+
+    def cases(self, file_flags, data_of, count=80):
+        for seed in range(count):
+            rng = random.Random(seed)
+            data = data_of(rng)
+            registers = {name: rng.randrange(1 << 32) for name in ("ebx", "ecx", "edx", "esi", "edi", "ebp")}
+            with self.subTest(seed=seed):
+                self.beside(file_flags, len(data), rng.randrange(32), data, registers,
+                            rng.choice(FLAG_CHOICES + (0x0002 | 0x0010,)))
+
+    def test_a_byte_of_a_binary_file_is_taken_from_its_buffer(self):
+        self.cases(0x41, lambda rng: bytes(rng.randrange(256) for _ in range(rng.choice([1, 2, 7, 300]))))
+
+    def test_the_text_mode_with_its_cr_and_ctrl_z_is_left_to_the_code(self):
+        self.cases(0x01, lambda rng: bytes(rng.choice(b"\r\x1aA\n") for _ in range(rng.choice([2, 3, 9]))))
+
+    def test_a_file_that_is_not_open_for_reading_is_left_to_the_code(self):
+        self.cases(0x40, lambda rng: b"xyz", count=5)
+
+    def test_the_byte_comes_back_as_an_unsigned_number(self):
+        cpu = self.beside(0x41, 3, 5, b"\xff\x80\x01", {"ebx": 1, "ecx": 2, "edx": 3}, 0x0002)
+        self.assertEqual(cpu.wide(CPU.AX), 0xFF)

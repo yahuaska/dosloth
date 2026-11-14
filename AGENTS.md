@@ -161,7 +161,9 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   whose code calls a procedure somewhere else checks that one too: `also`). And `ufo_debug`: the debug printf of
   UFO2P.EXE (1026E0, a bare RET in the build) writes its text to the standard error of the host, a line at
   least for a call; the RET stands for other emptied procedures too, so only a call that the caller follows with
-  `add esp, N` is taken as a printf. A patch adds to the count of instructions the ones that the code would have run,
+  `add esp, N` is taken as a printf. And `ufo_stdio`: fgetc of UFO2P.EXE (1B1238), the byte from the buffer of a
+  binary file (the title picture is read a byte at a time); every other way goes on in the code after the two pushes
+  that the INT stands in place of. A patch adds to the count of instructions the ones that the code would have run,
   so the time of the program is the same.
   `--no-patches` runs the code as it is. A patched program shows `int F0` in the trace and the debugger;
   `tests/test_patches.py` runs the real code beside the patch on random trees and sound data, and for a frame of the
