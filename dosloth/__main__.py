@@ -57,6 +57,9 @@ def main():
     parser.add_argument("--debug", action="store_true", help="open the window of the debugger: the program waits there "
                         "before its first instruction, and goes on by a step (F7), over a call (F8) or up to a "
                         "breakpoint (F9); the breakpoints of -b are in it")
+    parser.add_argument("--dump", action="store_true", help="write the dump of a crash (PROGRAM.crash.json with the "
+                        "registers, PROGRAM.crash.mem with the memory) also when the program ends as it should: to "
+                        "look at what it had in memory")
     parser.add_argument("-p", metavar="REPORT", help="count how many times every instruction is executed, and write "
                         "the hottest places of the program to REPORT when it ends (about a third slower)")
     parser.add_argument("--no-patches", action="store_true", help="run the code of the program as it is, with no "
@@ -175,6 +178,8 @@ def main():
             code = debug_window.run()
         else:
             code = cpu.run(TICK_EVERY, monitor.tick) if monitor else cpu.run()
+        if args.dump:
+            dump.write(cpu, host_path, dump.Ended(f"the program ended with the exit code {code}"))
     except breakpoints.BreakpointHit as stop:
         dump.write(cpu, host_path, stop)  # as for a crash: the dump, and a state to go on from, where it stands
         snapshot.save_near(computer, host_path, ".crash.state")

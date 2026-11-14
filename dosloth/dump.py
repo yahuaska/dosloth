@@ -12,6 +12,10 @@ REG16 = ["AX", "CX", "DX", "BX", "SP", "BP", "SI", "DI"]  # order of CPU.r
 SEGS = ["ES", "CS", "SS", "DS", "FS", "GS"]                           # order of CPU.s
 
 
+class Ended(Exception):
+    """In the place of the error, in a dump that was asked for (--dump) of a program that ended as it should."""
+
+
 def describe(cpu, prog_path, exc):
     """What a dump says in JSON: the error, the registers, the code at the failed instruction and the stack top."""
     cs, ss = cpu.s[CPU.CS], cpu.s[CPU.SS]
