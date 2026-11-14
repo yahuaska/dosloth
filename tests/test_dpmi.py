@@ -464,6 +464,12 @@ class TestInterruptOfTheRealMode(FlatMachine):
         self.assertEqual(data[0x1C], mode)
         self.assertEqual(data[0x1D], self.cpu.mem[0x44A])
 
+    def test_the_question_to_mscdex_is_answered_as_in_the_real_mode(self):
+        data = self.simulate(0x2F, 0x1500)  # how many CD-ROM drives, and the first: the machine has D:, number 3
+        self.assertEqual((int.from_bytes(data[0x10:0x14], "little"), int.from_bytes(data[0x18:0x1C], "little")),
+                         (1, 3))
+        self.assertTrue(self.cpu.flat)
+
     def test_an_interrupt_that_is_not_done_stops_the_emulator(self):
         with self.assertRaisesRegex(NotImplementedError, "interrupt 21"):
             self.simulate(0x21, 0x0900)

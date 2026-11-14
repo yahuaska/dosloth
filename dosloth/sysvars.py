@@ -28,6 +28,18 @@ for the last), a word for how many entries this table has, and then the entries,
 numbers up to know how many files may be open. We make one table of FILES entries, all free (all zeros): the files
 of a program are kept by us, in handles.py, and DOS does not show them here.
 
+When the machine has CD-ROM drives, the header of their device driver is here too, at CDROM_HEADER_OFFSET, the next
+in the chain after NUL (DOS has it there when CONFIG.SYS loaded the driver that MSCDEX speaks to). MSCDEX gives a
+program a pointer to it (INT 2Fh AX=1501h). It is the header of a character device, 18 bytes, and then the fields of a
+driver of CD-ROMs:
+    00h  dword   the next device                                     (none: FFFF:FFFF)
+    04h  word    the attributes                                      (C800h: a character device, IOCTL, open/close)
+    06h  word    the strategy routine, 08h the interrupt routine     (0: there is no code; see dos.int2f)
+    0Ah  8 bytes the name                                            ("MSCD001 ")
+    12h  word    reserved                                            (0)
+    14h  byte    the first drive letter, 1 is A:, that MSCDEX gave it
+    15h  byte    how many drives (units) the driver has
+
 The first memory control block is made here too: one block, the last, that starts at the environment of the
 program and goes to the top of the 640 KB, as the program is the only thing in memory that DOS has given out.
 """
@@ -42,6 +54,9 @@ NONE = 0xFFFFFFFF  # a pointer to nothing, FFFF:FFFF
 FIRST_MCB = ENV_SEG - 1  # the control block is the paragraph before the block it describes
 MIN_LASTDRIVE = 5  # DOS has room for A: to E: whatever CONFIG.SYS says
 MAX_SECTOR = 512
+CDROM_HEADER_OFFSET = 0x1000  # the header of the driver of the CD-ROMs, after the system file table
+CDROM_ATTRIBUTES = 0xC800  # a character device (8000h) that does IOCTL (4000h) and open/close/removable (0800h)
+CDROM_DRIVER_NAME = b"MSCD001 "
 
 
 def _put(cpu, offset, value, size):
@@ -56,6 +71,16 @@ def _pointer(segment, offset):
 def block_devices(config):
     """How many block devices a machine has: its floppy and hard disk drives (a CD-ROM is the work of MSCDEX)."""
     return sum(1 for disk in config.disks.values() if disk.type != "cdrom")
+
+
+def cdrom_drives(config):
+    """The numbers of the CD-ROM drives of the machine (0 is A:), the lowest first."""
+    return [number for number, disk in sorted(config.disks.items()) if disk.type == "cdrom"]
+
+
+def cdrom_header():
+    """The far pointer (segment << 16 | offset) to the header of the driver of the CD-ROMs."""
+    return _pointer(SEGMENT, CDROM_HEADER_OFFSET)
 
 
 def write(cpu, config, top_segment):
@@ -75,13 +100,26 @@ def write(cpu, config, top_segment):
     _put(cpu, base + 0x1E, 0, 2)
     _put(cpu, base + 0x20, block_devices(config), 1)
     _put(cpu, base + 0x21, max(MIN_LASTDRIVE, config.drive_count), 1)
-    _put(cpu, base + 0x22, NONE, 4)  # the NUL device: the next device (none), its attributes (a character device
+    cdroms = cdrom_drives(config)
+    _put(cpu, base + 0x22, cdrom_header() if cdroms else NONE, 4)  # the NUL device: the next device, its attributes (a
+    # character device
     _put(cpu, base + 0x26, 0x8004, 2)  # that is the NUL device), the strategy and interrupt routines, its name
     _put(cpu, base + 0x28, 0, 2)
     _put(cpu, base + 0x2A, 0, 2)
     address = SEGMENT * 16 + base + 0x2C
     cpu.mem[address:address + 8] = b"NUL     "
     _put(cpu, base + 0x34, 0, 1)
+    if cdroms:
+        header = CDROM_HEADER_OFFSET
+        _put(cpu, header + 0x00, NONE, 4)
+        _put(cpu, header + 0x04, CDROM_ATTRIBUTES, 2)
+        _put(cpu, header + 0x06, 0, 2)
+        _put(cpu, header + 0x08, 0, 2)
+        address = SEGMENT * 16 + header + 0x0A
+        cpu.mem[address:address + 8] = CDROM_DRIVER_NAME
+        _put(cpu, header + 0x12, 0, 2)
+        _put(cpu, header + 0x14, cdroms[0] + 1, 1)
+        _put(cpu, header + 0x15, len(cdroms), 1)
     _put(cpu, SFT_OFFSET, NONE, 4)
     _put(cpu, SFT_OFFSET + 4, FILES, 2)
     start = SEGMENT * 16 + SFT_OFFSET + 6

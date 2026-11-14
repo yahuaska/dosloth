@@ -33,9 +33,10 @@ class IsoError(Exception):
 class Record:
     """What a directory record says about a file or a directory."""
 
-    def __init__(self, name, is_dir, extent, size, mtime, hidden):
+    def __init__(self, name, is_dir, extent, size, mtime, hidden, raw=b""):
         self.name, self.is_dir, self.hidden = name, is_dir, hidden
         self.extent, self.size, self.mtime = extent, size, mtime
+        self.raw = raw  # the bytes of the record on the disc, which MSCDEX gives a program (INT 2Fh AX=150Fh)
 
     def entry(self):
         """The Entry a file system gives for it: files of a disc are read-only."""
@@ -78,7 +79,8 @@ def record_at(data, at):
     name = dos_name(raw)
     if name is None:
         return None
-    return Record(name, bool(flags & DIRECTORY), extent, size, time_of(data[at + 18:at + 25]), bool(flags & HIDDEN))
+    return Record(name, bool(flags & DIRECTORY), extent, size, time_of(data[at + 18:at + 25]), bool(flags & HIDDEN),
+                  bytes(data[at:at + data[at]]))
 
 
 class IsoImage:
@@ -99,7 +101,8 @@ class IsoImage:
         # the directory record of the root is in the descriptor, 34 bytes from the 156th
         root_extent = int.from_bytes(descriptor[158:162], "little")
         root_size = int.from_bytes(descriptor[166:170], "little")
-        self.root = Record("", True, root_extent, root_size, time_of(descriptor[174:181]), False)
+        self.root = Record("", True, root_extent, root_size, time_of(descriptor[174:181]), False,
+                           bytes(descriptor[156:156 + descriptor[156]]))
         self.directories = {}  # extent -> the records of the directory there (a disc does not change)
 
     def read(self, offset, size):
@@ -226,6 +229,11 @@ class IsoFs:
 
     def read_sectors(self, first, count):
         return self.image.read_sectors(first, count)
+
+    def directory_record(self, parts):
+        """The bytes of the directory record of what `parts` names, as they are on the disc (the root's is the one in
+        the primary volume descriptor). FsError if it is not there."""
+        return self._find(parts).raw
 
     def _refuse(self, *arguments):
         raise FsError(ACCESS_DENIED, "a disc cannot be written to")

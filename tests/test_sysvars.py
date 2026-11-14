@@ -44,6 +44,11 @@ class TestWhereTheTablesAre(unittest.TestCase):
     def test_the_list_and_the_table_do_not_overlap(self):
         self.assertLessEqual(sysvars.LIST_OFFSET + 0x35, sysvars.SFT_OFFSET)
 
+    def test_the_header_of_the_cd_rom_driver_is_after_the_table_and_before_the_control_block(self):
+        end_of_sft = sysvars.SFT_OFFSET + 6 + sysvars.FILES * sysvars.SFT_ENTRY_SIZE
+        self.assertLessEqual(end_of_sft, sysvars.CDROM_HEADER_OFFSET)
+        self.assertLessEqual(sysvars.SEGMENT * 16 + sysvars.CDROM_HEADER_OFFSET + 0x16, sysvars.FIRST_MCB * 16)
+
     def test_the_constants(self):
         self.assertEqual((sysvars.SEGMENT, sysvars.LIST_OFFSET, sysvars.SFT_OFFSET, sysvars.FILES,
                           sysvars.SFT_ENTRY_SIZE), (0x0070, 2, 0x0100, 60, 0x3B))
@@ -126,12 +131,20 @@ class TestTheFields(unittest.TestCase):
     def test_the_join_count_is_0(self):
         self.assertEqual(self.cpu.mem[0x700 + self.base + 0x34], 0)
 
-    def test_the_nul_device_heads_the_chain_of_devices(self):
+    def test_the_nul_device_heads_the_chain_of_devices_and_the_driver_of_the_cd_roms_is_next(self):
         header = bytes(self.cpu.mem[0x700 + self.base + 0x22:0x700 + self.base + 0x22 + 18])
-        self.assertEqual(header[0:4], b"\xFF\xFF\xFF\xFF")  # no device after it
+        self.assertEqual(header[0:4], (sysvars.CDROM_HEADER_OFFSET).to_bytes(2, "little") + b"\x70\x00")
         self.assertEqual(header[4:6], b"\x04\x80")  # a character device, and the NUL one
         self.assertEqual(header[6:10], bytes(4))
         self.assertEqual(header[10:], b"NUL     ")
+
+    def test_the_header_of_the_driver_of_the_cd_roms_ends_the_chain(self):
+        at = 0x700 + sysvars.CDROM_HEADER_OFFSET
+        header = bytes(self.cpu.mem[at:at + 0x16])
+        self.assertEqual(header[0:4], b"\xFF\xFF\xFF\xFF")
+        self.assertEqual(header[4:6], b"\x00\xC8")  # a character device with IOCTL and open/close
+        self.assertEqual(header[10:18], b"MSCD001 ")
+        self.assertEqual((header[0x14], header[0x15]), (4, 1))  # the first drive is D: (1 is A:), one drive
 
 
 class TestTheSystemFileTable(unittest.TestCase):
@@ -179,6 +192,17 @@ class TestWhatDependsOnTheMachine(unittest.TestCase):
         self.assertEqual(cpu.mem[0x700 + 2 + 0x20], 4)
         cpu = self.machine_with("AD", {"D": "cdrom"})
         self.assertEqual(cpu.mem[0x700 + 2 + 0x20], 1)
+
+    def test_without_a_cd_rom_drive_there_is_no_driver_after_nul(self):
+        cpu = self.machine_with("AC", {"C": "hdd"})
+        self.assertEqual(cpu.mem[0x700 + 2 + 0x22:0x700 + 2 + 0x26], b"\xFF\xFF\xFF\xFF")
+        at = 0x700 + sysvars.CDROM_HEADER_OFFSET
+        self.assertEqual(bytes(cpu.mem[at:at + 0x16]), bytes(0x16))
+
+    def test_the_driver_counts_the_cd_rom_drives_from_the_lowest(self):
+        cpu = self.machine_with("ACDE", {"C": "hdd", "D": "cdrom", "E": "cdrom"})
+        at = 0x700 + sysvars.CDROM_HEADER_OFFSET
+        self.assertEqual((cpu.mem[at + 0x14], cpu.mem[at + 0x15]), (4, 2))
 
     def test_each_machine_has_its_tables_in_its_own_memory(self):
         one, two = machine()[0], machine()[0]

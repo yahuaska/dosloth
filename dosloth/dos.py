@@ -562,9 +562,7 @@ def int21(cpu, state):
         raise NotImplementedError(f"INT 21h AH={ah:02X}")
 
 
-def cdrom_drives(config):
-    """The numbers of the CD-ROM drives of the machine (0 is A:), the lowest first."""
-    return [number for number, disk in sorted(config.disks.items()) if disk.type == "cdrom"]
+cdrom_drives = sysvars.cdrom_drives  # (the tables of DOS need them too: the header of their driver)
 
 
 def int2f(cpu, state):
@@ -572,7 +570,8 @@ def int2f(cpu, state):
 
     So far the questions to MSCDEX, the CD-ROM extension of DOS: 1500h, how many CD-ROM drives there are. It is
     there when the machine has a CD-ROM drive, and then it also answers 150Bh, 150Ch and 150Dh (the letters of the
-    drives), and reads sectors (1508h) if the disc in the drive is an image. Without a drive there is no MSCDEX, and
+    drives), 1501h (the list of the drives: the unit and a pointer to the header of their driver, see sysvars.py), and
+    reads sectors (1508h) and gives the directory record of a path (150Fh) if the disc in the drive is an image. Without a drive there is no MSCDEX, and
     the count is 0.
 
     And 1600h, "is Windows running in the enhanced mode?" Not here: AL stays 00h, which is what a machine with no
@@ -609,6 +608,15 @@ def int2f(cpu, state):
                 for i, byte in enumerate(data):
                     cpu.wb(cpu.s[CPU.ES], (cpu.r[CPU.BX] + i) & 0xFFFF, byte)  # round the end of the segment
                 cpu.set_flag(flags.CF, False)
+    elif cdroms and ax == 0x1501:  # the list of the CD-ROM drives, 5 bytes each, to ES:BX: the number of the unit in
+        # the driver, and the far pointer to the header of the driver (sysvars.py), the offset first
+        pointer = sysvars.cdrom_header()
+        far = (pointer & 0xFFFF).to_bytes(2, "little") + (pointer >> 16).to_bytes(2, "little")
+        for unit in range(len(cdroms)):
+            for i, byte in enumerate(bytes([unit]) + far):
+                cpu.wb(cpu.s[CPU.ES], (cpu.r[CPU.BX] + 5 * unit + i) & 0xFFFF, byte)
+    elif cdroms and ax == 0x150F:  # the directory record of the path at ES:BX on the disc in CX, to SI:DI
+        cdrom_directory_entry(cpu, state, cdroms)
     elif cdroms and ax == 0x150D:  # the numbers of the CD-ROM drives, a byte each, to ES:BX (0 is A:, lowest first)
         for i, drive in enumerate(cdroms):
             cpu.wb(cpu.s[CPU.ES], (cpu.r[CPU.BX] + i) & 0xFFFF, drive)
@@ -618,6 +626,39 @@ def int2f(cpu, state):
         pass  # is as the program left it, and a program that looks for the answer 0 finds that there is none
     else:
         raise NotImplementedError(f"INT 2Fh AX={ax:04X}")
+
+
+ISO_9660 = 1  # what 150Fh gives in AX for a disc of ISO 9660 (0 is one of High Sierra, the format before it)
+
+
+def cdrom_directory_entry(cpu, state, cdroms):
+    """INT 2Fh AX=150Fh: the directory record of a file or a directory of the disc, as it is on the disc. CX is the
+    drive, ES:BX the path on the disc (`/MUSIC.`: from the root, / or \\ between the names, and a dot at the end of a
+    name that has no extension), SI:DI the buffer the record is copied to; DX = 0 asks for the record as MSCDEX 2.0
+    gives it (what another DX asks for is not known here: it stops the emulator). AX = 1, the disc is ISO 9660;
+    or the carry flag and AX = 2 (not there), 15 (not a CD-ROM drive), 21 (no disc)."""
+    drive = cpu.r[CPU.CX]
+    if cpu.r[CPU.DX] & 1:
+        raise NotImplementedError(f"INT 2Fh AX=150Fh with DX={cpu.r[CPU.DX]:04X}")
+    filesystem = state.volumes.filesystems.get(drive)
+    if drive not in cdroms:
+        return fail(cpu, FsError(INVALID_DRIVE, f"the drive {chr(ord('A') + drive)}: is not a CD-ROM drive"))
+    if filesystem is None:
+        return fail(cpu, FsError(DRIVE_NOT_READY, "there is no disc in the drive"))
+    if not hasattr(filesystem, "directory_record"):
+        raise NotImplementedError("INT 2Fh AX=150Fh: the CD-ROM is a directory of the host and has no directory "
+                                  "records; mount an image of the disc (type = \"iso\" in the configuration)")
+    raw = bytes(cpu.rb(cpu.s[CPU.ES], (cpu.r[CPU.BX] + i) & 0xFFFF) for i in range(MAX_PATH))
+    path = raw.split(b"\0")[0].decode("ascii", "replace")
+    parts = [name[:-1] if name.endswith(".") else name for name in re.split(r"[/\\]", path) if name]
+    try:
+        record = filesystem.directory_record(parts)
+    except FsError as error:
+        return fail(cpu, FsError(FILE_NOT_FOUND, str(error)))
+    for i, byte in enumerate(record):
+        cpu.wb(cpu.r[CPU.SI], (cpu.r[CPU.DI] + i) & 0xFFFF, byte)  # (SI holds a segment)
+    cpu.r[CPU.AX] = ISO_9660
+    cpu.set_flag(flags.CF, False)
 
 
 def int25(cpu, state):
