@@ -146,8 +146,11 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   million instructions each: the count goes on by them, up to the next event of the devices). Six more, in
   `ufo_strings`, are the procedures of the strings of the C library in UFO2P.EXE (the game): strcmp, strupr, toupper
   (code page 437 too), strncpy, strnicmp and strcat; they are not hot, but shorter in Python than in the trace (a patch
-  whose code calls a procedure somewhere else checks that one too: `also`). A patch adds to the count of instructions
-  the ones that the code would have run, so the time of the program is the same.
+  whose code calls a procedure somewhere else checks that one too: `also`). And `ufo_debug`: the debug printf of
+  UFO2P.EXE (1026E0, a bare RET in the build) writes its text to the standard error of the host, a line at
+  least for a call; the RET stands for other emptied procedures too, so only a call that the caller follows with
+  `add esp, N` is taken as a printf. A patch adds to the count of instructions the ones that the code would have run,
+  so the time of the program is the same.
   `--no-patches` runs the code as it is. A patched program shows `int F0` in the trace and the debugger;
   `tests/test_patches.py` runs the real code beside the patch on random trees and sound data, and for a frame of the
   video 2 of the disc (the machine of `config_xcomapoc.toml`), when the game is in XCOMA
