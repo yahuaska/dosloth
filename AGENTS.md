@@ -108,6 +108,12 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   shows the picture goes through; `PngFile` is the first. `-s PNGFILE` uses it
 - `dosloth/window.py` - `TkWindow`, a Tk window behind that interface: shows the picture, passes the keys typed in it
   on to the BIOS keyboard. Tk is loaded only when `-w` asks for a window
+- `dosloth/smacker.py` - Smacker videos (`.smk`, SMK2) decoded in Python, with no machine: the trees, the palette, the
+  blocks of a frame; the sound is skipped. All the frames of the three videos of the game are those that the emulator
+  shows when it runs SMKP.EXE, but for one whose picture SMKP.EXE leaves out (frame 1 of the video 1)
+  (`tests/test_smacker.py` checks the first 24 of the video 2 that way, when the game is here)
+- `dosloth/smkplay.py` - `python -m dosloth.smkplay -c config_xcomapoc.toml D:\XCOM3\SMK\INTRO1.SMK`: a video in the
+  window of the emulator (`TkWindow`), at its rate; a picture that is late is left out, a key or closing stops it
 - `dosloth/mouse.py` - the mouse and its INT 33h driver (reset, show/hide, position and buttons, press and release
   counts, ranges, the program's subroutine remembered but not called); the window gives it the events
 - `dosloth/keys.py` - a key of Tk (`Return`, `a`, `F1`) -> the BIOS scan code and ASCII code, for a US keyboard
