@@ -74,10 +74,10 @@ class TestMechanism(unittest.TestCase):
     @unittest.skipUnless(SMKP.exists(), "the game is not here")
     def test_the_patches_are_found_in_the_code_as_the_program_has_it_whatever_the_order(self):
         cpu = game_machine(patch=False)
-        every = [patch.name for patch in patches.PATCHES]
+        every = [patch.name for patch in patches.PATCHES if patch.handler.__module__.startswith("dosloth.patches.smk_")]
         self.assertEqual(sorted(patches.apply(cpu, list(reversed(patches.PATCHES)))), sorted(every))
         again = game_machine(patch=False)
-        self.assertEqual(sorted(patches.apply(again)), sorted(every))
+        self.assertEqual(sorted(patches.apply(again)), sorted(every))  # (and none of those of other programs)
 
     def test_the_patches_that_there_are_name_their_code_by_a_hash(self):
         for patch in patches.PATCHES:
@@ -192,7 +192,8 @@ class TestTheTreeOfSmacker(Beside):
     def test_the_game_code_at_that_place_is_the_one_the_patch_is_for(self):
         cpu = game_machine(patch=True)
         for patch in patches.PATCHES:
-            self.assertEqual(bytes(cpu.mem[patch.address:patch.address + 2]), PATCH_BYTES, patch.name)
+            if patch.handler.__module__.startswith("dosloth.patches.smk_"):
+                self.assertEqual(bytes(cpu.mem[patch.address:patch.address + 2]), PATCH_BYTES, patch.name)
 
     def test_the_result_is_the_one_of_the_code_it_replaces(self):
         for seed in range(60):
@@ -612,3 +613,119 @@ class TestTheWaitOfTheResetOfTheSoundBlaster(unittest.TestCase):
         self.assertEqual(len(before), len(after))
         for then, now in zip(before, after):  # (a round is not cut, so the event may come a round late)
             self.assertLess(abs(then - now), 36)
+
+
+# --- the procedures of the strings of the C library in UFO2P.EXE, against the code they stand in for
+
+UFO2P = SMKP.parent / "UFO2P.EXE"
+FIRST, SECOND = 0x1600000, 0x1610000  # the two strings (or the target and the source)
+
+
+def ufo_machine(patch):
+    cpu = CPU()
+    psp.build(cpu, 0x1000, 0x0FF0, 0x9000, "C:\\UFO2P.EXE")
+    loader.load_le(cpu, UFO2P.read_bytes(), 0x1000, ExtendedMemory(), patch=patch)
+    patches.install(cpu)
+    return cpu
+
+
+def text(rng, length, alphabet=b"aAbBzZ@[`{09 \x7f\x80\x81\x84\x8e\x94\xa4\xa5\xff"):
+    return bytes(rng.choice(alphabet) for _ in range(length))
+
+
+@unittest.skipUnless(UFO2P.exists(), "the game is not here")
+class TestTheStringsOfUFO2P(unittest.TestCase):
+    """The same registers, flags, strings and count of instructions as the code of the game, on the same input."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.original, cls.patched = ufo_machine(patch=False), ufo_machine(patch=True)  # (made once: it takes a while)
+
+    def beside(self, entry, memory, registers, flags):
+        original, patched = self.original, self.patched
+        for cpu in (original, patched):
+            cpu.instructions = 0
+            for start in (FIRST, SECOND):
+                cpu.mem[start:start + 0x200] = bytes(0x200)
+            run_scenario(cpu, memory, registers, entry, flags)
+        self.assertEqual(bytes(patched.mem[entry:entry + 2]), PATCH_BYTES)
+        self.assertEqual((original.r, original.rh), (patched.r, patched.rh))
+        self.assertEqual((hex(original.flags), original.ip), (hex(patched.flags), patched.ip))
+        for start in (FIRST, SECOND):
+            self.assertEqual(bytes(original.mem[start:start + 0x200]), bytes(patched.mem[start:start + 0x200]))
+        self.assertEqual(original.instructions, patched.instructions)
+
+    def cases(self, entry, make, count=80, flag_choices=FLAG_CHOICES + (0x0002 | 0x0010,)):
+        for seed in range(count):
+            rng = random.Random(seed)
+            memory, registers = make(rng)
+            registers = {"ecx": rng.randrange(1 << 32), "esi": rng.randrange(1 << 32), "edi": rng.randrange(1 << 32),
+                         "ebp": rng.randrange(1 << 32), "ebx": rng.randrange(1 << 32), **registers}
+            with self.subTest(seed=seed):
+                self.beside(entry, memory, registers, rng.choice(flag_choices))
+
+    @staticmethod
+    def pair(rng):
+        """Two strings: the same, one the start of the other, or different at some place (in either case)."""
+        first = text(rng, rng.choice([0, 1, 3, 4, 5, 15, 16, 17, 31, 33, 60]))
+        kind = rng.randrange(4)
+        if kind == 0:
+            second = first
+        elif kind == 1:
+            second = first[:rng.randrange(len(first) + 1)]
+        elif kind == 2:
+            second = first.swapcase()
+        else:
+            second = first + text(rng, rng.randrange(1, 5))
+            if first and rng.random() < 0.7:
+                at = rng.randrange(len(first))
+                second = first[:at] + text(rng, 1) + first[at + 1:]
+        return (first, second) if rng.random() < 0.5 else (second, first)
+
+    def test_strcmp(self):
+        def make(rng):
+            first, second = self.pair(rng)
+            if rng.random() < 0.1:
+                return {FIRST: first + b"\0"}, {"eax": FIRST, "edx": FIRST}
+            return ({FIRST: first + b"\0" + text(rng, 8), SECOND: second + b"\0" + text(rng, 8)},
+                    {"eax": FIRST, "edx": SECOND})
+        self.cases(0x1B0080, make)
+
+    def test_strupr(self):
+        def make(rng):
+            at = FIRST + rng.randrange(16)  # (the end of the string at every place of a paragraph: AF of `inc edx`)
+            return {at: text(rng, rng.choice([0, 1, 2, 7, 40])) + b"\0"}, {"eax": at}
+        self.cases(0x11FFC0, make)
+
+    def test_toupper(self):
+        values = list(range(256)) + [value | 0xFFFFFF00 for value in range(128, 256)] + [0x7FFFFFFF, 0x80000000,
+                                                                                         0xFFFFFFFF, 0x161]
+        for value in values:
+            with self.subTest(value=hex(value)):
+                self.beside(0x120080, {}, {"eax": value, "edx": 0x12345678}, 0x0002)
+
+    def test_strncpy(self):
+        def make(rng):
+            source = text(rng, rng.choice([0, 1, 5, 20]))
+            return ({FIRST: text(rng, 64), SECOND: source + b"\0" + text(rng, 8)},
+                    {"eax": FIRST + rng.randrange(4), "edx": SECOND, "ebx": rng.choice([0, 1, 2, 5, 19, 20, 21, 40])})
+        self.cases(0x1B0121, make)
+
+    def test_strnicmp(self):
+        def make(rng):
+            first, second = self.pair(rng)
+            return ({FIRST: first + b"\0" + text(rng, 8), SECOND: second + b"\0" + text(rng, 8)},
+                    {"eax": FIRST, "edx": SECOND, "ebx": rng.choice([0, 1, 3, 16, 100])})
+        self.cases(0x1BE169, make)
+
+    def test_strcat(self):
+        def make(rng):
+            target = text(rng, rng.choice([0, 1, 6, 30]), b"abc\x80") + b"\0" + text(rng, 50)
+            return ({FIRST: target, SECOND: text(rng, rng.choice([0, 1, 2, 3, 30]), b"xyz\xff") + b"\0"},
+                    {"eax": FIRST, "edx": SECOND})
+        self.cases(0x1BD419, make, flag_choices=(0x0002, 0x0002 | 0x08D5, 0x0002 | 0x0200))  # (the C code has DF clear)
+
+    def test_strcat_with_the_direction_flag_set_is_not_known(self):
+        self.patched.mem[FIRST:FIRST + 2] = bytes(2)
+        with self.assertRaises(NotImplementedError):
+            run_scenario(self.patched, {}, {"eax": FIRST, "edx": FIRST}, 0x1BD419, 0x0002 | 0x0400)
