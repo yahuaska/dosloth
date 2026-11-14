@@ -380,6 +380,12 @@ class TestTwoByteInstructions(unittest.TestCase):
             self.assertEqual(disasm(cpu, 0x1000, 0x100), (len(bytes.fromhex(code)), text), code)
         self.assertEqual(dis(bytes.fromhex("0F 02 C8")), (1, "db 0F"))  # the CPU stops at it in the real mode
 
+    def test_where_nothing_can_be_read_it_is_a_db_of_question_marks(self):
+        from dosloth.flat import Bases
+        cpu = machine(b"\x90")
+        cpu.enter_flat(Bases({0x0F: 0}))
+        self.assertEqual(disasm(cpu, 0x47, 0x100), (1, "db ??"))  # a selector that is not there
+
     def test_a_second_byte_that_is_not_done_is_a_db_of_the_first(self):
         for code in ("0F A2", "0F 31", "0F 00 C0", "0F BA C3 01", "0F BA DB 01", "66 0F A2"):
             data = bytes.fromhex(code)

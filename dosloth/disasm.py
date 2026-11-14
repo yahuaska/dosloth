@@ -512,5 +512,8 @@ def disasm(cpu, seg, off):
     except Exception:  # a trace must never be the thing that crashes the program
         text = None
     if text is None:
-        return 1, f"db {cpu.rb(seg, off):02X}"
+        try:
+            return 1, f"db {cpu.rb(seg, off):02X}"
+        except Exception:  # nothing can be read there: a selector that is gone (the profile of a program that ended)
+            return 1, "db ??"
     return r.length(), text
