@@ -109,7 +109,7 @@ REAL_CALL_REGISTERS = ((0x00, CPU.DI), (0x04, CPU.SI), (0x08, CPU.BP), (0x10, CP
                        (0x18, CPU.CX), (0x1C, CPU.AX))  # the offset in the structure, and the register
 REAL_CALL_SEGMENTS = ((0x22, CPU.ES), (0x24, CPU.DS), (0x26, CPU.FS), (0x28, CPU.GS))
 REAL_CALL_FLAGS = 0x20
-REAL_CALLS = (0x10,)  # the interrupts that a program may call so: the video BIOS, and no other so far
+REAL_CALLS = (0x10, 0x2F)  # the interrupts that a program may call so: the video BIOS, and the multiplex (MSCDEX)
 
 
 def real_mode_interrupt(cpu):
@@ -149,7 +149,7 @@ def int31(cpu, state):
     base of BX in CX:DX, get and set), 0008h and 0009h (the limit in CX:DX and the rights in CX: taken and not kept);
     0400h, the version; the memory: 0500h (what there is), 0501h and 0502h (a block above 1 MB, and its return),
     0100h and 0101h (a block below it, with its selector, and its return), 0600h and 0601h (locking: nothing to lock),
-    0300h (an interrupt of the real mode: the video BIOS only), 0800h (a device's memory: the physical address is the linear one), 0200h and 0201h (the handlers of the interrupts of the real mode, the table at address 0), 0204h and 0205h
+    0300h (an interrupt of the real mode: the video BIOS and INT 2Fh only), 0800h (a device's memory: the physical address is the linear one), 0200h and 0201h (the handlers of the interrupts of the real mode, the table at address 0), 0204h and 0205h
     (those of the protected mode: get, set). A call that is not here stops the emulator.
     """
     if not cpu.flat:

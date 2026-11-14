@@ -32,7 +32,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `dosloth/fpu.py` - the coprocessor (x87) of a 32-bit program, in floats of Python, the forms that the programs have
   asked for so far; real mode has none (`tests/test_fpu.py`: status words from a real chip, run on the host)
 - `dosloth/dpmi.py`, `dosloth/dos32.py` - what the machine plays of DOS/4G for a program in the flat mode: INT 31h (the
-  descriptors in `cpu.bases`, the version, the memory above and below 1 MB), INT 21h AX=FF00h, INT 2Fh AX=1686h;
+  descriptors in `cpu.bases`, the version, the memory above and below 1 MB, AX=0300h: an interrupt of the real mode,
+  INT 10h and INT 2Fh, by `REAL_CALLS`), INT 21h AX=FF00h, INT 2Fh AX=1686h;
   INT 21h of the flat mode: the functions that dos.py does for both modes (EDX/ECX pointers and counts of 32 bits via
   `cpu.wide`, `cpu.address_mask`), the others stop the emulator (`tests/test_dpmi.py`, `tests/test_dos32.py`); IN/OUT
   with EAX are in `tests/test_cpu386_io.py`
@@ -45,11 +46,12 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   `config.example.toml` shows the format. `python -m dosloth -c FILE program` uses it; without `-c` the machine is
   built in: floppies A: B:, a CD-ROM D: with no disc, the current directory as the hard disk C:. A drive is a
   "floppy", "hdd" or "cdrom" (`type`; `removable` is the old way). What is mounted in a CD-ROM is read-only.
-  INT 2Fh answers MSCDEX questions from the CD-ROM drives
+  INT 2Fh answers MSCDEX questions from the CD-ROM drives (1500h, 1501h with the header `MSCD001 ` of a driver of
+  CD-ROMs that `sysvars.py` writes after NUL, 1508h, 150Bh-150Dh, 150Fh: the directory record from the image)
 - `dosloth/filesystem.py` - the file systems of the drives: HostDir (a host directory, names matched without
   regard to case, only 8.3 names visible) and MemFs (in memory), with one interface and DOS error numbers
 - `dosloth/iso.py` - a disc image (`.iso`, ISO 9660, 2048-byte sectors) as a CD-ROM: IsoFs gives its files like a host
-  directory, IsoImage its raw sectors (MSCDEX INT 2Fh AX=1508h); config `D = { type = "iso", path = "cd.iso" }`
+  directory, IsoImage its raw sectors (MSCDEX INT 2Fh AX=1508h) and the raw directory records (150Fh); config `D = { type = "iso", path = "cd.iso" }`
 - `dosloth/volumes.py` - the drives as a program uses them: a file system per drive, the current directory of each, and
   resolve(): a DOS path (`D:\X`, `..\Y`, `a/b`) -> file system + names. The program on the command line is named this way too
 - `dosloth/search.py` - the file search of INT 21h AH=4Eh/4Fh: DOS wildcard masks, the attributes a program asks for,

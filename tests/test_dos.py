@@ -7,7 +7,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from dosloth import bios, config, dos, flags, vga
+from dosloth import bios, config, dos, flags, sysvars, vga
 from dosloth.cpu import CPU, Exit
 from dosloth.filesystem import SECTOR_NOT_FOUND
 from dosloth.handles import OpenFile
@@ -1369,15 +1369,31 @@ class TestMultiplex(unittest.TestCase):
         self.machine("[disks.C]\ntype = 'hdd'\n[mounts]\nC = { type = 'tmpfs' }\n[disks.D]\ntype = 'cdrom'\n")
         self.assertEqual(self.drive_letters()[:2], bytes([3, 0xAA]))
 
+    def drive_list(self, buffer=0x0200, size=12, es=0x3000):
+        cpu = self.cpu
+        for i in range(size):
+            cpu.wb(es, (buffer + i) & 0xFFFF, 0xAA)
+        cpu.s[CPU.ES] = es
+        self.call(0x1501, bx=buffer)
+        return bytes(cpu.rb(es, (buffer + i) & 0xFFFF) for i in range(size))
+
+    def test_1501_lists_each_drive_as_its_unit_and_a_pointer_to_the_header_of_the_driver(self):
+        self.machine(self.TWO_CDROMS)
+        pointer = sysvars.CDROM_HEADER_OFFSET.to_bytes(2, "little") + sysvars.SEGMENT.to_bytes(2, "little")
+        self.assertEqual(self.drive_list(), b"\x00" + pointer + b"\x01" + pointer + b"\xAA\xAA")
+        segment, offset = sysvars.SEGMENT, sysvars.CDROM_HEADER_OFFSET
+        self.assertEqual(bytes(self.cpu.rb(segment, offset + 10 + i) for i in range(8)), b"MSCD001 ")
+        self.assertEqual((self.cpu.r[CPU.AX], self.cpu.r[CPU.BX]), (0x1501, 0x0200))
+
     def test_150b_150c_and_150d_are_not_answered_where_there_is_no_mscdex(self):
         self.machine(self.FLOPPIES_ONLY)
-        for ax in (0x150B, 0x150C, 0x150D):
+        for ax in (0x1501, 0x150B, 0x150C, 0x150D):
             with self.assertRaises(NotImplementedError):
                 self.call(ax)
 
     def test_the_other_services_are_not_done_yet(self):
         self.machine()
-        for ax in (0x1501, 0x1510, 0x1601, 0x1680, 0x160A, 0x4300, 0x4680, 0x0000):
+        for ax in (0x1510, 0x1601, 0x1680, 0x160A, 0x4300, 0x4680, 0x0000):
             with self.assertRaises(NotImplementedError):
                 self.call(ax)
 
@@ -2685,6 +2701,96 @@ class TestSeek(FileFunctionsTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheDirectoryRecordOfAFileOfTheDisc(unittest.TestCase):
+    """INT 2Fh AX=150Fh: the directory record of the path at ES:BX on the disc in CX, as the disc has it, to SI:DI."""
+
+    MUSIC = bytes(range(256)) * 20
+
+    def setUp(self):
+        from tests.iso_builder import build
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name).resolve()
+        self.image = build({"MUSIC": self.MUSIC, "XCOM3": {"SMK": {"INTRO1.SMK": b"smk"}}, "A.TXT": b"abc"})
+        (self.base / "disc.iso").write_bytes(self.image)
+        (self.base / "files").mkdir()
+        self.cpu = CPU()
+        dos.install(self.cpu, Volumes(config.parse(tomllib.loads("""
+            [disks.C]
+            type = 'hdd'
+            [disks.D]
+            type = 'cdrom'
+            [disks.E]
+            type = 'cdrom'
+            [disks.F]
+            type = 'cdrom'
+            [mounts]
+            C = { type = 'tmpfs' }
+            D = { type = 'iso', path = 'disc.iso' }
+            E = { type = 'dir', path = 'files' }
+        """), self.base)))
+        self.cpu.s[CPU.CS] = 0x1000
+        self.cpu.mem[0x10000:0x10002] = bytes([0xCD, 0x2F])
+
+    def entry(self, path, drive=3, dx=0, size=64):
+        cpu = self.cpu
+        for i, byte in enumerate(path.encode() + b"\0"):
+            cpu.wb(0x2000, 0x0100 + i, byte)
+        for i in range(size):
+            cpu.wb(0x3000, 0x0200 + i, 0xAA)
+        cpu.r[CPU.AX], cpu.r[CPU.CX], cpu.r[CPU.DX] = 0x150F, drive, dx
+        cpu.s[CPU.ES], cpu.r[CPU.BX], cpu.r[CPU.SI], cpu.r[CPU.DI] = 0x2000, 0x0100, 0x3000, 0x0200
+        cpu.set_flag(flags.CF, True)
+        cpu.ip = 0
+        cpu.step()
+        return bytes(cpu.rb(0x3000, 0x0200 + i) for i in range(size))
+
+    def failed(self):
+        return self.cpu.r[CPU.AX] if self.cpu.get_flag(flags.CF) else None
+
+    def test_the_record_of_a_file_with_no_extension_is_the_one_on_the_disc_and_it_says_where_the_file_is(self):
+        got = self.entry("/MUSIC.")
+        self.assertIsNone(self.failed())
+        self.assertEqual(self.cpu.r[CPU.AX], 1)  # ISO 9660
+        length = got[0]
+        self.assertEqual(got[33:33 + got[32]], b"MUSIC.;1")
+        self.assertEqual(got[length:], bytes([0xAA]) * (64 - length))  # nothing after the record
+        extent, size = int.from_bytes(got[2:6], "little"), int.from_bytes(got[10:14], "little")
+        self.assertEqual(size, len(self.MUSIC))
+        self.assertEqual(self.image[extent * 2048:extent * 2048 + size], self.MUSIC)
+        self.assertIn(got[:length], self.image)  # the very bytes of the disc
+
+    def test_a_path_in_directories_with_either_slash_and_any_case(self):
+        got = self.entry("\\xcom3\\smk/intro1.smk")
+        self.assertIsNone(self.failed())
+        self.assertEqual(got[33:33 + got[32]], b"INTRO1.SMK;1")
+
+    def test_a_directory_and_the_root_have_records_too(self):
+        got = self.entry("/XCOM3")
+        self.assertEqual((self.failed(), got[25] & 2), (None, 2))  # the flag of a directory
+        got = self.entry("/")
+        self.assertEqual((self.failed(), got[0], got[25] & 2), (None, 34, 2))  # the root's, from the descriptor
+
+    def test_what_is_not_there_is_error_2_and_nothing_is_written(self):
+        got = self.entry("/NOPE.")
+        self.assertEqual(self.failed(), 2)
+        self.assertEqual(set(got), {0xAA})
+        self.entry("/NOPE/MUSIC.")
+        self.assertEqual(self.failed(), 2)
+
+    def test_a_drive_that_is_not_a_cd_rom_is_error_15_and_one_with_no_disc_is_21(self):
+        self.entry("/MUSIC.", drive=2)
+        self.assertEqual(self.failed(), 15)
+        self.entry("/MUSIC.", drive=5)
+        self.assertEqual(self.failed(), 21)
+
+    def test_a_cd_rom_that_is_a_directory_and_a_dx_that_is_not_known_stop_the_emulator(self):
+        with self.assertRaisesRegex(NotImplementedError, r"150Fh.*directory.*type = \"iso\""):
+            self.entry("/MUSIC.", drive=4)
+        with self.assertRaisesRegex(NotImplementedError, "150Fh with DX=0001"):
+            self.entry("/MUSIC.", dx=1)
 
 
 class TestReadSectorsOfTheDisc(unittest.TestCase):
