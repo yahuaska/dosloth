@@ -135,20 +135,20 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   `LATE_PATCHES` (pieces that come later, as a driver that the program reads from a file: they are looked for by their
   bytes, `LatePatch`) that it has are put in the lists of the package. To make a patch is to put a module there. The
   modules with an underscore are what they use: `_base` (`Patch`, `LatePatch`), `_common` (the structures of a dword and
-  the end of most patches), `_smacker` (what more than one patch of SMKP.EXE looks at). So far eleven patches, in
+  the end of most patches), `_smacker` (what more than one patch of SMKP.EXE looks at). So far twelve patches, in
   `smk_*`: the reader of the trees (10DD90), the small trees of the sound (10DCF0), the three procedures that make
   tables of the trees (10E090, 10E1A0, 10E1D0), the loop of the blocks of a video frame (10F7B0, the biggest: it draws
   into the window of the video card), the loop of the sound (11104C), the two descents of a tree to a leaf (11105B,
   1110D9: the loop of the sound goes over them, they stay for a run of the code from the middle), and in the driver
-  of the sound the mixer and the wait of the reset of the Sound Blaster (a loop that does nothing, 2.2 million
-  instructions: the count goes on by them, up to the next event of the devices). Six more, in `ufo_strings`, are the
-  procedures of the strings of the C library in UFO2P.EXE (the game): strcmp, strupr, toupper (code page 437 too),
-  strncpy, strnicmp and strcat; they are not hot, but shorter in Python than in the trace (a patch whose code calls a
-  procedure somewhere else checks that one too: `also`). A patch adds to the count of
-  instructions the ones that the code would have run, so the time of the program is the same. `--no-patches` runs the
-  code as it is. A patched program shows `int F0` in the trace and the debugger; `tests/test_patches.py` runs the real
-  code beside the patch on random trees and sound data, and for a frame of the video 2 of the disc (the machine of
-  `config_xcomapoc.toml`), when the game is in XCOMA
+  of the sound the mixer and the two waits of the reset of the Sound Blaster, when the driver is started and when it
+  is ended (a loop that does nothing, 2.2 million instructions each: the count goes on by them, up to the next event
+  of the devices). Six more, in `ufo_strings`, are the procedures of the strings of the C library in UFO2P.EXE (the
+  game): strcmp, strupr, toupper (code page 437 too), strncpy, strnicmp and strcat; they are not hot, but shorter in
+  Python than in the trace (a patch whose code calls a procedure somewhere else checks that one too: `also`). A patch
+  adds to the count of instructions the ones that the code would have run, so the time of the program is the same.
+  `--no-patches` runs the code as it is. A patched program shows `int F0` in the trace and the debugger;
+  `tests/test_patches.py` runs the real code beside the patch on random trees and sound data, and for a frame of the
+  video 2 of the disc (the machine of `config_xcomapoc.toml`), when the game is in XCOMA
 - `dosloth/__main__.py` - loads a .COM/.EXE and runs it: `python -m dosloth tests/hello.com`; what is after the first
   `--` is the command line of the program (the options and the name come before it);
   `-d LOGFILE` writes every executed instruction to LOGFILE, e.g. `1773:0880  8B C3  mov ax, bx`;

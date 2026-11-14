@@ -412,9 +412,10 @@ def save_machine_at(volumes, path, segment, ip, number):
         patches.LATE_PATCHES[:] = saved
 
 
-def run_saved_machine(volumes, path, patched, segment, back, inside=None, pop=4, events=None):
+def run_saved_machine(volumes, path, patched, segment, back, inside=None, pop=4, events=None, start=None):
     """Put the saved machine back, and run it until it returns (to `back`, with the stack as it was less `pop` bytes): once
-    as the code is, once with the patch. `inside(cpu)` is called before every instruction, if it is given, to change
+    as the code is, once with the patch. `start` is an offset in the code segment to go on from instead of where the
+    machine stands. `inside(cpu)` is called before every instruction, if it is given, to change
     something (the same for both). `events` is a list: if it is given, a source of events that does nothing is there, and
     the count of instructions at which it is asked is put in the list. Returns what is left: the registers, the flags, the count of instructions, the hash of
     the memory and that of the picture."""
@@ -433,6 +434,8 @@ def run_saved_machine(volumes, path, patched, segment, back, inside=None, pop=4,
         patches.LATE_PATCHES[:] = saved
     if not patched:  # the code as it is: what the patch stood in the place of goes back
         cpu.mem[BLOCKS_AT:BLOCKS_AT + 2] = bytes((0x3C, 0x08))  # cmp al, 8
+    if start is not None:
+        cpu.ip = start
     cpu.event_sources, cpu.next_event = [], NEVER  # nothing of the devices comes in the middle
     if events is not None:
         def source(now):
@@ -450,7 +453,7 @@ def run_saved_machine(volumes, path, patched, segment, back, inside=None, pop=4,
             raise Exit(0)
     cpu.trace = trace
     cpu.run(1 << 30, lambda: None)
-    for place in (BLOCKS_AT, MIXER_AT + 0x46, MIXER_AT + 0xBB, DELAY_AT):  # (where the INTs stand)
+    for place in (BLOCKS_AT, MIXER_AT + 0x46, MIXER_AT + 0xBB, DELAY_AT, END_DELAY_AT):  # (where the INTs stand)
         cpu.mem[place:place + 2] = bytes(2)
     picture = hashlib.sha1(b"".join(bytes(plane) for plane in computer.card.planes)).hexdigest()
     return (cpu.r, cpu.rh, cpu.s[:], cpu.flags, cpu.ip, cpu.instructions - start, hashlib.sha1(cpu.mem).hexdigest(), picture)
@@ -484,6 +487,7 @@ class TestTheBlocksOfAFrame(unittest.TestCase):
 
 EVENTS_EVERY = 100_000  # for the test of a wait that must not go past an event
 DELAY_AT = 0x12B2FB  # where the outer loop of the wait of the reset is, in the run of the video 2
+END_DELAY_AT = 0x12B558  # and that of the reset when the driver is ended
 MIXER_AT = 0x12E144  # where the procedure is, in the run of the video 2 (the driver is put there)
 MIXER_CALL, MIXER_LOOP = 0x2144, 0x217A  # the offsets in its segment: the procedure, and just before its first loop
 
@@ -585,7 +589,10 @@ class TestTheSmallTreeOfTheSound(Beside):
 class TestTheWaitOfTheResetOfTheSoundBlaster(unittest.TestCase):
     """The loop that does nothing, in the reset of the card, is run by the code and by the patch from the same saved
     machine: the same registers, memory and count of instructions, with nothing to stop it, and with an event of the
-    devices every 100,000 instructions (the patch has to stop at it and go on, and not go past it)."""
+    devices every 100,000 instructions (the patch has to stop at it and go on, and not go past it). The machine is
+    saved in the first reset, at the loop (ECX is FFFFh); the second copy of the loop, in the reset when the driver
+    is ended, comes only after the whole video, so it is run from the same machine, started at that loop."""
+    LOOP, AFTER = 0x2FB, 0x307
 
     @classmethod
     def setUpClass(cls):
@@ -598,21 +605,57 @@ class TestTheWaitOfTheResetOfTheSoundBlaster(unittest.TestCase):
     def tearDownClass(cls):
         cls.directory.cleanup()
 
+    def run_wait(self, patched, events=None, steps=None):
+        def count(cpu):
+            if steps is not None:
+                steps[0] += 1
+        return run_saved_machine(self.volumes, self.state, patched, 0x2F, self.AFTER, pop=0, events=events,
+                                 start=self.LOOP, inside=count)
+
     def test_the_wait_takes_the_same_instructions(self):
-        original = run_saved_machine(self.volumes, self.state, False, 0x2F, 0x307, pop=0)
-        patched = run_saved_machine(self.volumes, self.state, True, 0x2F, 0x307, pop=0)
+        steps = [0]
+        original = self.run_wait(False)
+        patched = self.run_wait(True, steps=steps)
+        self.assertLess(steps[0], 10)  # the patch is there and does it: the code of the loop is not run
         self.assertGreater(original[5], 2_000_000)  # 65535 rounds of 36 instructions
         self.assertEqual(original, patched)
 
     def test_an_event_that_comes_in_the_wait_is_taken_where_it_is_due(self):
         before, after = [], []
-        original = run_saved_machine(self.volumes, self.state, False, 0x2F, 0x307, pop=0, events=before)
-        patched = run_saved_machine(self.volumes, self.state, True, 0x2F, 0x307, pop=0, events=after)
+        original = self.run_wait(False, before)
+        patched = self.run_wait(True, after)
         self.assertEqual(original, patched)
         self.assertGreater(len(before), 20)
         self.assertEqual(len(before), len(after))
         for then, now in zip(before, after):  # (a round is not cut, so the event may come a round late)
             self.assertLess(abs(then - now), 36)
+
+
+class TestTheWaitOfTheResetWhenTheDriverIsEnded(TestTheWaitOfTheResetOfTheSoundBlaster):
+    LOOP, AFTER = 0x558, 0x564
+
+
+class TestThePiecesOfTheDriverAreFoundAgain(unittest.TestCase):
+    """A piece of the driver is found by its first bytes, and no INT is in them: a machine that is put back with the
+    INTs in it is patched again at the same places. The code of the driver is put where the player puts it, from the
+    file of the driver."""
+
+    def test_after_the_patch_the_pieces_are_where_they_were(self):
+        driver = Path(__file__).resolve().parent.parent / "XCOMA" / "UFOEXE" / "HMIDRV.386"
+        if not driver.exists():
+            raise unittest.SkipTest("the driver of the game is not here")
+        data = driver.read_bytes()
+        cpu = CPU()
+        cpu.patch_sites = {}
+        for address, start, size in ((0x12B000, 0x174D0, 0x1000),):  # 002F
+            cpu.mem[address:address + size] = data[start:start + size]
+        from dosloth.patches import smk_reset_delay
+        for piece in smk_reset_delay.LATE_PATCHES:
+            found = piece.find(cpu)
+            self.assertIsNotNone(found, piece.name)
+            self.assertTrue(piece.apply(cpu))
+            self.assertEqual(piece.find(cpu), found, piece.name)
+        self.assertEqual(sorted(cpu.patch_sites), [DELAY_AT, END_DELAY_AT])
 
 
 # --- the procedures of the strings of the C library in UFO2P.EXE, against the code they stand in for
