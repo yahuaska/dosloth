@@ -775,7 +775,7 @@ class TestFiles(SnapshotTest):
 class TestSavingNearTheProgram(SnapshotTest):
     def setUp(self):
         super().setUp()
-        self.here = Path(self.tmp.name) / "here"
+        self.here = (Path(self.tmp.name) / "here").resolve()  # as getcwd gives it, with no links: /var is /private/var
         self.here.mkdir()
         self.old = os.getcwd()
         os.chdir(self.here)
