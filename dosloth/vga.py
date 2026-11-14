@@ -110,6 +110,7 @@ class Vga:
         self.planes = [bytearray(PLANE_SIZE) for _ in range(4)]
         self.latches = [0, 0, 0, 0]
         self.bank = 0  # in a VESA mode: which 64 KB of the screen the window shows (see set_mode_vbe)
+        self.vbe = False  # in the VESA mode of 640 by 480 in 256 colors
         self.changed = False  # the picture may be another since whoever shows the screen last looked
         self.reset_palette()
 
@@ -218,6 +219,7 @@ class Vga:
         self.registers = dict(POWER_ON)
         self.latches = [0, 0, 0, 0]
         self.bank = 0
+        self.vbe = False
         self.reset_palette()
         self.changed = True
         if not keep_planes:
@@ -250,6 +252,7 @@ class Vga:
         self.set_mode_13h()
         for plane in self.planes:
             plane.extend(bytes(VBE_PLANE_SIZE - len(plane)))
+        self.vbe = True
 
     def mode_256(self):
         """Whether the pixels of the screen are 8 bits wide, a byte of each of the four planes in turn."""

@@ -613,6 +613,36 @@ class TestStringInstructions32(Machine):
         cpu.step()
         self.assertEqual((bool(cpu.flags & flags.ZF), cpu.get32(SI), cpu.get32(DI)), (True, 0x0102, 0x0202))
 
+    def test_rep_outsb_with_32_bit_addresses_gives_the_bytes_to_the_port_dx(self):
+        cpu = self.start(bytes([0x67, 0xF3, 0x6E]), esi=0x00000100, ecx=3, edx=0x03C9)  # as a game sets a color
+        cpu.flags &= ~flags.DF
+        written = []
+        cpu.port_writers[0x3C9] = lambda port, value: written.append((port, value))
+        cpu.mem[0x20100:0x20104] = bytes([0x3F, 0x20, 0x01, 0x99])  # DS:0100
+        cpu.step()
+        self.assertEqual(written, [(0x3C9, 0x3F), (0x3C9, 0x20), (0x3C9, 0x01)])
+        self.assertEqual((cpu.get32(SI), cpu.get32(CX)), (0x0103, 0))
+
+    def test_outs_of_a_doubleword_goes_to_four_ports_and_takes_a_segment_prefix(self):
+        cpu = self.start(bytes([0x26, 0x66, 0x67, 0x6F]), esi=0x00000100, edx=0x0300)
+        cpu.flags &= ~flags.DF
+        cpu.s[CPU.ES] = 0x3000
+        written = []
+        for port in range(0x300, 0x304):
+            cpu.port_writers[port] = lambda port, value: written.append((port, value))
+        cpu.wd(0x3000, 0x0100, 0x44332211)
+        cpu.step()
+        self.assertEqual(written, [(0x300, 0x11), (0x301, 0x22), (0x302, 0x33), (0x303, 0x44)])
+        self.assertEqual(cpu.get32(SI), 0x0104)
+
+    def test_rep_insb_reads_the_port_into_es_edi_going_down_with_the_direction_flag(self):
+        cpu = self.start(bytes([0x67, 0xF3, 0x6C]), edi=0x00000102, ecx=3, edx=0x0060)  # DF is set by start()
+        values = iter([7, 8, 9])
+        cpu.port_readers[0x60] = lambda port: next(values)
+        cpu.step()
+        self.assertEqual(bytes(cpu.mem[0x20100:0x20103]), bytes([9, 8, 7]))
+        self.assertEqual((cpu.get32(DI), cpu.get32(CX)), (0x00FF, 0))
+
     def test_a_segment_prefix_changes_the_source_and_not_the_destination(self):
         cpu = self.start(bytes([0x26, 0x66, 0xA5]), esi=0x0100, edi=0x0200)  # movsd with es: in front
         cpu.flags &= ~flags.DF

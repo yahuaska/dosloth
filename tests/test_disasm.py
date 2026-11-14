@@ -534,6 +534,15 @@ class TestAgreesWithCpu32(unittest.TestCase):
             self.assertEqual(not text.startswith("db"), op in taken, f"66 {op:02X}: {text}")
 
 
+class TestTheStringsOfThePorts(unittest.TestCase):
+    def test_ins_and_outs_with_a_prefix_as_the_cpu_takes_them_and_a_db_where_it_stops(self):
+        for code, text in ((b"\x67\xF3\x6E", "rep outsb"), (b"\x67\x6D", "insw"), (b"\x66\x6F", "outsd"),
+                           (b"\x66\x67\xF3\x6C", "rep insb"), (b"\x6E", "db 6E")):
+            with self.subTest(code=code.hex(" ")):
+                self.assertEqual(disasm(machine(code + bytes(8)), 0x1000, 0x100), (len(code) if text[:2] != "db" else 1,
+                                                                                    text))
+
+
 class TestAgreesWithCpuOn32BitAddresses(unittest.TestCase):
     def length_on_cpu(self, code):
         cpu = machine(code)

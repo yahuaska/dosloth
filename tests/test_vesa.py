@@ -1,6 +1,6 @@
 import unittest
 
-from dosloth import bios, vesa
+from dosloth import bios, vesa, vga
 from dosloth.cpu import CPU
 
 
@@ -214,8 +214,8 @@ class TestTheInformationOfAMode(unittest.TestCase):
 
 
 class TestTheOtherVesaFunctions(unittest.TestCase):
-    def test_everything_but_the_first_question_stops_the_emulator_and_says_which(self):
-        for al in (0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x10, 0xFF):
+    def test_the_functions_that_are_not_done_stop_the_emulator_and_say_which(self):
+        for al in (0x04, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x10, 0xFF):
             cpu = machine()
             with self.assertRaises(NotImplementedError) as caught:
                 ask(cpu, ax=0x4F00 | al)
@@ -227,6 +227,89 @@ class TestTheOtherVesaFunctions(unittest.TestCase):
         cpu.ip = 0
         cpu.step()
         self.assertEqual(cpu.get8(0), 0x03)
+
+
+
+def card_machine():
+    """A machine with the BIOS and the video card, in the text mode."""
+    cpu = machine()
+    card = vga.install(cpu)
+    bios.set_video_mode(cpu, bios.TEXT_MODE, False)
+    return cpu, card
+
+
+def call(cpu, ax, bx=0, dx=0):
+    cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.DX] = ax, bx, dx
+    cpu.ip = 0
+    cpu.step()
+    return cpu.r[CPU.AX]
+
+
+class TestSettingTheVesaMode(unittest.TestCase):
+    def test_the_mode_0101_puts_the_card_in_640_by_480_in_256_colors(self):
+        cpu, card = card_machine()
+        self.assertEqual(call(cpu, 0x4F02, 0x0101), 0x004F)
+        self.assertTrue(card.vbe)
+        self.assertTrue(card.mode_256() and card.chain_4())
+        self.assertEqual(len(card.planes[0]), vga.VBE_PLANE_SIZE)
+        self.assertEqual(call(cpu, 0x4F03), 0x004F)
+        self.assertEqual(cpu.r[CPU.BX], 0x0101)
+
+    def test_the_screen_is_cleared_unless_bit_15_says_to_keep_it(self):
+        for bx, kept in ((0x0101, False), (0x8101, True)):
+            with self.subTest(bx=hex(bx)):
+                cpu, card = card_machine()
+                call(cpu, 0x4F02, 0x0101)
+                card.bank = 3
+                card.write_memory(0x1234, 0x5A)
+                self.assertEqual(call(cpu, 0x4F02, bx), 0x004F)
+                address = 3 << 16 | 0x1234
+                self.assertEqual(card.planes[address & 3][address >> 2], 0x5A if kept else 0)
+                self.assertEqual(card.bank, 0)
+
+    def test_a_linear_frame_buffer_or_a_mode_that_is_not_there_is_014f_and_nothing_changes(self):
+        for bx in (0x4101, 0x0100, 0x0103, 0x0012 | 0x4000, 0x0007):
+            with self.subTest(bx=hex(bx)):
+                cpu, card = card_machine()
+                self.assertEqual(call(cpu, 0x4F02, bx), 0x014F)
+                self.assertFalse(card.vbe)
+                self.assertEqual(cpu.mem[bios.BDA_VIDEO_MODE], bios.TEXT_MODE)
+
+    def test_a_mode_of_the_bios_is_set_as_ah_00_sets_it_and_leaves_the_vesa_mode(self):
+        cpu, card = card_machine()
+        call(cpu, 0x4F02, 0x0101)
+        self.assertEqual(call(cpu, 0x4F02, 0x0013), 0x004F)
+        self.assertFalse(card.vbe)
+        self.assertEqual(cpu.mem[bios.BDA_VIDEO_MODE], 0x13)
+        self.assertEqual(call(cpu, 0x4F03), 0x004F)
+        self.assertEqual(cpu.r[CPU.BX], 0x0013)
+
+
+class TestTheWindowOfTheMemory(unittest.TestCase):
+    def setUp(self):
+        self.cpu, self.card = card_machine()
+        call(self.cpu, 0x4F02, 0x0101)
+
+    def test_the_window_a_is_put_at_a_bank_and_the_bios_tells_where_it_is(self):
+        self.assertEqual(call(self.cpu, 0x4F05, 0x0000, 4), 0x004F)
+        self.assertEqual(self.card.bank, 4)
+        self.cpu.wb(0xA000, 0x0010, 0x77)  # through the window: the byte 4 * 64 KB + 10h of the screen
+        address = 4 << 16 | 0x10
+        self.assertEqual(self.card.planes[address & 3][address >> 2], 0x77)
+        self.assertEqual(call(self.cpu, 0x4F05, 0x0100, 0x9999), 0x004F)
+        self.assertEqual(self.cpu.r[CPU.DX], 4)
+
+    def test_a_bank_past_the_memory_the_window_b_or_another_question_is_014f(self):
+        for bx, dx in ((0x0000, vesa.MEMORY_BLOCKS), (0x0001, 1), (0x0101, 0), (0x0200, 1)):
+            with self.subTest(bx=hex(bx), dx=dx):
+                self.card.bank = 2
+                self.assertEqual(call(self.cpu, 0x4F05, bx, dx), 0x014F)
+                self.assertEqual(self.card.bank, 2)
+
+    def test_outside_the_vesa_mode_it_stops_the_emulator(self):
+        cpu, _ = card_machine()
+        with self.assertRaises(NotImplementedError):
+            call(cpu, 0x4F05, 0x0000, 1)
 
 
 if __name__ == "__main__":

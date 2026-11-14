@@ -40,11 +40,14 @@ with 256 bytes, the information block of the mode:
 
 A mode that is not there is answered by AX=014Fh: the function is known (4Fh), and it failed (01h).
 
-What is done: the first two questions. Setting a mode (4F02h), the window of memory of the card (4F05h) and the rest
-stop the emulator, so that the first program that needs them says so.
+AL=02h sets the mode BX (bios.set_vesa_mode): bit 15 keeps the picture, bit 14 asks for the linear frame buffer,
+which the card has not (014Fh); a number below 100h is a mode of the BIOS, as AH=00h sets it. AL=03h says the mode in
+BX. AL=05h is the window (bios.vesa_window): BH=00h puts the window BL (only A, 0) at the bank DX, BH=01h tells it in
+DX. The rest (04h, the state; 06h and on) stop the emulator, so that the first program that needs them says so.
 
-The list has one mode, 0101h: 640 by 480 pixels in 256 colors, which X-COM: Apocalypse asks for. We have no such
-mode yet.
+The list has one mode, 0101h: 640 by 480 pixels in 256 colors, which X-COM: Apocalypse asks for. The card keeps its
+pixels in the planes as in mode 13h, a megabyte of them, and the window A000:0000 shows the 64 KB of the bank
+(vga.Vga.set_mode_vbe); the screen shows the first 640 times 480 of them.
 """
 ROM_SEGMENT = 0xC000
 OEM_STRING = (0x0100, b"dosloth VGA\0")

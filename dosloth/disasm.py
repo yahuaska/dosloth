@@ -43,6 +43,10 @@ UNCHANGED_BY_66 = frozenset((
     Op.PUSH_DS, Op.POP_ES, Op.POP_SS, Op.POP_DS, Op.MOV_RM16_SREG, Op.MOV_SREG_RM16, Op.LES, Op.LDS))
 FAR_POINTER_LOADS = {0xB2: "lss", 0xB4: "lfs", 0xB5: "lgs"}
 STRING_32 = {Op.MOVSW: "movsd", Op.CMPSW: "cmpsd", Op.STOSW: "stosd", Op.LODSW: "lodsd", Op.SCASW: "scasd"}
+# INS and OUTS: the CPU has them in the table of the 32-bit forms and for the 32-bit addresses, and not in that of the
+# 8086 (a 16-bit size with 16-bit addresses is a db, as the CPU stops at it)
+PORT_STRINGS = {0x6C: "insb", 0x6D: "insw", 0x6E: "outsb", 0x6F: "outsw"}
+PORT_STRINGS_32 = {0x6C: "insb", 0x6D: "insd", 0x6E: "outsb", 0x6F: "outsd"}
 COMPARING = (Op.CMPSB, Op.CMPSW, Op.SCASB, Op.SCASW)  # these look at ZF, so a prefix F3 reads "repe"
 SHIFTS = ["rol", "ror", "rcl", "rcr", "shl", "shr", "sal", "sar"]  # by the ModRM reg field
 LOOPS = {Op.LOOPNE: "loopne", Op.LOOPE: "loope", Op.LOOP: "loop", Op.JCXZ: "jcxz"}
@@ -290,6 +294,8 @@ def _decode_opcode32(r, op, seg_override):
         return f"{'call' if op == Op.CALL_NEAR else 'jmp'} {_address(r, d)}"  # cut to the width of IP
     if op in STRING_32:
         return STRING_32[op]
+    if op in PORT_STRINGS_32:
+        return PORT_STRINGS_32[op]
     if op in UNCHANGED_BY_66:
         return _decode_opcode(r, op, seg_override)
     return None  # an instruction that has a 32-bit form that we do not know: the CPU stops at it as well
@@ -344,6 +350,8 @@ def _decode_0f(r, seg_override):
 
 
 def _decode_opcode(r, op, seg_override):
+    if op in PORT_STRINGS and r.addr32:
+        return PORT_STRINGS[op]
     if op < 0x40 and op & 7 <= 5:  # the arithmetic/logic block, see the Alu enum
         name = Alu(op >> 3).name.lower()
         form = op & 7

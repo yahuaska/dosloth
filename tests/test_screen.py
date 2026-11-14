@@ -348,6 +348,19 @@ class TestMonitor(unittest.TestCase):
             self.monitor.tick()
         self.assertEqual(calls, [])
 
+    def test_in_the_vesa_mode_the_picture_is_640_by_480_of_bytes_the_dac_colors(self):
+        self.card.set_mode_vbe()
+        self.card.set_dac(7, 63, 0, 0)
+        for address in (0, 639, 640 * 479 + 639, 0x10000 + 5):  # the last pixel, and one in the second bank
+            self.card.bank, offset = address >> 16, address & 0xFFFF
+            self.card.write_memory(offset, 7)
+        self.monitor.show()
+        frame = self.first.frames[-1]
+        self.assertEqual((frame.width, frame.height), (640, 480))
+        for address in (0, 639, 640 * 479 + 639, 0x10000 + 5):
+            self.assertEqual(frame.rgb[3 * address:3 * address + 3], bytes((255, 0, 0)), address)
+        self.assertEqual(frame.rgb[3:6], bytes(3))
+
     def test_no_displays_at_all_is_fine(self):
         monitor = Monitor(self.card, [])
         self.card.write_memory(0, 1)
