@@ -1,6 +1,8 @@
 """The patches: how a piece of code is found and replaced, and that the Python that stands in for the code of the
 Smacker player does what that code does (the real code is run beside it, on the same input, when the game is there)."""
+import contextlib
 import hashlib
+import io
 import random
 import struct
 import tempfile
@@ -883,3 +885,38 @@ class TestTheStringsOfUFO2P(unittest.TestCase):
         self.patched.mem[FIRST:FIRST + 2] = bytes(2)
         with self.assertRaises(NotImplementedError):
             run_scenario(self.patched, {}, {"eax": FIRST, "edx": FIRST}, 0x1BD419, 0x0002 | 0x0400)
+
+
+@unittest.skipUnless(UFO2P.exists(), "the game is not here")
+class TestTheDebugPrintfOfUFO2P(unittest.TestCase):
+    """The stub of the debug printf (a RET) writes what it is given, and the machine goes on as after the RET."""
+    CALLER, FORMAT, NAME = 0x1620000, 0x1630000, 0x1630100
+
+    @classmethod
+    def setUpClass(cls):
+        cls.original, cls.patched = ufo_machine(patch=False), ufo_machine(patch=True)
+
+    def call(self, cpu, pushed, after):
+        """Code that pushes the dwords `pushed` (the last is pushed first), calls the stub, and then has `after`."""
+        code = b"".join(b"\x68" + struct.pack("<I", word) for word in reversed(pushed))
+        code += b"\xE8" + struct.pack("<i", 0x1026E0 - (self.CALLER + len(code) + 5)) + after + b"\xF4"
+        cpu.instructions = 0
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            run_scenario(cpu, {self.CALLER: code, self.FORMAT: b"file %s: %5d bytes, %-4i|, %lu, %X, %c%%\0",
+                               self.NAME: b"ufodata/pal_01.dat\0"},
+                         {"eax": 0x7F, "edx": 0x1234}, self.CALLER, 0x0002 | 0x0010)
+        return stderr.getvalue()
+
+    def test_a_printf_writes_the_text_and_changes_nothing_else(self):
+        pushed = [self.FORMAT, self.NAME, 768, 0xFFFFFFFF, 0xFFFFFFFF, 0xBEEF, ord("A")]
+        after = b"\x83\xC4" + bytes([4 * len(pushed)])
+        self.assertEqual(self.call(self.original, pushed, after), "")
+        text = self.call(self.patched, pushed, after)
+        self.assertEqual(text, "file ufodata/pal_01.dat:   768 bytes, -1  |, 4294967295, BEEF, A%\n")  # (the \n added)
+        self.assertEqual((self.original.r, self.original.rh), (self.patched.r, self.patched.rh))
+        self.assertEqual((self.original.flags, self.original.ip), (self.patched.flags, self.patched.ip))
+        self.assertEqual(self.original.instructions, self.patched.instructions)
+
+    def test_a_call_that_does_not_take_arguments_off_the_stack_is_not_a_printf(self):
+        self.assertEqual(self.call(self.patched, [], b"\x90"), "")  # (as `mov eax, 7Fh; call 1026E0`)
