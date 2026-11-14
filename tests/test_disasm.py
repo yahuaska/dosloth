@@ -372,6 +372,14 @@ class TestTwoByteInstructions(unittest.TestCase):
                     ("66 0F BD 0E 00 01", "bsr ecx, [0100]"),
                     ("0F C8", "bswap eax"), ("0F CF", "bswap edi")))
 
+    def test_lar_and_lsl_of_a_32_bit_program(self):
+        for code, text in (("0F 02 C8", "lar ecx, ax"), ("0F 03 C8", "lsl ecx, ax"), ("66 0F 02 C8", "lar cx, ax"),
+                           ("0F 02 0D 00 01 00 00", "lar ecx, word [00000100]")):
+            cpu = machine(bytes.fromhex(code))
+            cpu.flat = cpu.code32 = True
+            self.assertEqual(disasm(cpu, 0x1000, 0x100), (len(bytes.fromhex(code)), text), code)
+        self.assertEqual(dis(bytes.fromhex("0F 02 C8")), (1, "db 0F"))  # the CPU stops at it in the real mode
+
     def test_a_second_byte_that_is_not_done_is_a_db_of_the_first(self):
         for code in ("0F A2", "0F 31", "0F 00 C0", "0F BA C3 01", "0F BA DB 01", "66 0F A2"):
             data = bytes.fromhex(code)

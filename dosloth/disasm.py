@@ -313,6 +313,9 @@ def _decode_0f(r, seg_override):
     if second == 0xAF:
         reg, rm, _ = _modrm(r, seg_override, bits)
         return f"imul {regs[reg]}, {rm}"
+    if second in (0x02, 0x03) and r.cpu.flat:  # the selector is a word; the CPU stops at them in the real mode
+        reg, rm, is_mem = _modrm(r, seg_override, 16)
+        return f"{'lar' if second == 0x02 else 'lsl'} {regs[reg]}, {'word ' if is_mem else ''}{rm}"
     if second in (0xA4, 0xA5, 0xAC, 0xAD):
         reg, rm, _ = _modrm(r, seg_override, bits)
         count = f"{r.u8():02X}" if second in (0xA4, 0xAC) else "cl"
