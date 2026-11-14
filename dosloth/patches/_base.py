@@ -7,14 +7,18 @@ PATCH_BYTES = bytes((0xCD, HOOK))
 
 class Patch:
     """One piece of code: where it is (a linear address, which is the offset in the flat mode), how long it is, the
-    SHA-256 of its bytes, and the function (`handler(cpu)`) that does its work."""
+    SHA-256 of its bytes, and the function (`handler(cpu)`) that does its work. `also` is the other code that the
+    handler does the work of too, which is somewhere else (a procedure that the piece calls): (address, length,
+    SHA-256) of each; the patch is made only when they are what it knows as well."""
 
-    def __init__(self, name, address, length, digest, handler):
+    def __init__(self, name, address, length, digest, handler, also=()):
         self.name, self.address, self.length, self.digest, self.handler = name, address, length, digest, handler
+        self.also = also
 
     def matches(self, cpu):
         """Whether the memory holds the very code that this patch is for."""
-        return hashlib.sha256(cpu.mem[self.address:self.address + self.length]).hexdigest() == self.digest
+        return all(hashlib.sha256(cpu.mem[address:address + length]).hexdigest() == digest
+                   for address, length, digest in ((self.address, self.length, self.digest), *self.also))
 
 
 # The patches of code that is not in the program when it is loaded, but comes later: the driver of the sound is
