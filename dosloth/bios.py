@@ -60,6 +60,41 @@ def set_video_mode(cpu, mode, keep_picture):
         cpu.mem[TEXT_BASE:TEXT_BASE + TEXT_CLEARED] = BLANK_CELL * (TEXT_CLEARED // 2)
 
 
+def set_vesa_mode(cpu, bx):
+    """INT 10h AX=4F02h: put the machine in the mode of BX, a VESA mode or one of the BIOS (below 100h, as AH=00h
+    does). Bit 15 says to keep the picture, bit 14 asks for the linear frame buffer, which the card has not: that is
+    a mode that is not there. Returns the value for AX: 004Fh, or 014Fh for a mode that is not there."""
+    mode, keep = bx & 0x3FFF, bool(bx & 0x8000)
+    if bx & 0x4000 or mode not in (TEXT_MODE, GRAPHICS_MODE, MODE_13H, vesa.MODE):
+        return 0x014F
+    if mode != vesa.MODE:
+        set_video_mode(cpu, mode, keep)
+        return 0x004F
+    if cpu.video is None:
+        raise NotImplementedError("INT 10h AX=4F02: there is no video card to set the VESA mode of")
+    cpu.video.clear(keep_planes=keep)
+    cpu.video.set_mode_vbe()  # (the data area of the BIOS keeps the mode before: a VESA mode has no number there)
+    return 0x004F
+
+
+def vesa_window(cpu):
+    """INT 10h AX=4F05h: the window of the memory of the card. BH=00h puts the window BL (only A, 0, is there) at DX
+    (in steps of the granularity, 64 KB: the bank); BH=01h tells where it is, in DX. Returns the value for AX."""
+    card = cpu.video
+    if card is None or not card.vbe:
+        raise NotImplementedError("INT 10h AX=4F05: the window of the memory, when the card is not in the VESA mode")
+    what, window, position = cpu.get8(7), cpu.get8(3), cpu.r[CPU.DX]
+    if window != 0 or what not in (0, 1):
+        return 0x014F
+    if what == 1:
+        cpu.r[CPU.DX] = card.bank
+        return 0x004F
+    if position >= vesa.MEMORY_BLOCKS:
+        return 0x014F
+    card.bank = position
+    return 0x004F
+
+
 def palette_function(cpu, al):
     """INT 10h AH=10h: the colors of the screen, selected by AL.
 
@@ -135,7 +170,7 @@ def int12(cpu):
 def int10(cpu):
     """INT 10h: the BIOS video services, selected by AH. So far 00h (modes 03h and 12h only), the cursor and the
     characters at it (01h, 02h, 03h, 08h, 09h, 0Ah), 0Fh, 10h (the colors, but not their page or gray sums), 12h BL=10h,
-    1Ah AL=00h and the VESA question 4Fh AL=00h."""
+    1Ah AL=00h and the VESA functions 4Fh AL=00h-03h and 05h."""
     ah, al = cpu.get8(4), cpu.get8(0)
     if ah == 0x10:
         palette_function(cpu, al)
@@ -168,11 +203,18 @@ def int10(cpu):
         cpu.set8(0, cpu.mem[BDA_VIDEO_MODE])
         cpu.set8(4, cpu.mem[BDA_COLUMNS])
         cpu.set8(7, cpu.mem[BDA_PAGE])
-    elif ah == 0x4F:  # the VESA extensions, picked by AL; only AL=00h and 01h so far (see vesa.py)
+    elif ah == 0x4F:  # the VESA extensions, picked by AL: 00h-03h and 05h (see vesa.py)
         if al == 0x00:
             cpu.r[CPU.AX] = vesa.controller_information(cpu, cpu.s[CPU.ES], cpu.r[CPU.DI])
         elif al == 0x01:
             cpu.r[CPU.AX] = vesa.mode_information(cpu, cpu.s[CPU.ES], cpu.r[CPU.DI], cpu.r[CPU.CX])
+        elif al == 0x02:
+            cpu.r[CPU.AX] = set_vesa_mode(cpu, cpu.r[CPU.BX])
+        elif al == 0x03:  # which mode is it in: BX
+            cpu.r[CPU.BX] = vesa.MODE if cpu.video is not None and cpu.video.vbe else cpu.mem[BDA_VIDEO_MODE]
+            cpu.r[CPU.AX] = 0x004F
+        elif al == 0x05:
+            cpu.r[CPU.AX] = vesa_window(cpu)
         else:
             raise NotImplementedError(f"INT 10h AH=4F AL={al:02X}")
     elif ah == 0x12:  # the alternate functions of the EGA and VGA, picked by BL; only 10h so far

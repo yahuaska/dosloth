@@ -326,8 +326,8 @@ class TestTheProgram(unittest.TestCase):
         cpu = self.machine(bytes([0x66, 0x9A]))
         with self.assertRaisesRegex(NotImplementedError, "opcode 66 9A, the 32-bit form, at 0018:0000"):
             cpu.step()
-        cpu = self.machine(bytes([0x67, 0x6C]))
-        with self.assertRaisesRegex(NotImplementedError, "opcode 6C with 32-bit addresses at 0018:0000"):
+        cpu = self.machine(bytes([0x67, 0x6C]))  # insb: the port DX (0) has nothing behind it
+        with self.assertRaisesRegex(NotImplementedError, "IN from port 0000 at 0018:0000"):
             cpu.step()
 
     def test_the_trace_and_the_count_are_kept(self):

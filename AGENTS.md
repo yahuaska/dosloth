@@ -13,7 +13,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 ## Layout
 - `dosloth/cpu.py`  - memory, registers, flags, instruction loop
 - `dosloth/ops32.py` - the 386 part of the CPU (a mixin): the prefix 66h, the high halves of the 32-bit registers
-  (`cpu.rh`), the table `cpu.ops32` of the 32-bit forms (shifts, MUL/DIV, stack, near calls, string instructions...),
+  (`cpu.rh`), the table `cpu.ops32` of the 32-bit forms (shifts, MUL/DIV, stack, near calls, string instructions and
+  INS/OUTS...),
   the prefix 67h and the 32-bit addresses with SIB (in `modrm.py`); `cpu.code32` flips the sizes for a 32-bit code
   segment. The `0F` opcodes that the games use are in `cpu.ops0f` (MOVZX/MOVSX, SETcc, long Jcc, SHLD/SHRD, BT*...).
   FS and GS (`cpu.s` has six segments, prefixes 64h/65h). `cpu.ip_mask` and `cpu.stack32` say how wide IP and the
@@ -37,7 +38,9 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   with EAX are in `tests/test_cpu386_io.py`
 - `dosloth/dos.py`  - INT 21h and friends (Python-side handlers)
 - `dosloth/bios.py` - BIOS interrupts (INT 1Ah time of day, INT 16h keyboard, INT 10h video: modes 03h/12h, the
-  colors AH=10h, the VGA check; INT 11h equipment, INT 12h memory size), also Python-side handlers
+  colors AH=10h, the VGA check, VESA AX=4F00h-4F03h and 4F05h (`vesa.py`: the one mode 0101h, 640x480 in 256 colors,
+  with the window at a bank of a megabyte; no linear frame buffer); INT 11h equipment, INT 12h memory size), also
+  Python-side handlers
 - `dosloth/config.py` - the configuration (TOML): drives, what is mounted in them, where a program starts;
   `config.example.toml` shows the format. `python -m dosloth -c FILE program` uses it; without `-c` the machine is
   built in: floppies A: B:, a CD-ROM D: with no disc, the current directory as the hard disk C:. A drive is a
@@ -99,10 +102,11 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   four planes with the write modes 0-3, read modes 0-1 and the latches; the colors: the DAC (3C6h-3C9h) and the
   palette registers of the attribute controller (3C0h). Mode 13h (256 colors, 320x200) is the chain-4 bit of the
   sequencer (the two low bits of an address are the plane) and the 256-color bit of the graphics controller; the BIOS
-  sets it (`set_mode_13h`). The CPU hands that window to the card (`cpu.video`), so the crash dump's `.mem` file has
+  sets it (`set_mode_13h`), and the VESA mode 0101h is the same on 1 MB of planes, the window showing the 64 KB of
+  `bank` (`set_mode_vbe`, `vbe`). The CPU hands that window to the card (`cpu.video`), so the crash dump's `.mem` file has
   nothing in it for the screen
 - `dosloth/screen.py` - the planes -> a `Frame` of RGB pixels (mode 12h layout, 640x480, the colors of the card; or
-  mode 13h, 320x200, a byte a pixel from the DAC), and
+  mode 13h, 320x200, a byte a pixel from the DAC; or the VESA mode, the same at 640x480), and
   the `Monitor` that looks after all the displays: polls their windows, shows the picture when the card was drawn on
 - `dosloth/display.py` - the `Display` interface (`present(frame)`, `poll()`, `close()`) that every window or file that
   shows the picture goes through; `PngFile` is the first. `-s PNGFILE` uses it

@@ -5,10 +5,10 @@ first plane, bit 3 in the last, all at the same place. One byte of a plane holds
 the leftmost pixel in the highest bit. A line of the picture is `BYTES_PER_LINE` bytes, one after the other from the
 start of the plane.
 
-Two layouts are known here. Mode 12h: 640 by 480 pixels, 80 bytes a line, the picture starting at the beginning of
+Three layouts are known here. Mode 12h: 640 by 480 pixels, 80 bytes a line, the picture starting at the beginning of
 the planes. Mode 13h, when the pixels are 8 bits wide: 320 by 200 pixels, the planes taken in turn a byte at a time,
 which is the order of the bytes of a picture of 320 by 200 bytes (the card does this for the program as well, see
-vga.py). The start address and the line length that the CRT controller could change are not looked at.
+vga.py). The VESA mode 0101h: the same, 640 by 480 (see vesa.py). The start address and the line length that the CRT controller could change are not looked at.
 """
 import time
 from dataclasses import dataclass
@@ -92,7 +92,9 @@ class Monitor:
 
     def show(self):
         """Give every display the picture as it is now."""
-        if self.card.mode_256():
+        if self.card.vbe:  # the VESA mode: 640 by 480, the bytes of the planes in turn as in 13h
+            frame = render_256(self.card.planes, self.card.colors256(), WIDTH, HEIGHT)
+        elif self.card.mode_256():
             frame = render_256(self.card.planes, self.card.colors256())
         else:
             frame = render(self.card.planes, self.card.colors())

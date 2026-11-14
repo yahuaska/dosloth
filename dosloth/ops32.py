@@ -324,7 +324,9 @@ class Ops32:
 
     # --- the instructions that work with SI, DI, CX and BX as addresses and counters ---
     def string32(self, op):
-        """The string instructions A4-A7 and AA-AF, for the sizes and the addresses of any width.
+        """The string instructions A4-A7 and AA-AF, and those of the ports, INS and OUTS (6C-6F), for the sizes and the
+        addresses of any width. INS reads the port DX into ES:EDI, OUTS writes DS:ESI (or the segment of a prefix) to
+        it: a word or a doubleword goes to the neighbouring ports, the low byte first, as IN and OUT do.
 
         The operand is a doubleword with the size of 32 bits (an odd opcode), and the registers are ESI, EDI and ECX
         when the addresses are of 32 bits (and SI, DI and CX as in CPU.string_op otherwise). The rest is as there: the
@@ -368,9 +370,21 @@ class Ops32:
             elif kind == 0xAC:  # lods
                 self.set_reg(self.AX, bits, read(self.data_segment(), get(source)))
                 put(source, get(source) + step)
-            else:  # scas
+            elif kind == 0xAE:  # scas
                 self.sub_with_flags(self.get_reg(self.AX, bits), read(self.s[self.ES], get(target)), bits)
                 put(target, get(target) + step)
+            elif kind == 0x6C:  # ins
+                port = regs[self.DX]
+                value = 0
+                for i in range(bits // 8):
+                    value |= self.port_in((port + i) & 0xFFFF) << 8 * i
+                write(self.s[self.ES], get(target), value)
+                put(target, get(target) + step)
+            else:  # outs
+                port, value = regs[self.DX], read(self.data_segment(), get(source))
+                for i in range(bits // 8):
+                    self.port_out((port + i) & 0xFFFF, value >> 8 * i)
+                put(source, get(source) + step)
 
         if self.rep is None:
             one()
@@ -702,7 +716,7 @@ class Ops32:
         table[Op.RET_NEAR], table[Op.RET_NEAR_POP] = self.ret_near32, self.ret_near_pop32
         table[Op.RETF], table[Op.RETF_POP] = self.retf32, self.retf_pop32
         table[Op.IRET] = self.iretd
-        for code in (*range(0xA4, 0xA8), *range(0xAA, 0xB0)):
+        for code in (*range(0x6C, 0x70), *range(0xA4, 0xA8), *range(0xAA, 0xB0)):
             table[code] = self.string32
         for code in FPU_OPCODES:  # the coprocessor is there for a 32-bit program (see fpu.py)
             table[code] = self.fpu_instruction
@@ -712,7 +726,7 @@ class Ops32:
         """What the instructions that use SI, DI, CX and BX are when the addresses are of 32 bits: {opcode: handler}.
         The string instructions work out their operand size themselves, so they are the same ones as in the table of
         the 32-bit forms."""
-        table = {code: self.string32 for code in (*range(0xA4, 0xA8), *range(0xAA, 0xB0))}
+        table = {code: self.string32 for code in (*range(0x6C, 0x70), *range(0xA4, 0xA8), *range(0xAA, 0xB0))}
         table.update({code: self.loop_a32 for code in range(Op.LOOPNE, Op.JCXZ + 1)})
         table[Op.XLAT] = self.xlat
         return table

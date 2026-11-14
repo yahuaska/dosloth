@@ -523,7 +523,7 @@ class TestSignExtensions(Machine):
 
 class TestWhatIsNotDoneYet(Machine):
     def test_an_instruction_with_the_prefix_66_that_has_no_32_bit_form_yet_stops_the_emulator(self):
-        for opcode in (0x9A, 0xEA, 0x6D, 0x6F, 0xDA):
+        for opcode in (0x9A, 0xEA, 0xDA):
             cpu = self.start(bytes([0x66, opcode, 0xC0, 0, 0, 0, 0]))
             with self.assertRaisesRegex(NotImplementedError, f"opcode 66 {opcode:02X}, the 32-bit form, at 1000:0000"):
                 cpu.step()
@@ -773,10 +773,11 @@ class TestAddresses32(Machine):
         cpu.step()  # mov ax, [bx]: 16 bits again: bx is 0, so DS:0
         self.assertEqual((cpu.r[AX], cpu.asize32), (0, False))
 
-    def test_ins_and_outs_do_not_take_32_bit_addresses_yet(self):
-        for code in ([0x67, 0x6C], [0x67, 0x6D], [0x67, 0x6E], [0x67, 0x6F]):
-            cpu = self.start(bytes(code))
-            with self.assertRaisesRegex(NotImplementedError, "with 32-bit addresses at 1000:0000"):
+    def test_ins_and_outs_with_32_bit_addresses_go_to_the_port_of_dx_and_one_with_nothing_there_stops(self):
+        for code, kind in (([0x67, 0x6C], "IN from"), ([0x67, 0x6D], "IN from"), ([0x67, 0x6E], "OUT to"),
+                           ([0x67, 0x6F], "OUT to")):
+            cpu = self.start(bytes(code), edx=0x0123)
+            with self.assertRaisesRegex(NotImplementedError, f"{kind} port 0123 at 1000:0000"):
                 cpu.step()
             self.assertEqual((cpu.r[CX], cpu.r[SI], cpu.r[DI]), (0, 0, 0), code)
 
