@@ -97,6 +97,17 @@ class TestResolving(VolumesTest):
         self.assertEqual(self.resolve("sub.\\deep.\\x.txt"), (2, ["SETUP", "sub", "deep", "x.txt"]))
         self.assertEqual(self.resolve("a\\.\\..\\b"), (2, ["SETUP", "b"]))  # "." and ".." are as they were
 
+    def test_spaces_at_the_end_of_a_name_or_an_extension_are_not_there(self):
+        self.assertEqual(self.resolve("D:/xcom3/RAWSOUND/BUTTNDRP.RAW       "), (3, ["xcom3", "RAWSOUND", "BUTTNDRP.RAW"]))
+        self.assertEqual(self.resolve("sub  \\name   .t  "), (2, ["SETUP", "sub", "name.t"]))
+        self.assertEqual(self.resolve("music .  "), (2, ["SETUP", "music"]))
+        self.assertEqual(self.resolve("a b.c d"), (2, ["SETUP", "a b.c d"]))  # the ones inside stay
+
+    def test_a_name_of_spaces_only_is_error_3(self):
+        with self.assertRaises(FsError) as caught:
+            self.volumes.resolve("   .txt")
+        self.assertEqual(caught.exception.code, 3)
+
     def test_the_path_cannot_go_above_the_root(self):
         for text in ("..\\..", "\\..", "D:..", "\\a\\..\\..", "../../x"):
             with self.subTest(text=text):
