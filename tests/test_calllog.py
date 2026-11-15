@@ -188,7 +188,7 @@ class TestTheFlatMode(unittest.TestCase):
     def test_a_name_that_is_above_64_kb_is_shown_and_the_call_that_is_not_done_is_said_so(self):
         self.cpu.mem[0x301000:0x301006] = b"A.DAT\0"
         with self.assertRaises(NotImplementedError):
-            self.call(0x21, ax=0x4100, dx=0x301000)  # delete: a name, and not done for the flat mode
+            self.call(0x21, ax=0x4300, dx=0x301000)  # the attributes: a name, and not done for the flat mode
         first, second = self.lines()
         self.assertTrue(first.endswith(' "A.DAT"'), first)
         self.assertEqual(second, ARROW + "NOT IMPLEMENTED")
