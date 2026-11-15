@@ -173,7 +173,11 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   binary file (the title picture is read a byte at a time); every other way goes on in the code after the two pushes
   that the INT stands in place of. And `ufo_pcx`: the decoding of a line of the PCX picture (108EB0), its pixels
   and runs taken from the buffer of the FILE as fgetc takes them; when the buffer has not the bytes of the next pixel
-  or run, the code goes on from the top of its loop, with what the loop keeps in registers, and reads the file. A patch adds to the count of instructions the ones that the code would have run,
+  or run, the code goes on from the top of its loop, with what the loop keeps in registers, and reads the file. And
+  `ufo_sprite`: the loop of the records of a sprite that is all inside the clip rectangle (16B37C, in the procedure
+  16B2E7 that draws the city and the developers' mapper: half of their time), its dwords of pixels copied and the three
+  bytes after them put unless 0; the end (16BB13) takes the registers back with popad, so what is left is the screen,
+  the flags of the last `cmp edx, -1` and the count. A patch adds to the count of instructions the ones that the code would have run,
   so the time of the program is the same.
   `--no-patches` runs the code as it is. A patched program shows `int F0` in the trace and the debugger;
   `tests/test_patches.py` runs the real code beside the patch on random trees and sound data, and for a frame of the

@@ -1060,3 +1060,71 @@ class TestTheDecodingOfALineOfPcx(unittest.TestCase):
         data = bytes([1, 2, 3])
         original, _ = self.beside(data, 1, 64, 70, {"ecx": 1, "esi": 2, "edi": 3, "ebp": 4}, 0x0002)
         self.assertEqual(bytes(original.mem[self.LINE + 3:self.LINE + 6]), b"\xFF\xFF\xFF")
+
+
+def sprite(rng, width, height):
+    """A picture of the kind 1: the header (the kind, the left, right, top and bottom from the corner), the records of
+    its rows (a row may have more than one, or none), each with its dwords of pixels and three that may be 0, and the
+    end."""
+    data = struct.pack("<IHHHH", 1, 0, width, 0, height)
+    for y in range(height):
+        x = 0
+        while x < width - 3 and rng.random() < 0.7:
+            count = rng.randrange(0, (width - x - 3) // 4 + 1)
+            data += struct.pack("<I", y * 640 + x) + bytes([rng.randrange(256) for _ in range(3)] + [count])
+            data += bytes(rng.randrange(256) for _ in range(4 * count))
+            data += bytes(rng.choice((0, 0, rng.randrange(1, 256))) for _ in range(3)) + bytes([rng.randrange(256)])
+            x += 4 * count + 3 + rng.randrange(0, 6)
+    return data + struct.pack("<I", 0xFFFFFFFF)
+
+
+@unittest.skipUnless(UFO2P.exists(), "the game is not here")
+class TestTheDrawingOfASprite(unittest.TestCase):
+    """The sprite at 16B2E7: the screen, the registers, the flags and the count of instructions are those of the code,
+    for sprites all inside the clip rectangle (the loop that is patched; the ways of a sprite over an edge are the
+    code's, and they read the records otherwise than these made-up ones are made)."""
+    SPRITE, SCREEN = 0x1600000, 0x1700000
+
+    @classmethod
+    def setUpClass(cls):
+        cls.original, cls.patched = ufo_machine(patch=False), ufo_machine(patch=True)
+
+    def beside(self, data, x, y, registers, cpu_flags):
+        screen = bytes(i * 7 & 0xFF for i in range(640 * 480))
+        memory = {self.SPRITE: data, self.SCREEN: screen, 0x272DEC: struct.pack("<I", self.SCREEN),
+                  0x1C4CD6: struct.pack("<HHHH", 0, 0, 640, 480)}  # the clip rectangle: left, top, right, bottom
+        for cpu in (self.original, self.patched):
+            cpu.instructions = 0
+            cpu.s[CPU.ES] = cpu.s[CPU.DS]  # as the game has it: the flat data, base 0
+            run_scenario(cpu, memory, {"eax": self.SPRITE, "edx": x, "ebx": y, **registers}, 0x16B2E7, cpu_flags)
+        original, patched = self.original, self.patched
+        self.assertEqual(bytes(patched.mem[0x16B37C:0x16B37E]), PATCH_BYTES)
+        self.assertEqual((original.r, original.rh), (patched.r, patched.rh))
+        self.assertEqual((hex(original.flags), original.ip), (hex(patched.flags), patched.ip))
+        for start, size in ((self.SCREEN, 640 * 480), (self.SPRITE, len(data)), (0x1E5AA3, 4)):
+            self.assertEqual(bytes(original.mem[start:start + size]), bytes(patched.mem[start:start + size]), hex(start))
+        self.assertEqual(original.instructions, patched.instructions)
+        return original, patched
+
+    def cases(self, place, count=40):
+        for seed in range(count):
+            rng = random.Random(seed)
+            width, height = rng.choice([(4, 1), (8, 3), (32, 16), (64, 40), (3, 2)])
+            x, y = place(rng, width, height)
+            registers = {name: rng.randrange(1 << 32) for name in ("ecx", "esi", "edi", "ebp")}
+            with self.subTest(seed=seed):
+                self.beside(sprite(rng, width, height), x, y, registers, rng.choice(FLAG_CHOICES))
+
+    def test_a_sprite_all_inside(self):
+        self.cases(lambda rng, width, height: (rng.randrange(0, 640 - width), rng.randrange(0, 480 - height)))
+
+    def test_a_sprite_of_no_records(self):
+        self.beside(struct.pack("<IHHHHI", 1, 0, 4, 0, 1, 0xFFFFFFFF), 10, 10, {"ecx": 1}, 0x0002)
+
+    def test_the_pixels_of_0_are_seen_through(self):
+        record = struct.pack("<I", 0) + bytes([9, 9, 9, 1]) + bytes([1, 0, 2, 0]) + bytes([0, 3, 0, 9])
+        data = struct.pack("<IHHHH", 1, 0, 8, 0, 1) + record + struct.pack("<I", 0xFFFFFFFF)
+        original, _ = self.beside(data, 100, 100, {}, 0x0002)
+        put = 0x1700000 + 100 * 640 + 100
+        self.assertEqual(bytes(original.mem[put:put + 7]), bytes([1, 0, 2, 0]) + bytes([(put - 0x1700000 + 4) * 7 & 0xFF, 3,
+                                                                                            (put - 0x1700000 + 6) * 7 & 0xFF]))
