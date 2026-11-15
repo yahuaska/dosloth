@@ -20,6 +20,8 @@ from .cpu import CPU
 WIDTH = 640
 HEIGHT = 480
 BUTTONS = 2  # the driver says it has two buttons, as a plain mouse does
+MICKEYS_X, MICKEYS_Y = 8, 16  # the mickeys for 8 pixels that a reset gives: a mickey is the step the mouse itself
+# tells, some 1/200 of an inch; the driver moves the pointer by mickeys * 8 / these pixels
 
 
 class Mouse:
@@ -36,6 +38,7 @@ class Mouse:
         self.handler = None  # (the events it wants, the segment, the offset) of the program's subroutine, if any
         self.cursor = -1  # the cursor is shown when this is 0: every show adds 1 (up to 0), every hide takes 1 off
         self.left, self.right, self.top, self.bottom = 0, WIDTH - 1, 0, HEIGHT - 1
+        self.mickeys_x, self.mickeys_y = MICKEYS_X, MICKEYS_Y  # how many mickeys move the pointer 8 pixels
         self.x, self.y = WIDTH // 2, HEIGHT // 2
         self.presses = [0, 0, 0]
         self.releases = [0, 0, 0]
@@ -74,7 +77,7 @@ class Mouse:
 
 
 def int33(cpu, mouse):
-    """INT 33h: the mouse driver, selected by AX. So far 0000h-0008h and 000Ch."""
+    """INT 33h: the mouse driver, selected by AX. So far 0000h-0008h, 000Ch and 000Fh."""
     ax = cpu.r[CPU.AX]
     if ax == 0x0000:  # reset the driver. AX = FFFFh: there is a mouse and a driver; BX = how many buttons
         mouse.reset()
@@ -97,9 +100,13 @@ def int33(cpu, mouse):
         cpu.r[CPU.BX] = counts[button]
         cpu.r[CPU.CX], cpu.r[CPU.DX] = places[button]  # where it last happened
         counts[button] = 0
-    elif ax == 0x000C:  # CX = the events that call the program's subroutine at ES:DX; 0 takes the subroutine away
-        mask = cpu.r[CPU.CX]
-        mouse.handler = (mask, cpu.s[CPU.ES], cpu.r[CPU.DX]) if mask else None
+    elif ax == 0x000C:  # CX = the events that call the program's subroutine at ES:DX (ES:EDX for a program in the
+        mask = cpu.r[CPU.CX]  # flat mode, as DOS/4G takes it); 0 takes the subroutine away
+        mouse.handler = (mask, cpu.s[CPU.ES], cpu.wide(CPU.DX)) if mask else None
+    elif ax == 0x000F:  # CX and DX mickeys move the pointer 8 pixels, across and down
+        if not (1 <= cpu.r[CPU.CX] < 0x8000 and 1 <= cpu.r[CPU.DX] < 0x8000):
+            raise NotImplementedError(f"INT 33h AX=000F CX={cpu.r[CPU.CX]:04X} DX={cpu.r[CPU.DX]:04X}: not 1 to 7FFFh")
+        mouse.mickeys_x, mouse.mickeys_y = cpu.r[CPU.CX], cpu.r[CPU.DX]
     elif ax in (0x0007, 0x0008):  # the range for the pointer, CX to DX: across (7) or down (8)
         mouse.set_range(ax == 0x0007, cpu.r[CPU.CX], cpu.r[CPU.DX])
     else:

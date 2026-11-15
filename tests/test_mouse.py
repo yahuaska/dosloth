@@ -156,6 +156,18 @@ class TestTheDriver(unittest.TestCase):
         self.call(0x000C, cx=0x0001, dx=0x02DC)
         self.assertEqual(self.mouse.handler, (0x0001, 0x17E4, 0x02DC))
 
+    def test_a_program_in_the_flat_mode_gives_the_subroutine_at_es_edx(self):
+        from dosloth.loader import CODE_SELECTOR, DATA_SELECTOR
+        cpu = self.cpu
+        cpu.enter_flat({CODE_SELECTOR: 0, DATA_SELECTOR: 0})
+        cpu.mem[0x200000:0x200002] = bytes([0xCD, 0x33])
+        cpu.s[CPU.CS], cpu.ip = CODE_SELECTOR, 0x200000
+        cpu.s[CPU.ES] = CODE_SELECTOR
+        cpu.r[CPU.AX], cpu.r[CPU.CX] = 0x000C, 0x001F
+        cpu.set32(CPU.DX, 0x00103250)  # as X-COM: Apocalypse gives it: 000F:00103250
+        cpu.step()
+        self.assertEqual(self.mouse.handler, (0x001F, CODE_SELECTOR, 0x00103250))
+
     def test_events_0_takes_the_subroutine_away_and_a_new_one_takes_the_place_of_the_old(self):
         self.cpu.s[CPU.ES] = 0x1000
         self.call(0x000C, cx=0x0007, dx=0x0100)
@@ -182,6 +194,20 @@ class TestTheDriver(unittest.TestCase):
         cpu = self.call(0x0003)
         self.assertTrue(cpu.get_flag(0x0001))
         self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 2))
+
+    def test_the_mickeys_for_8_pixels_are_8_and_16_and_a_program_sets_them_and_a_reset_brings_them_back(self):
+        self.assertEqual((self.mouse.mickeys_x, self.mouse.mickeys_y), (8, 16))
+        cpu = self.call(0x000F, cx=1, dx=1)  # as X-COM: Apocalypse does: a mickey is 8 pixels of its range
+        self.assertEqual((self.mouse.mickeys_x, self.mouse.mickeys_y), (1, 1))
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]), (0x000F, 0x3333, 1, 1))
+        self.call(0x0000)
+        self.assertEqual((self.mouse.mickeys_x, self.mouse.mickeys_y), (8, 16))
+
+    def test_mickeys_of_0_or_past_7fffh_are_not_known(self):
+        for cx, dx in ((0, 8), (8, 0), (0x8000, 8)):
+            with self.subTest(cx=cx, dx=dx), self.assertRaises(NotImplementedError):
+                self.call(0x000F, cx=cx, dx=dx)
+        self.assertEqual((self.mouse.mickeys_x, self.mouse.mickeys_y), (8, 16))
 
     def test_the_other_functions_are_not_done_yet(self):
         for ax in (0x000B, 0x000D, 0x0021, 0x0024, 0x0009, 0x00FF, 0xFFFF):
