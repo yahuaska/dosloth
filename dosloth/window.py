@@ -28,13 +28,14 @@ def zoom_for(width, height, picture_width, picture_height):
 
 
 class TkWindow(Display):
-    """A window with the picture in it. Every key pressed goes to `press(scan_code, ascii_code)`, what the mouse does
-    to `pointer(x, y, buttons)`, if there is one."""
+    """A window with the picture in it. Every key pressed goes to `press(scan_code, ascii_code)` (the BIOS), every key
+    that goes down or up to `key(scan_code, down, extended)` (the keyboard controller), what the mouse does to
+    `pointer(x, y, buttons)`, if there are those."""
 
     # the button numbers of Tk (1 left, 2 middle, 3 right) and their bits in a mask
     BUTTON_BITS = {1: 0b001, 3: 0b010, 2: 0b100}
 
-    def __init__(self, press, pointer=None, title="DOSloth", hidden=False, save=None):
+    def __init__(self, press, pointer=None, title="DOSloth", hidden=False, save=None, key=None):
         """Open the window. `hidden` keeps it off the screen, for tests. `save()` is called when F12 is pressed, a key
         that the program does not get. Raises WindowError when it cannot be done."""
         try:
@@ -43,6 +44,8 @@ class TkWindow(Display):
             raise WindowError("this Python has no tkinter") from None
         self.press = press
         self.pointer = pointer
+        self.key = key
+        self.held = {}  # the keycode of the host of a key that is down -> the (scan code, extended) it sent
         self.save = save
         self.buttons = 0  # the buttons that are down
         try:
@@ -56,6 +59,7 @@ class TkWindow(Display):
         self.canvas.pack(fill="both", expand=True)
         self.item = self.canvas.create_image(WIDTH // 2, HEIGHT // 2, anchor="center")
         self.root.bind("<KeyPress>", self.on_key)
+        self.root.bind("<KeyRelease>", self.on_key_release)
         self.canvas.bind("<Configure>", lambda event: self.layout(event.width, event.height))
         self.canvas.bind("<Motion>", self.on_motion)
         self.canvas.bind("<ButtonPress>", lambda event: self.on_button(event, True))
@@ -78,6 +82,15 @@ class TkWindow(Display):
         key = keys.to_bios(event.keysym, event.char)
         if key is not None:
             self.press(*key)
+        code = keys.scan_code(event.keysym, event.char)
+        if code is not None and self.key is not None:
+            self.held[event.keycode] = code  # what the release sends: Tk may give it another character, or none
+            self.key(code[0], True, code[1])
+
+    def on_key_release(self, event):
+        code = self.held.pop(event.keycode, None)
+        if code is not None and self.key is not None:
+            self.key(code[0], False, code[1])
 
     def place_of(self, x, y):
         """The pixel of the screen of the machine that is under the point x, y of the window. A point beside the

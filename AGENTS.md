@@ -113,7 +113,8 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `dosloth/display.py` - the `Display` interface (`present(frame)`, `poll()`, `close()`) that every window or file that
   shows the picture goes through; `PngFile` is the first. `-s PNGFILE` uses it
 - `dosloth/window.py` - `TkWindow`, a Tk window behind that interface: shows the picture, passes the keys typed in it
-  on to the BIOS keyboard. Tk is loaded only when `-w` asks for a window
+  on to the BIOS keyboard, and every key going down and up to the keyboard controller (the scan code of a release is
+  the one its press sent). Tk is loaded only when `-w` asks for a window
 - `dosloth/smacker.py` - Smacker videos (`.smk`, SMK2) decoded in Python, with no machine: the trees, the palette, the
   blocks of a frame; the sound is skipped. All the frames of the three videos of the game are those that the emulator
   shows when it runs SMKP.EXE, but for one whose picture SMKP.EXE leaves out (frame 1 of the video 1)
@@ -124,7 +125,11 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   counts, ranges, the mickeys for 8 pixels (000Fh: a pixel of the host is 8/mickeys units, never less than one), the
   program's subroutine (000Ch: ES:EDX in the flat mode), called between instructions when IF allows, far, with the
   return to an INT F1h in the ROM that puts the program's registers back); the window gives it the events
-- `dosloth/keys.py` - a key of Tk (`Return`, `a`, `F1`) -> the BIOS scan code and ASCII code, for a US keyboard
+- `dosloth/keys.py` - a key of Tk (`Return`, `a`, `F1`) -> the BIOS scan code and ASCII code, for a US keyboard; and
+  (`scan_code`) what the keyboard sends for it, Shift, Ctrl, Alt and Caps Lock too, with E0h for the grey block
+- `dosloth/kbc.py` - the keyboard controller: the make and break codes wait in a queue and come one by one at port 60h
+  with IRQ 1 (INT 9), the next when the line is free (after the EOI of the one before); a program that takes INT 9
+  over (X-COM: Apocalypse) reads them there. No port 64h, no lights
 - `dosloth/disasm.py` - bytes -> text like `mov ax, bx`, only used for the trace. Teach it every opcode the CPU learns
   (`tests/test_disasm.py` fails if it is out of step)
 - `dosloth/breakpoints.py` - `-b ADDRESS` (`000F:0010E060` as the logs write it, or the offset alone): `CPU.run` stops

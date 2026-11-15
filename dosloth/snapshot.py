@@ -184,6 +184,7 @@ def capture(machine, rewind=False):
         "mouse": dict(vars(machine.mouse)),
         "sysport": {"value": machine.sysport.value},
         "soundblaster": machine.soundblaster.state(),
+        "kbc": dict(vars(machine.kbc)),
         "dma": machine.dma.state(),
         "pics": [chip.state() for chip in machine.pics],
         "dos": dos_state(machine.state, files),
@@ -260,6 +261,7 @@ def restore(machine, packed, blobs):
     set_attributes(machine.mouse, data.get("mouse", {}))
     set_attributes(machine.sysport, data.get("sysport", {}))
     set_attributes(machine.soundblaster, data.get("soundblaster", {}))
+    set_attributes(machine.kbc, data.get("kbc", {}))
     set_attributes(machine.dma, data.get("dma", {}))
     machine.cpu.wake()  # the devices are looked at again: what the state holds is not what the CPU last saw
     for chip, saved_chip in zip(machine.pics, data.get("pics", [])):

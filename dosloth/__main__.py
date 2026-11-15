@@ -133,7 +133,8 @@ def main():
         displays.append(PngFile(args.s))
     if args.w:
         try:
-            displays.append(TkWindow(computer.keyboard.press, computer.mouse.update, save=quick_save.ask))
+            displays.append(TkWindow(computer.keyboard.press, computer.mouse.update, save=quick_save.ask,
+                                     key=computer.kbc.key))
         except WindowError as error:
             parser.error(f"cannot open a window: {error}")
     monitor = screen.Monitor(computer.card, displays) if displays else None

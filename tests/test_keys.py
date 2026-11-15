@@ -89,5 +89,32 @@ class TestWhatTheProgramDoesNotSee(unittest.TestCase):
         self.assertIsNone(to_bios("x", "ab"))
 
 
+class TestScanCodes(unittest.TestCase):
+    """What a key sends to a program that reads the keyboard itself."""
+
+    def test_a_key_that_types_has_the_scan_code_the_bios_gives(self):
+        self.assertEqual(keys.scan_code("a", "a"), (0x1E, False))
+        self.assertEqual(keys.scan_code("A", "A"), (0x1E, False))
+        self.assertEqual(keys.scan_code("Return", "\r"), (0x1C, False))
+        self.assertEqual(keys.scan_code("Escape", "\x1b"), (0x01, False))
+
+    def test_the_keys_that_change_the_others_have_theirs(self):
+        self.assertEqual(keys.scan_code("Shift_L", ""), (0x2A, False))
+        self.assertEqual(keys.scan_code("Shift_R", ""), (0x36, False))  # the right Shift of X-COM: Apocalypse
+        self.assertEqual(keys.scan_code("Control_L", ""), (0x1D, False))
+        self.assertEqual(keys.scan_code("Alt_L", ""), (0x38, False))
+        self.assertEqual(keys.scan_code("Caps_Lock", ""), (0x3A, False))
+
+    def test_the_keys_of_the_grey_block_are_extended(self):
+        self.assertEqual(keys.scan_code("Up", ""), (0x48, True))
+        self.assertEqual(keys.scan_code("Delete", "\x7f"), (0x53, True))
+        self.assertEqual(keys.scan_code("KP_Enter", "\r"), (0x1C, True))
+        self.assertEqual(keys.scan_code("Control_R", ""), (0x1D, True))
+
+    def test_a_key_the_pc_has_not_sends_nothing(self):
+        self.assertIsNone(keys.scan_code("Pause", "\x13"))
+        self.assertIsNone(keys.scan_code("F12", ""))
+
+
 if __name__ == "__main__":
     unittest.main()
