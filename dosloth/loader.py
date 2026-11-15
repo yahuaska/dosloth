@@ -8,7 +8,7 @@ program (a DOS/4G one) goes to the memory above 1 MB, and starts in the flat mod
 import struct
 from dataclasses import dataclass
 
-from . import le, patches
+from . import le, mods, patches
 from .cpu import CPU
 from .flat import REAL_MODE, Bases
 
@@ -158,6 +158,7 @@ def load_le(cpu, data, psp_seg, extended, patch=True):
     cpu.ip = entry
     if patch:
         patches.apply(cpu)  # the pieces of the code that Python does faster
+        patches.apply(cpu, mods.asked_for(cpu))  # and what the configuration asks to be done otherwise
 
 
 def load(cpu, data, psp_seg, extended=None):

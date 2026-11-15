@@ -5,7 +5,10 @@ import unittest
 from pathlib import Path
 
 from dosloth import config
+from unittest import mock
+
 from dosloth.config import ConfigError
+from dosloth.mods import MODS
 from tests.iso_builder import build
 
 REPOSITORY = Path(__file__).resolve().parent.parent
@@ -341,6 +344,30 @@ class TestTheMounts(ConfigTest):
     def test_the_mounts_must_be_a_table_of_tables(self):
         self.assertRejects("mounts = 5\n" + self.BASE, "mounts", "table")
         self.assertRejects(self.mounts('C = "."'), "mounts.C", "table")
+
+
+class TestTheMods(ConfigTest):
+    def setUp(self):
+        super().setUp()
+        known = mock.patch.dict(MODS, {"one": [], "two": []})
+        known.start()
+        self.addCleanup(known.stop)
+
+    def test_without_the_table_no_mod_is_made(self):
+        self.assertEqual(self.parse(self.GOOD).mods, frozenset())
+
+    def test_the_mods_that_are_true_are_made(self):
+        cfg = self.parse(self.GOOD + "\n[mods]\none = true\ntwo = false\n")
+        self.assertEqual(cfg.mods, frozenset({"one"}))
+
+    def test_a_mod_that_is_not_there_is_an_error_that_names_it(self):
+        self.assertRejects(self.GOOD + "\n[mods]\nthree = true\n", "mods", "'three'", "one", "two")
+
+    def test_a_value_that_is_not_true_or_false_is_an_error(self):
+        self.assertRejects(self.GOOD + "\n[mods]\none = 1\n", "mods.one", "true or false")
+
+    def test_mods_must_be_a_table(self):
+        self.assertRejects("mods = 1\n" + self.GOOD, "mods must be a table")
 
 
 class TestLoadingAFile(ConfigTest):
