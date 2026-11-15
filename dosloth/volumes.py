@@ -23,6 +23,17 @@ class Location:
         return chr(ord("A") + self.drive) + ":\\" + "\\".join(part.upper() for part in self.parts)
 
 
+def dos_name(name):
+    """A name of a path as DOS takes it: in the form of an FCB, 8 letters and 3, filled up with spaces, so that the
+    spaces at the end of the name and of the extension are not there (X-COM: Apocalypse looks for
+    "BUTTNDRP.RAW       "), and "MUSIC." is the file "MUSIC", with no extension."""
+    stem, _, extension = name.partition(".")
+    stem, extension = stem.rstrip(" "), extension.rstrip(" ")
+    if not stem:
+        raise FsError(PATH_NOT_FOUND, f"{name!r} has no name")
+    return f"{stem}.{extension}" if extension else stem
+
+
 class Volumes:
     """The drives of one machine, made from its configuration.
 
@@ -65,7 +76,7 @@ class Volumes:
                     raise FsError(PATH_NOT_FOUND, "the path goes above the root of the drive")
                 parts.pop()
             else:
-                parts.append(name[:-1] if name.endswith(".") else name)  # "MUSIC." is the file "MUSIC": no extension
+                parts.append(dos_name(name))
         return Location(drive, filesystem, parts)
 
     def chdir(self, text):
