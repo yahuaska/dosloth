@@ -163,7 +163,9 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   least for a call; the RET stands for other emptied procedures too, so only a call that the caller follows with
   `add esp, N` is taken as a printf. And `ufo_stdio`: fgetc of UFO2P.EXE (1B1238), the byte from the buffer of a
   binary file (the title picture is read a byte at a time); every other way goes on in the code after the two pushes
-  that the INT stands in place of. A patch adds to the count of instructions the ones that the code would have run,
+  that the INT stands in place of. And `ufo_pcx`: the decoding of a line of the PCX picture (108EB0), its pixels
+  and runs taken from the buffer of the FILE as fgetc takes them; when the buffer has not the bytes of the next pixel
+  or run, the code goes on from the top of its loop, with what the loop keeps in registers, and reads the file. A patch adds to the count of instructions the ones that the code would have run,
   so the time of the program is the same.
   `--no-patches` runs the code as it is. A patched program shows `int F0` in the trace and the debugger;
   `tests/test_patches.py` runs the real code beside the patch on random trees and sound data, and for a frame of the

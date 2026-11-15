@@ -968,3 +968,95 @@ class TestTheFgetcOfUFO2P(unittest.TestCase):
     def test_the_byte_comes_back_as_an_unsigned_number(self):
         cpu = self.beside(0x41, 3, 5, b"\xff\x80\x01", {"ebx": 1, "ecx": 2, "edx": 3}, 0x0002)
         self.assertEqual(cpu.wide(CPU.AX), 0xFF)
+
+
+def pcx_encoded(rng, length):
+    """`length` bytes of a line as PCX has them: pixels below C0h as themselves, runs as C0h | count and the byte."""
+    out = bytearray()
+    done = 0
+    while done < length:
+        if rng.random() < 0.4:
+            times = rng.randrange(0, 64)
+            out += bytes([0xC0 | times, rng.randrange(256)])
+            done += times
+        else:
+            out.append(rng.randrange(0xC0))
+            done += 1
+    return bytes(out)
+
+
+@unittest.skipUnless(UFO2P.exists(), "the game is not here")
+class TestTheDecodingOfALineOfPcx(unittest.TestCase):
+    """pcx_decode_line (108EB0): the line, the FILE, the registers, the flags and the count of instructions are those
+    of the code, whether the line is all in the buffer of the FILE or the buffer runs out and the file is read again
+    (through a DOS that has only the reading of a file, AH=3Fh, which is all that _filbuf asks)."""
+    STREAM, BUFFER, LINE = 0x1640000, 0x1650000, 0x1660000
+
+    @classmethod
+    def setUpClass(cls):
+        cls.original, cls.patched = ufo_machine(patch=False), ufo_machine(patch=True)
+
+    def reader(self, rest):
+        """INT 21h with AH=3Fh only: the bytes of `rest` from where the last read stopped."""
+        state = {"at": 0, "reads": 0}
+
+        def int21(cpu):
+            if cpu.get8(4) != 0x3F:
+                raise NotImplementedError(f"INT 21h AH={cpu.get8(4):02X}")
+            count, address = cpu.wide(CPU.CX), cpu.wide(CPU.DX)
+            data = rest[state["at"]:state["at"] + count]
+            cpu.mem[address:address + len(data)] = data
+            state["at"] += len(data)
+            state["reads"] += 1
+            cpu.set32(CPU.AX, len(data))
+            cpu.flags &= ~0x0001
+        return int21, state
+
+    def beside(self, stream_data, in_buffer, chunk, count, registers, cpu_flags):
+        seen = []
+        for cpu in (self.original, self.patched):
+            cpu.instructions = 0
+            cpu.mem[self.LINE:self.LINE + 0x800] = bytes([0x5A]) * 0x800
+            cpu.mem[self.BUFFER:self.BUFFER + 0x2000] = bytes(0x2000)
+            int21, state = self.reader(stream_data[in_buffer:])
+            cpu.int_handlers[0x21] = int21
+            stream = struct.pack("<IIIIII", self.BUFFER, in_buffer, self.BUFFER, 0x41, 5, chunk)
+            run_scenario(cpu, {self.STREAM: stream, self.BUFFER: stream_data[:in_buffer]},
+                         {"eax": self.LINE, "edx": self.STREAM, "ebx": count, **registers}, 0x108EB0, cpu_flags)
+            seen.append(state["reads"])
+        original, patched = self.original, self.patched
+        self.assertEqual(bytes(patched.mem[0x108EB0:0x108EB2]), PATCH_BYTES)
+        self.assertEqual((original.r, original.rh), (patched.r, patched.rh))
+        self.assertEqual((hex(original.flags), original.ip), (hex(patched.flags), patched.ip))
+        for start, size in ((self.LINE, 0x800), (self.STREAM, 24), (self.BUFFER, 0x2000)):
+            self.assertEqual(bytes(original.mem[start:start + size]), bytes(patched.mem[start:start + size]), hex(start))
+        self.assertEqual(seen[0], seen[1])
+        self.assertEqual(original.instructions, patched.instructions)
+        return original, patched
+
+    def cases(self, count_of, in_buffer_of, chunks=(16, 64, 300, 4096), lines=60):
+        for seed in range(lines):
+            rng = random.Random(seed)
+            count = count_of(rng)
+            data = pcx_encoded(rng, max(count, 1) + 70)
+            registers = {name: rng.randrange(1 << 32) for name in ("ecx", "esi", "edi", "ebp")}
+            with self.subTest(seed=seed):
+                self.beside(data, min(in_buffer_of(rng, data), len(data)), rng.choice(chunks), count, registers,
+                            rng.choice(FLAG_CHOICES + (0x0002 | 0x0010,)))
+
+    def test_a_line_that_is_all_in_the_buffer(self):
+        self.cases(lambda rng: rng.choice([1, 2, 5, 100, 640]), lambda rng, data: len(data))
+
+    def test_a_line_whose_buffer_runs_out_and_the_file_is_read_again(self):
+        self.cases(lambda rng: rng.choice([5, 100, 640]), lambda rng, data: rng.randrange(0, 40))
+
+    def test_no_bytes_asked_is_still_a_pixel_or_a_run_and_a_run_goes_past_the_count(self):
+        self.cases(lambda rng: 0, lambda rng, data: len(data), lines=20)
+        data = bytes([0xC0 | 50, 7]) + bytes(10)
+        original, _ = self.beside(data, len(data), 64, 3, {"ecx": 1, "esi": 2, "edi": 3, "ebp": 4}, 0x0002)
+        self.assertEqual(original.wide(CPU.AX), 50)
+
+    def test_the_end_of_the_file_gives_a_run_of_ffh_as_the_code_makes_it(self):
+        data = bytes([1, 2, 3])
+        original, _ = self.beside(data, 1, 64, 70, {"ecx": 1, "esi": 2, "edi": 3, "ebp": 4}, 0x0002)
+        self.assertEqual(bytes(original.mem[self.LINE + 3:self.LINE + 6]), b"\xFF\xFF\xFF")
