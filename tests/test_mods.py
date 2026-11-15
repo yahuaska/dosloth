@@ -5,6 +5,7 @@ from pathlib import Path
 
 from dosloth import loader, mods, patches, psp, rom
 from dosloth.cpu import CPU
+from dosloth.mods import ufo_developer_mapper as mapper
 from dosloth.mods import ufo_scenario_button as button
 from dosloth.patches import PATCH_BYTES
 from dosloth.xmem import ExtendedMemory
@@ -89,3 +90,32 @@ class TestTheScenarioButton(unittest.TestCase):
             if cpu.ip == address:
                 return
         raise AssertionError(f"did not get to {address:X}")
+
+
+@unittest.skipUnless(UFO2P.exists(), "the game is not here")
+class TestTheDeveloperMapper(unittest.TestCase):
+    def at_the_check(self, asked, flag=0):
+        cpu = ufo_machine(asked)
+        cpu.mem[mapper.FLAG] = flag
+        cpu.set32(CPU.SP, STACK)
+        cpu.flags = 0x0002 | 0x0040 | 0x0001  # ZF and CF, which the cmp has to change
+        cpu.ip = mapper.SITE
+        cpu.step()
+        return cpu
+
+    def test_the_mod_is_made_only_when_it_is_asked_for(self):
+        self.assertNotEqual(bytes(ufo_machine().mem[mapper.SITE:mapper.SITE + 2]), PATCH_BYTES)
+        self.assertEqual(bytes(ufo_machine({"developer_mapper"}).mem[mapper.SITE:mapper.SITE + 2]), PATCH_BYTES)
+
+    def test_the_flag_is_1_and_the_code_goes_on_as_the_cmp_of_1_leaves_it(self):
+        modded = self.at_the_check({"developer_mapper"})
+        original = self.at_the_check((), flag=1)  # the game's own cmp, with the byte at 1
+        self.assertEqual(modded.mem[mapper.FLAG], 1)
+        self.assertEqual((modded.ip, hex(modded.flags)), (original.ip, hex(original.flags)))
+        modded.step()  # je: not taken, to the mapper
+        self.assertEqual(modded.ip, 0x1001C3)
+
+    def test_without_the_mod_the_game_goes_its_way(self):
+        cpu = self.at_the_check(())
+        cpu.step()
+        self.assertEqual(cpu.ip, 0x1001DE)

@@ -46,7 +46,7 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   `config.example.toml` shows the format. `python -m dosloth -c FILE program` uses it; without `-c` the machine is
   built in: floppies A: B:, a CD-ROM D: with no disc, the current directory as the hard disk C:. A drive is a
   "floppy", "hdd" or "cdrom" (`type`; `removable` is the old way). What is mounted in a CD-ROM is read-only.
-  `[mods]` turns mods on by name (`scenario_button = true`); an unknown name or a value that is not a bool is an error
+  `[mods]` turns mods on by name (`scenario_button = true`, `developer_mapper = true`); an unknown name or a value that is not a bool is an error
   INT 2Fh answers MSCDEX questions from the CD-ROM drives (1500h, 1501h with the header `MSCD001 ` of a driver of
   CD-ROMs that `sysvars.py` writes after NUL, 1508h, 150Bh-150Dh, 150Fh: the directory record from the image)
 - `dosloth/filesystem.py` - the file systems of the drives: HostDir (a host directory, names matched without
@@ -185,7 +185,9 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   return goes to an `INT F0h` in the ROM (`rom.PATCH_RETURNS_AT`, F000:0040 and F000:0042). So far
   `scenario_button` (UFO2P.EXE): at 1AA19A, before the main menu is shown, the bar of Quit is copied 38 lines lower,
   draw_text_centred(get_text(29h, 3) "Scenario Generator", 320, 292) and add_button((188, 287, 447, 314), no key,
-  1A9FE0) are called; the registers and flags wait on the game's stack meanwhile
+  1A9FE0) are called; the registers and flags wait on the game's stack meanwhile. `developer_mapper` (UFO2P.EXE): at
+  1001BA, the one place that looks at the byte [1D1324] (nothing writes it), it is made 1, so `main` runs the city
+  mapper of the developers (load_city_map, city_mapper) and then exits with 0 instead of the game
 - `dosloth/__main__.py` - loads a .COM/.EXE and runs it: `python -m dosloth tests/hello.com`; what is after the first
   `--` is the command line of the program (the options and the name come before it);
   `-d LOGFILE` writes every executed instruction to LOGFILE, e.g. `1773:0880  8B C3  mov ax, bx`;
