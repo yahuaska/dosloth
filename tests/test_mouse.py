@@ -1,6 +1,7 @@
+import json
 import unittest
 
-from dosloth import mouse
+from dosloth import flags, mouse, rom
 from dosloth.cpu import CPU
 from dosloth.mouse import Mouse
 
@@ -60,6 +61,51 @@ class TestTheState(unittest.TestCase):
         self.assertEqual((m.x, m.y, m.cursor, m.buttons), (320, 240, -1, 0b001))
         self.assertEqual((m.left, m.right), (0, 639))
         self.assertEqual((m.presses, m.releases, m.press_at[0]), ([0, 0, 0], [0, 0, 0], (0, 0)))
+
+    def test_what_happens_is_kept_as_events_for_the_subroutine(self):
+        m = Mouse()
+        m.update(320, 240, 0)  # where it was: nothing happened
+        self.assertEqual(m.events, 0)
+        m.update(321, 240, 0)
+        self.assertEqual(m.events, mouse.MOVED)
+        m.events = 0
+        m.update(321, 240, 0b001)  # left down
+        m.update(321, 240, 0b010)  # left up, right down
+        m.update(321, 240, 0b100)  # right up, middle down
+        m.update(321, 240, 0b000)  # middle up
+        self.assertEqual(m.events, 0x7E)
+
+    def test_a_move_against_the_edge_of_the_range_is_no_event(self):
+        m = Mouse()
+        m.update(0, 0, 0)
+        m.events = 0
+        m.update(-5, -5, 0)
+        self.assertEqual(m.events, 0)
+
+    def test_a_reset_forgets_the_events(self):
+        m = Mouse()
+        m.update(1, 1, 1)
+        m.reset()
+        self.assertEqual(m.events, 0)
+
+    def test_finer_mickeys_make_a_pixel_of_the_host_more_units(self):
+        m = Mouse()
+        m.set_range(True, 0, 5120)
+        m.set_range(False, 0, 3840)
+        m.mickeys_x, m.mickeys_y = 1, 1  # as X-COM: Apocalypse has them: eighths of a pixel
+        m.update(639, 479, 0)
+        self.assertEqual((m.x, m.y), (5112, 3832))
+        m.mickeys_x, m.mickeys_y = 3, 4
+        m.update(100, 100, 0)
+        self.assertEqual((m.x, m.y), (266, 200))
+
+    def test_with_the_mickeys_of_a_reset_or_coarser_ones_a_pixel_is_a_unit(self):
+        m = Mouse()
+        m.update(100, 50, 0)
+        self.assertEqual((m.x, m.y), (100, 50))
+        m.mickeys_x, m.mickeys_y = 32, 100
+        m.update(101, 51, 0)
+        self.assertEqual((m.x, m.y), (101, 51))
 
 
 class TestTheDriver(unittest.TestCase):
@@ -176,13 +222,17 @@ class TestTheDriver(unittest.TestCase):
         self.call(0x000C, cx=0, dx=0x0300)
         self.assertIsNone(self.mouse.handler)
 
-    def test_the_subroutine_is_never_called_for_now_and_a_reset_forgets_it(self):
+    def test_a_reset_forgets_the_subroutine(self):
         self.cpu.s[CPU.ES] = 0x1000
         self.call(0x000C, cx=0x0001, dx=0x0100)
-        self.mouse.update(5, 5, 1)
-        self.assertEqual((self.cpu.s[CPU.CS], self.cpu.ip), (0x1000, 2))  # nothing jumped there
         self.call(0x0000)
         self.assertIsNone(self.mouse.handler)
+
+    def test_a_new_subroutine_gets_only_the_events_that_come_after_it(self):
+        self.mouse.update(5, 5, 1)
+        self.cpu.s[CPU.ES] = 0x1000
+        self.call(0x000C, cx=0x001F, dx=0x0100)
+        self.assertEqual(self.mouse.events, 0)
 
     def test_registering_the_subroutine_changes_no_register(self):
         self.cpu.s[CPU.ES] = 0x1000
@@ -223,3 +273,113 @@ class TestTheDriver(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheCallOfTheSubroutine(unittest.TestCase):
+    """The driver stops the program between two instructions, calls its subroutine far, and puts the program back
+    when the subroutine returns, as the interrupt of the mouse does."""
+
+    def setUp(self):
+        self.cpu = cpu = CPU()
+        self.mouse = mouse.install(cpu)
+        rom.install_iret(cpu)
+        cpu.s[CPU.CS], cpu.ip = 0x1000, 0x0000
+        cpu.mem[0x10000:0x10002] = bytes([0xEB, 0xFE])  # the program: jmp $
+        cpu.mem[0x20000:0x20002] = bytes([0x90, 0xCB])  # the subroutine at 2000:0000: nop; retf
+        cpu.s[CPU.SS], cpu.r[CPU.SP] = 0x3000, 0x0100
+        cpu.s[CPU.DS], cpu.s[CPU.ES] = 0x4444, 0x5555
+        for register, value in zip((CPU.AX, CPU.BX, CPU.CX, CPU.DX, CPU.SI, CPU.DI, CPU.BP),
+                                   (0x11111111, 0x22222222, 0x33333333, 0x44444444, 0x55555555, 0x66666666, 0x77)):
+            cpu.set32(register, value)
+        cpu.flags = 0x0002 | flags.IF | flags.CF
+        self.mouse.handler = (0x001F, 0x2000, 0x0000)
+
+    def program(self):
+        cpu = self.cpu
+        return list(cpu.r), list(cpu.rh), list(cpu.s), cpu.flags, cpu.ip
+
+    def happen(self, x=100, y=50, buttons=0):
+        self.mouse.update(x, y, buttons)
+        self.cpu.wake()
+
+    def test_the_subroutine_gets_the_events_the_buttons_and_the_place_and_returns_to_the_program(self):
+        cpu = self.cpu
+        before = self.program()
+        self.happen(buttons=1)
+        cpu.step()  # the call, and the nop of the subroutine
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x2000, 0x0001))
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.BX], cpu.r[CPU.CX], cpu.r[CPU.DX]),
+                         (mouse.MOVED | mouse.PRESSED, 1, 100, 50))
+        self.assertEqual((cpu.r[CPU.SI], cpu.r[CPU.DI]), (0, 0))
+        self.assertFalse(cpu.flags & flags.IF)
+        self.assertEqual((cpu.r[CPU.SP], cpu.rw(0x3000, 0x00FC), cpu.rw(0x3000, 0x00FE)), (0x00FC, 0x0030, 0xF000))
+        cpu.step()  # retf, to the ROM
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), rom.MOUSE_RETURN_AT)
+        cpu.step()  # int F1h
+        self.assertEqual(self.program(), before)
+        self.assertIsNone(self.mouse.saved)
+        self.assertEqual(self.mouse.events, 0)
+
+    def test_a_32_bit_subroutine_of_the_flat_mode_is_called_with_doublewords(self):
+        from dosloth.loader import CODE_SELECTOR, DATA_SELECTOR
+        cpu = self.cpu
+        cpu.enter_flat({CODE_SELECTOR: 0, DATA_SELECTOR: 0})
+        cpu.mem[0x200000:0x200002] = bytes([0xEB, 0xFE])
+        cpu.mem[0x103250:0x103252] = bytes([0x90, 0xCB])  # where X-COM: Apocalypse has its subroutine
+        cpu.s[CPU.CS], cpu.ip = CODE_SELECTOR, 0x200000
+        cpu.s[CPU.SS], cpu.s[CPU.DS], cpu.s[CPU.ES] = DATA_SELECTOR, DATA_SELECTOR, DATA_SELECTOR
+        cpu.set32(CPU.SP, 0x300000)
+        self.mouse.handler = (0x001F, CODE_SELECTOR, 0x00103250)
+        before = self.program()
+        self.happen(x=600, y=400, buttons=2)
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (CODE_SELECTOR, 0x103251))
+        self.assertEqual((cpu.wide(CPU.AX), cpu.wide(CPU.BX), cpu.wide(CPU.CX), cpu.wide(CPU.DX)),
+                         (mouse.MOVED | mouse.PRESSED << 2, 2, 600, 400))
+        self.assertEqual((cpu.wide(CPU.SP), cpu.rd(DATA_SELECTOR, 0x2FFFF8), cpu.rd(DATA_SELECTOR, 0x2FFFFC)),
+                         (0x2FFFF8, 0xF0030, CODE_SELECTOR))
+        cpu.step()
+        cpu.step()
+        self.assertEqual(self.program(), before)
+
+    def test_only_the_events_the_subroutine_wants_call_it_and_it_gets_only_those(self):
+        cpu = self.cpu
+        self.mouse.handler = (mouse.PRESSED, 0x2000, 0x0000)
+        self.happen(x=200)  # a move only
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip), (0x1000, 0x0000))
+        self.happen(x=201, buttons=1)
+        cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.r[CPU.AX]), (0x2000, mouse.PRESSED))
+
+    def test_it_waits_while_the_program_does_not_allow_interrupts(self):
+        cpu = self.cpu
+        cpu.flags &= ~flags.IF
+        self.happen()
+        cpu.step()
+        self.assertEqual(cpu.s[CPU.CS], 0x1000)
+        cpu.flags |= flags.IF
+        for _ in range(mouse.LOOK_EVERY):
+            cpu.step()
+        self.assertEqual(cpu.s[CPU.CS], 0x2000)
+
+    def test_it_is_not_called_again_while_it_runs(self):
+        cpu = self.cpu
+        cpu.mem[0x20000:0x20003] = bytes([0xFB, 0xEB, 0xFE])  # sti; jmp $
+        self.happen()
+        for _ in range(3 * mouse.LOOK_EVERY):
+            if cpu.instructions % 100 == 0:
+                self.happen(x=100 + cpu.instructions // 100 % 50)
+            cpu.step()
+        self.assertEqual((cpu.s[CPU.CS], cpu.ip, cpu.r[CPU.SP]), (0x2000, 0x0001, 0x00FC))
+
+    def test_what_is_kept_while_it_runs_can_be_saved_in_a_snapshot(self):
+        self.happen()
+        self.cpu.step()
+        json.dumps(vars(self.mouse))
+
+    def test_a_return_with_no_call_stops_the_emulator(self):
+        cpu = self.cpu
+        cpu.s[CPU.CS], cpu.ip = rom.MOUSE_RETURN_AT
+        with self.assertRaises(NotImplementedError):
+            cpu.step()
