@@ -5,7 +5,7 @@ snapshot.py), so the code that does it is here, once.
 """
 from dataclasses import dataclass
 
-from . import bios, country, dma, dos, kbc, mouse, patches, pic, soundblaster, sysport, timer, vesa, vga
+from . import bios, country, dma, dos, kbc, mods, mouse, patches, pic, soundblaster, sysport, timer, vesa, vga
 from .cpu import CPU
 
 
@@ -47,7 +47,8 @@ def build(volumes):
     blaster = soundblaster.install(cpu, controllers, channels)
     keys = kbc.install(cpu, controllers)
     cpu.wake()
-    patches.install(cpu)
+    cpu.mods = volumes.config.mods  # the mods that a program gets when it is loaded (see loader.py)
+    patches.install(cpu, patches.PATCHES + mods.every_patch())  # every INT F0h a memory may have, mod or not
     return Machine(cpu, keyboard, state, clock, card, pointer, port, volumes, controllers, channels, blaster, keys)
 
 

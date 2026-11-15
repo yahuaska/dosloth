@@ -17,6 +17,9 @@ It is a TOML file. A drive and the medium in it are described apart, as they are
     D = { type = "iso", path = "cd.iso" } # a disc image: its files, and its sectors for programs that read them
                                           # (a CD-ROM can also hold a directory of the host: type = "dir")
 
+    [mods]                                # changes to what a program does (see the package mods)
+    scenario_button = true                # the name of a mod, and whether it is made
+
 `removable = true` (a floppy) and `removable = false` (a hard disk) are the old way to say the same as `type`; a drive
 has one of the two, not both.
 
@@ -30,8 +33,9 @@ from pathlib import Path
 
 from .filesystem import FsError, for_mount
 from .iso import IsoError, IsoImage
+from .mods import MODS
 
-TOP_LEVEL_KEYS = {"cwd", "disks", "mounts"}
+TOP_LEVEL_KEYS = {"cwd", "disks", "mounts", "mods"}
 DISK_KEYS = {"type", "removable"}
 DISK_TYPES = ("floppy", "hdd", "cdrom")
 MOUNT_KEYS = {"type", "path", "readonly"}
@@ -70,6 +74,7 @@ class Config:
     disks: dict
     cwd_drive: int
     cwd: str  # the directory on that drive, as DOS writes it: "\\" for the root, "\\SETUP\\SUB" below it
+    mods: frozenset = frozenset()  # the names of the mods that are made (see the package mods)
 
     @property
     def drive_count(self):
@@ -202,6 +207,18 @@ def _parse_cwd(text, disks):
     return ord(letter) - ord("A"), "\\" + "\\".join(shown)
 
 
+def _parse_mods(data):
+    """The names of the mods that the table [mods] turns on: each key is the name of a mod, its value true or false."""
+    mods = _table(data["mods"], "mods") if "mods" in data else {}
+    for name, value in mods.items():
+        if name not in MODS:
+            known = ", ".join(sorted(MODS)) or "none yet"
+            raise ConfigError(f"mods: there is no mod {name!r} (the mods are: {known})")
+        if not isinstance(value, bool):
+            raise ConfigError(f"mods.{name} must be true or false, not {value!r}")
+    return frozenset(name for name, value in mods.items() if value)
+
+
 def parse(data, base):
     """Make a Config from what tomllib read. Relative paths are taken from the directory `base`."""
     _check_keys(data, TOP_LEVEL_KEYS, "the file")
@@ -219,7 +236,7 @@ def parse(data, base):
         if not mounted:
             raise ConfigError("mounts: no drive has anything mounted, so there is nowhere to start")
         drive, directory = (2 if 2 in mounted else mounted[0]), "\\"
-    return Config(disks, drive, directory)
+    return Config(disks, drive, directory, _parse_mods(data))
 
 
 def load(path):
