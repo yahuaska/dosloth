@@ -153,7 +153,9 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   knows none of them by name: when it is imported, once at the start, every module in it whose name does not begin
   with an underscore is imported, and the `PATCHES` (pieces of code that the program has when it is loaded) and
   `LATE_PATCHES` (pieces that come later, as a driver that the program reads from a file: they are looked for by their
-  bytes, `LatePatch`) that it has are put in the lists of the package. To make a patch is to put a module there. The
+  bytes, `LatePatch`, through megabytes, every 50 000 instructions at first and twice as long after each look that
+  finds none, up to 5 million; the look keeps its own time, as the machine calls every source of events whenever one
+  is due, and the mouse and the keyboard are every 1000) that it has are put in the lists of the package. To make a patch is to put a module there. The
   modules with an underscore are what they use: `_base` (`Patch`, `LatePatch`), `_common` (the structures of a dword and
   the end of most patches), `_smacker` (what more than one patch of SMKP.EXE looks at). So far fourteen patches, in
   `smk_*`: the reader of the trees (10DD90), the small trees of the sound (10DCF0), the three procedures that make

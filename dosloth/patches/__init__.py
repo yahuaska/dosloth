@@ -23,7 +23,7 @@ import importlib
 import pkgutil
 
 from ..cpu import CPU
-from ._base import HOOK, LOOK_EVERY, PATCH_BYTES, LatePatch, Patch
+from ._base import HOOK, LOOK_AT_MOST, LOOK_EVERY, PATCH_BYTES, LatePatch, Patch
 
 PATCHES = []  # the patches of the code that the program has when it is loaded
 LATE_PATCHES = []  # the patches of the code that comes later
@@ -60,7 +60,9 @@ def apply_late(cpu, patches=None):
 
 def install(cpu, patches=None):
     """Teach the machine the meaning of `INT F0h`: do the work of the patch whose first instruction it stands in for.
-    The pieces of code that come later are looked for from time to time, until they are found."""
+    The pieces of code that come later are looked for from time to time, until they are found: every LOOK_EVERY
+    instructions at first, and each look that finds none of them makes the time to the next twice as long, up to
+    LOOK_AT_MOST; one that finds one makes it LOOK_EVERY again."""
     table = {patch.address: patch.handler for patch in (PATCHES if patches is None else patches)}
     cpu.patch_sites = {}  # the places of the pieces that came later (their linear addresses)
 
@@ -73,9 +75,17 @@ def install(cpu, patches=None):
     cpu.int_handlers[HOOK] = hook
     if LATE_PATCHES:
         waiting = list(LATE_PATCHES)
+        wait, due = [LOOK_EVERY], [0]  # the instructions to the next look, and the count when it is
 
         def look(instructions):
-            waiting[:] = apply_late(cpu, waiting)
-            return instructions + LOOK_EVERY if waiting else None
+            if instructions < due[0]:  # the machine looks at its devices more often than this (see CPU.events)
+                return due[0]
+            still = apply_late(cpu, waiting)
+            if not still:
+                return None
+            wait[0] = LOOK_EVERY if len(still) < len(waiting) else min(wait[0] * 2, LOOK_AT_MOST)
+            waiting[:] = still
+            due[0] = instructions + wait[0]
+            return due[0]
         cpu.event_sources.append(look)
         cpu.wake()
