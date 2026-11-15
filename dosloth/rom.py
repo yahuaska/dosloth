@@ -10,10 +10,12 @@ interrupt first and then does an IRET.
 IRET_AT = (0xF000, 0x0001)
 MASTER_EOI_AT = (0xF000, 0x0010)
 SLAVE_EOI_AT = (0xF000, 0x0020)
+MOUSE_RETURN_AT = (0xF000, 0x0030)  # where the mouse driver's call of a program's subroutine returns to (see mouse.py)
 ROM_HANDLERS = {
     IRET_AT: b"\xCF",
     MASTER_EOI_AT: b"\x50\xB0\x20\xE6\x20\x58\xCF",  # push ax ; mov al, 20h ; out 20h, al ; pop ax ; iret
     SLAVE_EOI_AT: b"\x50\xB0\x20\xE6\xA0\xE6\x20\x58\xCF",  # the same to both controllers
+    MOUSE_RETURN_AT: b"\xCD\xF1",  # int F1h: the driver takes back the registers of the program it stopped
 }
 
 

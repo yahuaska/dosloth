@@ -121,8 +121,9 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
 - `dosloth/smkplay.py` - `python -m dosloth.smkplay -c config_xcomapoc.toml D:\XCOM3\SMK\INTRO1.SMK`: a video in the
   window of the emulator (`TkWindow`), at its rate; a picture that is late is left out, a key or closing stops it
 - `dosloth/mouse.py` - the mouse and its INT 33h driver (reset, show/hide, position and buttons, press and release
-  counts, ranges, the mickeys for 8 pixels (000Fh: kept, not used yet), the program's subroutine (000Ch: ES:EDX in the
-  flat mode) remembered but not called); the window gives it the events
+  counts, ranges, the mickeys for 8 pixels (000Fh: a pixel of the host is 8/mickeys units, never less than one), the
+  program's subroutine (000Ch: ES:EDX in the flat mode), called between instructions when IF allows, far, with the
+  return to an INT F1h in the ROM that puts the program's registers back); the window gives it the events
 - `dosloth/keys.py` - a key of Tk (`Return`, `a`, `F1`) -> the BIOS scan code and ASCII code, for a US keyboard
 - `dosloth/disasm.py` - bytes -> text like `mov ax, bx`, only used for the trace. Teach it every opcode the CPU learns
   (`tests/test_disasm.py` fails if it is out of step)
