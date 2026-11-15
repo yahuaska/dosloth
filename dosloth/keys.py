@@ -7,6 +7,10 @@ character it typed (not the same). Keys that type no character, the arrows and F
 The keys are named here the way Tk names them (`Return`, `Left`, `F1`), together with the character it says the key
 typed. The scan codes are those of a US keyboard; characters that are not on one are dropped, as are the keys that
 only change what the others do (Shift, Ctrl, Alt, the locks) and the combinations with Alt.
+
+A program that reads the keyboard itself (port 60h, see kbc.py) sees every key go down and up, those that change the
+others too: `scan_code` gives the scan code of a key for that, and whether it is one of the grey block, which sends
+E0h first.
 """
 
 # the keys that do not type a character on their own, or whose character is a control character
@@ -56,3 +60,25 @@ def to_bios(keysym, char):
     if 1 <= code <= 26 and keysym.lower() in LETTERS and len(keysym) == 1:  # Ctrl+A is the character 1, and so on
         return SCAN_OF_CHARACTER[keysym.lower()], code
     return None
+
+
+# the keys that type nothing and the BIOS does not give, but a program that reads the keyboard itself sees
+MODIFIER_KEYS = {
+    "Shift_L": 0x2A, "Shift_R": 0x36, "Control_L": 0x1D, "Alt_L": 0x38, "Option_L": 0x38, "Caps_Lock": 0x3A,
+}
+# the keys of the grey block: their codes come after E0h (the arrows and the rest share the codes of the keypad)
+EXTENDED_KEYS = {
+    "Control_R": 0x1D, "Alt_R": 0x38, "Option_R": 0x38, "KP_Enter": 0x1C,
+    "Up": 0x48, "Down": 0x50, "Left": 0x4B, "Right": 0x4D,
+    "Home": 0x47, "End": 0x4F, "Prior": 0x49, "Next": 0x51, "Insert": 0x52, "Delete": 0x53,
+}
+
+
+def scan_code(keysym, char):
+    """(scan code, extended) of a key as the keyboard sends it, or None for a key that the PC has not."""
+    if keysym in EXTENDED_KEYS:
+        return EXTENDED_KEYS[keysym], True
+    if keysym in MODIFIER_KEYS:
+        return MODIFIER_KEYS[keysym], False
+    key = to_bios(keysym, char)
+    return None if key is None else (key[0], False)

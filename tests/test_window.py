@@ -129,6 +129,25 @@ class TestTkWindow(unittest.TestCase):
         self.assertEqual(calls, [(100, 50, 0), (100, 50, 1), (110, 60, 1), (110, 60, 3), (110, 60, 2),
                                  (111, 61, 6), (111, 61, 4), (111, 61, 0)])
 
+    def test_every_key_going_down_and_up_goes_to_the_keyboard_controller(self):
+        sent = []
+        self.window.key = lambda scan, down, extended: sent.append((scan, down, extended))
+        self.window.on_key(SimpleNamespace(keysym="Shift_R", char="", keycode=60))
+        self.window.on_key(SimpleNamespace(keysym="A", char="A", keycode=0))
+        self.window.on_key_release(SimpleNamespace(keysym="Shift_R", char="", keycode=60))
+        self.window.on_key_release(SimpleNamespace(keysym="a", char="", keycode=0))  # the release says no character
+        self.window.on_key(SimpleNamespace(keysym="Up", char="", keycode=126))
+        self.window.on_key_release(SimpleNamespace(keysym="Up", char="", keycode=126))
+        self.assertEqual(sent, [(0x36, True, False), (0x1E, True, False), (0x36, False, False), (0x1E, False, False),
+                                (0x48, True, True), (0x48, False, True)])
+        self.assertEqual(self.keys, [(0x1E, ord("A")), (0x48, 0)])  # the BIOS gets the keys that it gives, as before
+
+    def test_a_release_of_a_key_that_was_not_seen_going_down_is_not_passed_on(self):
+        sent = []
+        self.window.key = lambda scan, down, extended: sent.append((scan, down, extended))
+        self.window.on_key_release(SimpleNamespace(keysym="b", char="b", keycode=11))
+        self.assertEqual(sent, [])
+
     def test_the_wheel_and_other_buttons_are_not_passed_on(self):
         calls = []
         self.window.pointer = lambda x, y, buttons: calls.append((x, y, buttons))
