@@ -3,7 +3,7 @@ counts of 32 bits in the flat mode (EDX, ECX), and give a count in all of EAX. T
 above 64 KB, behind a selector that has a base, so that a 16-bit offset or a base that is forgotten shows."""
 import unittest
 
-from dosloth import flags
+from dosloth import dos, flags
 from dosloth.cpu import CPU, Exit
 from dosloth.loader import CODE_SELECTOR, DATA_SELECTOR
 from tests import test_dos
@@ -236,6 +236,20 @@ class TestFiles(FlatFiles):
         self.keyboard()
         with self.assertRaisesRegex(NotImplementedError, "no key can be pressed"):
             self.call32(0x0800)
+
+    def test_the_current_drive_comes_in_al_and_the_rest_of_eax_stays(self):
+        self.call32(0x12341900)
+        cpu = self.cpu
+        self.assertEqual(cpu.get8(0), self.state.volumes.current_drive)
+        self.assertEqual((cpu.get8(4), cpu.rh[CPU.AX]), (0x19, 0x1234))
+
+    def test_the_free_space_of_a_drive_comes_in_ax_bx_cx_dx_and_their_high_halves_stay(self):
+        self.call32(0x55553600, ebx=0x66660000, ecx=0x77770000, edx=0x88880003)  # C:
+        cpu = self.cpu
+        self.assertEqual((cpu.r[CPU.AX], cpu.r[CPU.CX]), (dos.SECTORS_PER_CLUSTER, dos.BYTES_PER_SECTOR))
+        self.assertLessEqual(cpu.r[CPU.BX], cpu.r[CPU.DX])
+        self.assertEqual((cpu.rh[CPU.AX], cpu.rh[CPU.BX], cpu.rh[CPU.CX], cpu.rh[CPU.DX]),
+                         (0x5555, 0x6666, 0x7777, 0x8888))
 
     def test_the_date_comes_in_cx_dh_dl_and_al_and_the_rest_of_ecx_and_edx_stays(self):
         import time
