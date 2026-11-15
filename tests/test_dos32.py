@@ -101,6 +101,15 @@ class TestFiles(FlatFiles):
         handle = self.open_file("BIG.DAT")
         self.assertEqual(self.state.handles.get(handle).dos_path, "C:\\BIG.DAT")
 
+    def test_a_file_is_created_by_a_name_that_is_above_64_kb(self):
+        self.put(0x00180000, b"NEW.DAT\0")
+        self.put(0x00000100, b"WRONG.DAT\0")  # what a 16-bit offset would find
+        self.call32(0x3C80, ecx=0, edx=0x00180000)  # AL as X-COM: Apocalypse leaves it: DOS does not look at it
+        self.assertIsNone(self.failed())
+        self.assertEqual(self.state.handles.get(self.cpu.r[CPU.AX]).dos_path, "C:\\NEW.DAT")
+        self.assertTrue((self.base / "NEW.DAT").exists())
+        self.assertFalse((self.base / "WRONG.DAT").exists())
+
     def test_a_file_that_is_not_there_is_error_2_and_the_name_is_looked_for_at_the_whole_offset(self):
         self.put(0x00180000, b"NOPE.DAT\0")
         self.put(0x00000100, b"BIG.DAT\0")  # what a 16-bit offset would find
@@ -188,7 +197,7 @@ class TestFiles(FlatFiles):
         self.assertEqual(self.failed(), 6)
 
     def test_the_functions_that_have_not_been_asked_for_stop_the_emulator_with_the_mode(self):
-        for ax in (0x3C00, 0x4100, 0x4300, 0x4700, 0x4800, 0x0900):
+        for ax in (0x4100, 0x4300, 0x4700, 0x4800, 0x0900):
             with self.assertRaisesRegex(NotImplementedError, f"INT 21h AX={ax:04X} in the flat mode"):
                 self.call32(ax)
 
