@@ -24,7 +24,10 @@ class Patch:
 # The patches of code that is not in the program when it is loaded, but comes later: the driver of the sound is
 # read from a file by the player, and put where there is room. Such a piece is found by its bytes, and patched when it
 # is there (and again when a saved machine is put back, for it keeps the INTs, and does not know what they mean).
-LOOK_EVERY = 50_000  # the instructions between the looks, until all the pieces are found
+LOOK_EVERY = 50_000  # the instructions between the looks, until all the pieces are found; each look that finds
+LOOK_AT_MOST = 5_000_000  # nothing doubles the time to the next, up to this (a tenth of a second of the machine): a
+# piece that is not in the program (UFO2P.EXE has the driver of the sound, but not the mixer of SMKP.EXE) is not looked
+# for all the time, through megabytes, and one that comes later is still found
 SEARCH_FROM, SEARCH_TO = 0x100000, 0x800000  # where the program puts such code: above the first megabyte
 
 

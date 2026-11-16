@@ -8,11 +8,12 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from dosloth import dos, loader, patches, psp
 from dosloth.patches import smk_frame
 from dosloth.cpu import CPU, Exit, NEVER
-from dosloth.patches import PATCH_BYTES, Patch
+from dosloth.patches import PATCH_BYTES, LatePatch, Patch
 from dosloth.xmem import ExtendedMemory
 
 SMKP = Path(__file__).resolve().parent.parent / "XCOMA" / "UFOEXE" / "SMKP.EXE"
@@ -1128,3 +1129,53 @@ class TestTheDrawingOfASprite(unittest.TestCase):
         put = 0x1700000 + 100 * 640 + 100
         self.assertEqual(bytes(original.mem[put:put + 7]), bytes([1, 0, 2, 0]) + bytes([(put - 0x1700000 + 4) * 7 & 0xFF, 3,
                                                                                             (put - 0x1700000 + 6) * 7 & 0xFF]))
+
+
+class TestTheLooksForTheLatePieces(unittest.TestCase):
+    """A piece of code that is not there yet is looked for less and less often, and again as often when one comes."""
+    FIRST, SECOND = bytes(range(0x40, 0x50)), bytes(range(0x60, 0x70))
+
+    def piece(self, name, code):
+        return LatePatch(name, code[:8].hex(), len(code), hashlib.sha256(code).hexdigest(), [(8, code[8:10], None)])
+
+    def setUp(self):
+        late = [self.piece("first", self.FIRST), self.piece("second", self.SECOND)]
+        replaced = mock.patch.object(patches, "LATE_PATCHES", late)
+        replaced.start()
+        self.addCleanup(replaced.stop)
+        self.cpu = CPU()
+        patches.install(self.cpu, [])
+        self.look = self.cpu.event_sources[-1]
+
+    def test_the_time_to_the_next_look_doubles_while_nothing_is_found(self):
+        now, waits = 0, []
+        for _ in range(9):
+            due = self.look(now)
+            waits.append(due - now)
+            now = due
+        self.assertEqual(waits, [100_000, 200_000, 400_000, 800_000, 1_600_000, 3_200_000, 5_000_000, 5_000_000,
+                                 5_000_000])
+
+    def test_a_call_before_the_time_looks_at_nothing(self):
+        """The machine calls every source of events whenever one of them is due (the mouse is every 1000)."""
+        due = self.look(0)
+        self.cpu.mem[0x200000:0x200010] = self.FIRST
+        self.assertEqual(self.look(due - 1), due)
+        self.assertNotEqual(bytes(self.cpu.mem[0x200008:0x20000A]), PATCH_BYTES)  # not looked for yet
+        self.look(due)
+        self.assertEqual(bytes(self.cpu.mem[0x200008:0x20000A]), PATCH_BYTES)
+
+    def test_a_piece_that_is_found_makes_the_looks_as_often_as_at_first(self):
+        now = 0
+        for _ in range(5):
+            now = self.look(now)
+        self.cpu.mem[0x200000:0x200010] = self.FIRST
+        self.assertEqual(self.look(now), now + patches.LOOK_EVERY)
+        self.assertEqual(bytes(self.cpu.mem[0x200008:0x20000A]), PATCH_BYTES)  # and it is patched
+        now += patches.LOOK_EVERY
+        self.assertEqual(self.look(now), now + 2 * patches.LOOK_EVERY)
+
+    def test_when_every_piece_is_found_there_are_no_more_looks(self):
+        self.cpu.mem[0x200000:0x200010] = self.FIRST
+        self.cpu.mem[0x300000:0x300010] = self.SECOND
+        self.assertIsNone(self.look(0))
