@@ -179,7 +179,11 @@ Imagine DOS, DOSBox and similar do not exist. Stdlib only, no emulation librarie
   `ufo_sprite`: the loop of the records of a sprite that is all inside the clip rectangle (16B37C, in the procedure
   16B2E7 that draws the city and the developers' mapper: half of their time), its dwords of pixels copied and the three
   bytes after them put unless 0; the end (16BB13) takes the registers back with popad, so what is left is the screen,
-  the flags of the last `cmp edx, -1` and the count. A patch adds to the count of instructions the ones that the code would have run,
+  the flags of the last `cmp edx, -1` and the count. And `ufo_cursor`: the rows of the three procedures of the cursor
+  that the game draws itself into the window of the card (1062A8 puts back what was under it, 106410 keeps what is
+  under it, 106520 draws it, 0 seen through), whenever the mouse moves; before each change of the bank (1087B8, through
+  DPMI and the BIOS: in a row when DX goes round, between rows when EDX < [1CD7D4]) and when the rows are done, the
+  code goes on with its registers and the counts [ebp-6], [ebp-8] (not the flags: 1087B8 sets them all first). A patch adds to the count of instructions the ones that the code would have run,
   so the time of the program is the same.
   `--no-patches` runs the code as it is. A patched program shows `int F0` in the trace and the debugger;
   `tests/test_patches.py` runs the real code beside the patch on random trees and sound data, and for a frame of the
