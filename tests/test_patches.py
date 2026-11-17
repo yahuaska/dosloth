@@ -1179,3 +1179,84 @@ class TestTheLooksForTheLatePieces(unittest.TestCase):
         self.cpu.mem[0x200000:0x200010] = self.FIRST
         self.cpu.mem[0x300000:0x300010] = self.SECOND
         self.assertIsNone(self.look(0))
+
+
+@unittest.skipUnless(UFO2P.exists(), "the game is not here")
+class TestTheCursorOfUFO2P(unittest.TestCase):
+    """The three procedures of the cursor (1061E3 puts back what was under it, 10632F keeps what is under it, 106492
+    draws it) in a machine with the card in the VESA mode and the banks shown through DPMI and the BIOS: the window,
+    the bank, the registers, the flags and the count of instructions are those of the code, for places at the edges of
+    the screen and where a row or the end of a row goes over a bank."""
+    UNDER, IMAGE = 0x230E68, 0x1CD5B2  # what is under the cursor; the picture of the cursor
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.machines = {patched: cls.machine(patched) for patched in (False, True)}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    @classmethod
+    def machine(cls, patched):
+        from dosloth import bios, config, machine
+        from dosloth.volumes import Volumes
+        computer = machine.build(Volumes(config.default(cls.tmp.name)))
+        cpu = computer.cpu
+        psp.build(cpu, 0x1000, 0x0FF0, 0x9000, "C:\\UFO2P.EXE")
+        loader.load_le(cpu, UFO2P.read_bytes(), 0x1000, computer.state.extended, patch=patched)
+        bios.set_vesa_mode(cpu, 0x101)
+        return computer
+
+    def beside(self, entry, x, y, bank, seed):
+        rng = random.Random(seed)
+        planes = [bytes(rng.randrange(256) for _ in range(76800)) for _ in range(4)]  # 640 x 480 in four planes
+        image = bytes(rng.choice((0, 0, rng.randrange(1, 256))) for _ in range(14 * 19))
+        under = bytes(rng.randrange(256) for _ in range(14 * 19))
+        memory = {0x1CD7C8: struct.pack("<IHHHHI", self.IMAGE, 14, 19, 626, 0, 626), self.IMAGE: image,
+                  self.UNDER: under, 0x1C4CDE: struct.pack("<H", bank), 0x1C4CE0: struct.pack("<hh", x, y),
+                  0x1C4CE8: struct.pack("<h", x), 0x273AFE: struct.pack("<h", y)}
+        registers = {name: rng.randrange(1 << 32) for name in ("eax", "ebx", "ecx", "edx", "esi", "edi", "ebp")}
+        cpu_flags = rng.choice(FLAG_CHOICES)
+        for computer in self.machines.values():
+            cpu, card = computer.cpu, computer.card
+            for plane, content in zip(card.planes, planes):
+                plane[:len(content)] = content
+            card.bank = bank
+            cpu.instructions = 0
+            cpu.s[CPU.ES] = cpu.s[CPU.DS]
+            run_scenario(cpu, memory, registers, entry, cpu_flags)
+        original, patched = (self.machines[p] for p in (False, True))
+        self.assertEqual((original.cpu.r, original.cpu.rh), (patched.cpu.r, patched.cpu.rh))
+        self.assertEqual((hex(original.cpu.flags), original.cpu.ip), (hex(patched.cpu.flags), patched.cpu.ip))
+        self.assertEqual(original.card.bank, patched.card.bank)
+        for a, b in zip(original.card.planes, patched.card.planes):
+            self.assertEqual(bytes(a), bytes(b))
+        for start, size in ((self.UNDER, 14 * 19), (0x1C4CDE, 2), (0x273AFE, 2), (0x1C4CE8, 2), (0x1D3CD9, 0x50)):
+            self.assertEqual(bytes(original.cpu.mem[start:start + size]), bytes(patched.cpu.mem[start:start + size]),
+                             hex(start))
+        self.assertEqual(original.cpu.instructions, patched.cpu.instructions)
+
+    PLACES = [(320, 240), (0, 0), (630, 100), (600, 470), (639, 479),  # inside, and over the right and lower edges
+              (250, 102), (243, 102), (10, 101), (100, 98), (300, 204), (500, 306)]  # over a bank in a row, between
+
+    def places(self, entry):
+        for number, (x, y) in enumerate(self.PLACES):
+            for bank in (0, 4):
+                with self.subTest(x=x, y=y, bank=bank):
+                    self.beside(entry, x, y, bank, number * 10 + bank)
+
+    def test_what_was_under_it_is_put_back(self):
+        self.places(0x1061E3)
+
+    def test_what_is_under_it_is_kept(self):
+        self.places(0x10632F)
+
+    def test_it_is_drawn(self):
+        self.places(0x106493)
+
+    def test_the_game_code_at_those_places_is_the_one_the_patches_are_for(self):
+        cpu = self.machines[True].cpu
+        for address in (0x1062A8, 0x106410, 0x106520):
+            self.assertEqual(bytes(cpu.mem[address:address + 2]), PATCH_BYTES)
