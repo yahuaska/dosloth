@@ -375,6 +375,58 @@ class TestTheRealsOfTheStack(FpuMachine):
         self.assertEqual(cpu.ftop, 0)
 
 
+class TestIntegersAndSingles(FpuMachine):
+    """fild dword and fstp dword: the game turns an integer into a float of 32 bits with them (UFO2P.EXE 11F8A6:
+    fild dword [eax] / fstp dword [ecx+2Ah])."""
+
+    def test_fild_dword_pushes_the_signed_integer(self):
+        for integer, real in ((5, 5.0), (0xFFFFFFFF, -1.0), (0x80000000, -2147483648.0), (0x7FFFFFFF, 2147483647.0)):
+            cpu = self.machine(bytes_of("db 05 00 00 60 00"))  # fild dword [00600000]
+            cpu.mem[0x00600000:0x00600004] = struct.pack("<I", integer)
+            cpu.step()
+            self.assertEqual((cpu.st(0), cpu.ftop), (real, 7), hex(integer))
+
+    def test_fstp_dword_writes_a_single_and_takes_the_top_off(self):
+        cpu = self.machine(bytes_of("d9 1d 00 00 60 00"))  # fstp dword [00600000]
+        cpu.fpu_push(-2.5)
+        cpu.step()
+        self.assertEqual(cpu.mem[0x00600000:0x00600004], struct.pack("<f", -2.5))
+        self.assertEqual(cpu.ftop, 0)
+
+    def test_fstp_dword_rounds_to_the_nearest_single(self):
+        cpu = self.machine(bytes_of("d9 1d 00 00 60 00"))
+        cpu.fpu_push(16777217.0)  # 2^24 + 1 lies between two singles: to the even one, 2^24
+        cpu.step()
+        self.assertEqual(struct.unpack("<f", cpu.mem[0x00600000:0x00600004])[0], 16777216.0)
+
+    def test_a_number_too_big_for_a_single_is_an_infinity_and_the_overflow_flag(self):
+        cpu = self.machine(bytes_of("d9 1d 00 00 60 00"))
+        cpu.fpu_push(-1e300)
+        cpu.step()
+        self.assertEqual(struct.unpack("<f", cpu.mem[0x00600000:0x00600004])[0], -math.inf)
+        self.assertEqual(cpu.fsw & fpu.OVERFLOW, fpu.OVERFLOW)
+
+    def test_another_rounding_stops_only_when_the_single_is_not_exact(self):
+        cpu = self.machine(bytes_of("d9 1d 00 00 60 00", "d9 1d 00 00 60 00"))
+        cpu.fcw = 0x0F7F  # rounding toward zero
+        cpu.fpu_push(0.1)
+        cpu.fpu_push(0.5)
+        cpu.step()  # 0.5 is exact: written
+        self.assertEqual(struct.unpack("<f", cpu.mem[0x00600000:0x00600004])[0], 0.5)
+        with self.assertRaisesRegex(NotImplementedError, "rounding control 3"):
+            cpu.step()
+
+    def test_the_pair_of_the_game_makes_a_float_of_an_integer(self):
+        cpu = self.machine(bytes_of("db 00", "d9 59 2a"))
+        cpu.set32(CPU.AX, DATA)
+        cpu.set32(CPU.CX, DATA + 0x100)
+        cpu.mem[DATA:DATA + 4] = struct.pack("<i", -300)
+        cpu.step()
+        cpu.step()
+        self.assertEqual(cpu.mem[DATA + 0x12A:DATA + 0x12E], struct.pack("<f", -300.0))
+        self.assertEqual(cpu.ftop, 0)
+
+
 class TestTheDisassembler(FpuMachine):
     def text(self, *instruction):
         cpu = self.machine(bytes_of(*instruction))
@@ -388,7 +440,8 @@ class TestTheDisassembler(FpuMachine):
                                (FNSTSW_MEM, "fnstsw word [00500000]"), ("d9 7c 24 04", "fnstcw word [esp+4]"),
                                ("dd 44 24 08", "fld qword [esp+8]"), ("d9 c9", "fxch st(1)"),
                                ("d8 f1", "fdiv st, st(1)"), ("de c9", "fmulp st(1), st"),
-                               ("de e9", "fsubp st(1), st"), ("dc 1d 18 4a 1c 00", "fcomp qword [001C4A18]")):
+                               ("de e9", "fsubp st(1), st"), ("dc 1d 18 4a 1c 00", "fcomp qword [001C4A18]"),
+                               ("db 00", "fild dword [eax]"), ("d9 59 2a", "fstp dword [ecx+2A]")):
             length, shown = self.text(hexbytes)
             self.assertEqual((length, shown), (len(bytes.fromhex(hexbytes)), text), hexbytes)
 

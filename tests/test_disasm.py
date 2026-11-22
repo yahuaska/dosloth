@@ -562,7 +562,8 @@ class TestAgreesWithCpuOn32BitAddresses(unittest.TestCase):
                 if op in ADDRESS_SIZED or op in NO_MEMORY_FORM:
                     continue
                 with self.subTest(op=f"{prefix.hex()} {op:02X}"):
-                    modrm = (MODRM_FOR.get(op, 0xD8) & 0x38) | 0x84  # mod 10, r/m 100: a SIB byte and a 32-bit disp.
+                    reg = next((r for o, r in fpu.MEMORY if o == op), MODRM_FOR.get(op, 0xD8) >> 3 & 7)  # x87: done
+                    modrm = reg << 3 | 0x84  # mod 10, r/m 100: a SIB byte and a 32-bit displacement
                     code = prefix + bytes([op, modrm, 0x88, 1, 0, 0, 0, 0, 0, 0, 0])
                     length, text = disasm(machine(code), 0x1000, 0x100)
                     self.assertFalse(text.startswith("db"), text)

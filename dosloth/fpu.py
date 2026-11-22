@@ -24,7 +24,8 @@ CONTROL_RESET = 0x037F  # what FNINIT puts in the control word: all the exceptio
 C0, C1, C2, C3 = 0x0100, 0x0200, 0x0400, 0x4000  # the condition codes in the status word
 CONDITIONS = C0 | C1 | C2 | C3
 TOP_SHIFT, TOP_MASK = 11, 0x3800  # where the number of the top register is in the status word
-INVALID_OPERATION, ZERO_DIVIDE = 0x0001, 0x0004  # the flags of the exceptions that are done
+INVALID_OPERATION, ZERO_DIVIDE, OVERFLOW = 0x0001, 0x0004, 0x0008  # the flags of the exceptions that are done
+ROUNDING = 0x0C00  # the rounding control in the control word: 0 is to the nearest (or even), the only one done
 EXCEPTIONS = 0x80FF  # the flags of all of them, and the busy bit
 CONTROL_BITS, CONTROL_ALWAYS = 0x1F3F, 0x0040  # the bits of the control word that are kept, and the one that reads 1
 
@@ -50,6 +51,8 @@ FAMILIES = {
 # the forms with memory: (opcode, the reg field) -> (text with the size, method)
 MEMORY = {
     (0xDD, 0): ("fld qword", "fld_m64"),
+    (0xDB, 0): ("fild dword", "fild_m32"),
+    (0xD9, 3): ("fstp dword", "fstp_m32"),
     (0xDC, 3): ("fcomp qword", "fcomp_m64"),
     (0xD9, 5): ("fldcw word", "fldcw"),
     (0xD9, 7): ("fnstcw word", "fnstcw"),
@@ -179,6 +182,26 @@ class Fpu:
 
     def fld_m64(self, m):
         self.fpu_push(self.read_double(m))
+
+    def fild_m32(self, m):
+        """The signed integer of 32 bits in memory, pushed as a real (every one of them is exact in a double)."""
+        value = m.read(self, 32)
+        self.fpu_push(float(value - (value >> 31 << 32)))
+
+    def fstp_m32(self, m):
+        """The top rounded to a real of 32 bits, written to memory and taken off. The rounding is to the nearest, as
+        struct does it; a number too big for it is an infinity with the overflow flag (the exception is masked)."""
+        value = self.st(0)
+        try:
+            packed = struct.pack("<f", value)
+        except OverflowError:
+            packed = struct.pack("<f", math.copysign(math.inf, value))
+            self.fsw |= OVERFLOW
+        if self.fcw & ROUNDING and value == value and struct.unpack("<f", packed)[0] != value:
+            raise NotImplementedError(f"fstp dword with the rounding control {self.fcw >> 10 & 3} at "
+                                      f"{self.s[self.CS]:04X}:{self.start_ip:04X}: {value!r} is not exact")
+        m.write(self, 32, struct.unpack("<I", packed)[0])
+        self.fpu_pop()
 
     def fxch(self, i):
         top, other = self.st(0), self.st(i)
