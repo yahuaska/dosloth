@@ -130,7 +130,7 @@ class TestText(unittest.TestCase):
             (b"\xD5\x10", "aad 10"),
             (b"\xDB\xE3", "fninit"),   # from install.exe
             (b"\xDD\x7E\x00", "fnstsw word [bp]"),
-            (b"\xD9\x06\x34\x12", "esc 08, [1234]"),
+            (b"\xD9\x16\x34\x12", "esc 0A, [1234]"),  # fst dword: a form that is not done
             (b"\x60", "pusha"),   # from esetup.exe
             (b"\x6A\x02", "push 2"),   # from esetup.exe
             (b"\x6A\xFE", "push -2"),
@@ -527,7 +527,7 @@ class TestAgreesWithCpu32(unittest.TestCase):
         """Both ways: nothing that the CPU stops at is written as an instruction, and nothing it takes as a db."""
         taken = set(CPU().ops32)
         for op in range(256):
-            if op in (0x26, 0x2E, 0x36, 0x3E, 0x66, 0x67, 0xF2, 0xF3):  # the prefixes: another one is read after 66
+            if op in (0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65, 0x66, 0x67, 0xF2, 0xF3):  # the prefixes: another one is read after 66
                 continue
             code = bytes([0x66, op, MODRM_FOR.get(op, 0xD8), 0, 0, 0, 0, 0, 0])
             length, text = disasm(machine(code), 0x1000, 0x100)
@@ -562,7 +562,8 @@ class TestAgreesWithCpuOn32BitAddresses(unittest.TestCase):
                 if op in ADDRESS_SIZED or op in NO_MEMORY_FORM:
                     continue
                 with self.subTest(op=f"{prefix.hex()} {op:02X}"):
-                    modrm = (MODRM_FOR.get(op, 0xD8) & 0x38) | 0x84  # mod 10, r/m 100: a SIB byte and a 32-bit disp.
+                    reg = next((r for o, r in fpu.MEMORY if o == op), MODRM_FOR.get(op, 0xD8) >> 3 & 7)  # x87: done
+                    modrm = reg << 3 | 0x84  # mod 10, r/m 100: a SIB byte and a 32-bit displacement
                     code = prefix + bytes([op, modrm, 0x88, 1, 0, 0, 0, 0, 0, 0, 0])
                     length, text = disasm(machine(code), 0x1000, 0x100)
                     self.assertFalse(text.startswith("db"), text)

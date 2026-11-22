@@ -24,7 +24,9 @@ CONTROL_RESET = 0x037F  # what FNINIT puts in the control word: all the exceptio
 C0, C1, C2, C3 = 0x0100, 0x0200, 0x0400, 0x4000  # the condition codes in the status word
 CONDITIONS = C0 | C1 | C2 | C3
 TOP_SHIFT, TOP_MASK = 11, 0x3800  # where the number of the top register is in the status word
-INVALID_OPERATION, ZERO_DIVIDE = 0x0001, 0x0004  # the flags of the exceptions that are done
+INVALID_OPERATION, ZERO_DIVIDE, OVERFLOW = 0x0001, 0x0004, 0x0008  # the flags of the exceptions that are done
+ROUNDING = 0x0C00  # the rounding control in the control word: to the nearest (or even), down, up, toward zero
+INTEGER_INDEFINITE = 0x80000000  # what fistp dword writes for a number that is not one or does not fit
 EXCEPTIONS = 0x80FF  # the flags of all of them, and the busy bit
 CONTROL_BITS, CONTROL_ALWAYS = 0x1F3F, 0x0040  # the bits of the control word that are kept, and the one that reads 1
 
@@ -34,6 +36,7 @@ SINGLES = {
     (0xD9, 0xE0): ("fchs", "fchs"),
     (0xD9, 0xE8): ("fld1", "fld1"),
     (0xD9, 0xEE): ("fldz", "fldz"),
+    (0xD9, 0xFC): ("frndint", "frndint"),
     (0xDB, 0xE2): ("fnclex", "fnclex"),
     (0xDB, 0xE3): ("fninit", "fninit"),
     (0xDE, 0xD9): ("fcompp", "fcompp"),
@@ -50,6 +53,18 @@ FAMILIES = {
 # the forms with memory: (opcode, the reg field) -> (text with the size, method)
 MEMORY = {
     (0xDD, 0): ("fld qword", "fld_m64"),
+    (0xDB, 0): ("fild dword", "fild_m32"),
+    (0xDF, 0): ("fild word", "fild_m16"),
+    (0xDB, 3): ("fistp dword", "fistp_m32"),
+    (0xD8, 0): ("fadd dword", "fadd_m32"),
+    (0xD8, 1): ("fmul dword", "fmul_m32"),
+    (0xD8, 3): ("fcomp dword", "fcomp_m32"),
+    (0xD8, 4): ("fsub dword", "fsub_m32"),
+    (0xD8, 5): ("fsubr dword", "fsubr_m32"),
+    (0xD9, 0): ("fld dword", "fld_m32"),
+    (0xDC, 0): ("fadd qword", "fadd_m64"),
+    (0xD8, 7): ("fdivr dword", "fdivr_m32"),
+    (0xD9, 3): ("fstp dword", "fstp_m32"),
     (0xDC, 3): ("fcomp qword", "fcomp_m64"),
     (0xD9, 5): ("fldcw word", "fldcw"),
     (0xD9, 7): ("fnstcw word", "fnstcw"),
@@ -84,6 +99,34 @@ def divide(a, b):
     if math.isinf(a) and math.isinf(b):
         return math.nan, INVALID_OPERATION
     return a / b, 0
+
+
+def add(a, b):
+    """a + b and the flags: two infinities of different signs make a number that is not one."""
+    if math.isinf(a) and math.isinf(b) and a != b:
+        return math.nan, INVALID_OPERATION
+    return a + b, 0
+
+
+def multiply(a, b):
+    """a * b and the flags: an infinity by a zero is not a number."""
+    if (math.isinf(a) and b == 0) or (a == 0 and math.isinf(b)):
+        return math.nan, INVALID_OPERATION
+    return a * b, 0
+
+
+def subtract(a, b):
+    """a - b and the flags: an infinity less the same one is not a number."""
+    return add(a, -b)
+
+
+def round_integer(value, control):
+    """The integer nearest to the value in the way the rounding control of the control word says: 0 to the nearest
+    (the even one of two), 1 down, 2 up, 3 toward zero. The value is a finite number."""
+    mode = control >> 10 & 3
+    if mode == 0:
+        return round(value)  # Python rounds a half to the even one, as the chip does
+    return (math.floor, math.ceil, math.trunc)[mode - 1](value)
 
 
 def compare(a, b):
@@ -180,6 +223,85 @@ class Fpu:
     def fld_m64(self, m):
         self.fpu_push(self.read_double(m))
 
+    def fild_m32(self, m):
+        """The signed integer of 32 bits in memory, pushed as a real (every one of them is exact in a double)."""
+        value = m.read(self, 32)
+        self.fpu_push(float(value - (value >> 31 << 32)))
+
+    def fild_m16(self, m):
+        """The signed integer of 16 bits in memory, pushed as a real."""
+        value = m.read(self, 16)
+        self.fpu_push(float(value - (value >> 15 << 16)))
+
+    def read_single(self, m):
+        """The 32-bit real that the memory operand is."""
+        return struct.unpack("<f", struct.pack("<I", m.read(self, 32)))[0]
+
+    def with_flags(self, result):
+        """The value of (value, flags) of an operation, with its flags put in the status word."""
+        value, raised = result
+        self.fsw |= raised
+        return value
+
+    def fadd_m32(self, m):
+        self.set_st(0, self.with_flags(add(self.st(0), self.read_single(m))))
+
+    def fmul_m32(self, m):
+        self.set_st(0, self.with_flags(multiply(self.st(0), self.read_single(m))))
+
+    def fld_m32(self, m):
+        self.fpu_push(self.read_single(m))
+
+    def fadd_m64(self, m):
+        self.set_st(0, self.with_flags(add(self.st(0), self.read_double(m))))
+
+    def fsubr_m32(self, m):
+        """The real in memory less the top (the reverse of fsub), into the top."""
+        self.set_st(0, self.with_flags(subtract(self.read_single(m), self.st(0))))
+
+    def fcomp_m32(self, m):
+        self.compare_and_pop(self.read_single(m))
+
+    def fsub_m32(self, m):
+        self.set_st(0, self.with_flags(subtract(self.st(0), self.read_single(m))))
+
+    def fdivr_m32(self, m):
+        """The real in memory divided by the top (the reverse of fdiv), into the top."""
+        self.set_st(0, self.with_flags(divide(self.read_single(m), self.st(0))))
+
+    def frndint(self):
+        """The top rounded to an integer by the rounding control; an infinity, a number that is not one and a zero stay
+        as they are, and a zero that comes of a negative number keeps its sign."""
+        value = self.st(0)
+        if math.isfinite(value):
+            self.set_st(0, math.copysign(float(round_integer(value, self.fcw)), value))
+
+    def fistp_m32(self, m):
+        """The top rounded to an integer by the rounding control, written as a signed dword and taken off. A number that
+        is not one or does not fit is the integer indefinite, with the invalid operation flag (it is masked)."""
+        value = self.st(0)
+        integer = round_integer(value, self.fcw) if math.isfinite(value) else None
+        if integer is None or not -0x80000000 <= integer <= 0x7FFFFFFF:
+            integer = INTEGER_INDEFINITE
+            self.fsw |= INVALID_OPERATION
+        m.write(self, 32, integer & 0xFFFFFFFF)
+        self.fpu_pop()
+
+    def fstp_m32(self, m):
+        """The top rounded to a real of 32 bits, written to memory and taken off. The rounding is to the nearest, as
+        struct does it; a number too big for it is an infinity with the overflow flag (the exception is masked)."""
+        value = self.st(0)
+        try:
+            packed = struct.pack("<f", value)
+        except OverflowError:
+            packed = struct.pack("<f", math.copysign(math.inf, value))
+            self.fsw |= OVERFLOW
+        if self.fcw & ROUNDING and value == value and struct.unpack("<f", packed)[0] != value:
+            raise NotImplementedError(f"fstp dword with the rounding control {self.fcw >> 10 & 3} at "
+                                      f"{self.s[self.CS]:04X}:{self.start_ip:04X}: {value!r} is not exact")
+        m.write(self, 32, struct.unpack("<I", packed)[0])
+        self.fpu_pop()
+
     def fxch(self, i):
         top, other = self.st(0), self.st(i)
         self.set_st(0, other)
@@ -191,21 +313,19 @@ class Fpu:
         self.set_st(0, quotient)
 
     def fmulp(self, i):
-        a, b = self.st(i), self.st(0)
-        if (math.isinf(a) and b == 0) or (a == 0 and math.isinf(b)):  # an infinity by a zero is not a number
-            self.fsw |= INVALID_OPERATION
-        self.set_st(i, a * b)
+        self.set_st(i, self.with_flags(multiply(self.st(i), self.st(0))))
         self.fpu_pop()
 
     def fsubp(self, i):
-        a, b = self.st(i), self.st(0)
-        if math.isinf(a) and math.isinf(b) and a == b:  # an infinity less the same one is not a number
-            self.fsw |= INVALID_OPERATION
-        self.set_st(i, a - b)
+        self.set_st(i, self.with_flags(subtract(self.st(i), self.st(0))))
         self.fpu_pop()
 
     def fcomp_m64(self, m):
-        codes = compare(self.st(0), self.read_double(m))
+        self.compare_and_pop(self.read_double(m))
+
+    def compare_and_pop(self, real):
+        """The condition codes of the top compared with the real, and the top taken off."""
+        codes = compare(self.st(0), real)
         if codes == C0 | C2 | C3:  # the comparison with a number that is not one is an invalid operation
             self.fsw |= INVALID_OPERATION
         self.set_conditions(codes)

@@ -375,6 +375,186 @@ class TestTheRealsOfTheStack(FpuMachine):
         self.assertEqual(cpu.ftop, 0)
 
 
+class TestIntegersAndSingles(FpuMachine):
+    """fild dword and fstp dword: the game turns an integer into a float of 32 bits with them (UFO2P.EXE 11F8A6:
+    fild dword [eax] / fstp dword [ecx+2Ah])."""
+
+    def test_fild_dword_pushes_the_signed_integer(self):
+        for integer, real in ((5, 5.0), (0xFFFFFFFF, -1.0), (0x80000000, -2147483648.0), (0x7FFFFFFF, 2147483647.0)):
+            cpu = self.machine(bytes_of("db 05 00 00 60 00"))  # fild dword [00600000]
+            cpu.mem[0x00600000:0x00600004] = struct.pack("<I", integer)
+            cpu.step()
+            self.assertEqual((cpu.st(0), cpu.ftop), (real, 7), hex(integer))
+
+    def test_fstp_dword_writes_a_single_and_takes_the_top_off(self):
+        cpu = self.machine(bytes_of("d9 1d 00 00 60 00"))  # fstp dword [00600000]
+        cpu.fpu_push(-2.5)
+        cpu.step()
+        self.assertEqual(cpu.mem[0x00600000:0x00600004], struct.pack("<f", -2.5))
+        self.assertEqual(cpu.ftop, 0)
+
+    def test_fstp_dword_rounds_to_the_nearest_single(self):
+        cpu = self.machine(bytes_of("d9 1d 00 00 60 00"))
+        cpu.fpu_push(16777217.0)  # 2^24 + 1 lies between two singles: to the even one, 2^24
+        cpu.step()
+        self.assertEqual(struct.unpack("<f", cpu.mem[0x00600000:0x00600004])[0], 16777216.0)
+
+    def test_a_number_too_big_for_a_single_is_an_infinity_and_the_overflow_flag(self):
+        cpu = self.machine(bytes_of("d9 1d 00 00 60 00"))
+        cpu.fpu_push(-1e300)
+        cpu.step()
+        self.assertEqual(struct.unpack("<f", cpu.mem[0x00600000:0x00600004])[0], -math.inf)
+        self.assertEqual(cpu.fsw & fpu.OVERFLOW, fpu.OVERFLOW)
+
+    def test_another_rounding_stops_only_when_the_single_is_not_exact(self):
+        cpu = self.machine(bytes_of("d9 1d 00 00 60 00", "d9 1d 00 00 60 00"))
+        cpu.fcw = 0x0F7F  # rounding toward zero
+        cpu.fpu_push(0.1)
+        cpu.fpu_push(0.5)
+        cpu.step()  # 0.5 is exact: written
+        self.assertEqual(struct.unpack("<f", cpu.mem[0x00600000:0x00600004])[0], 0.5)
+        with self.assertRaisesRegex(NotImplementedError, "rounding control 3"):
+            cpu.step()
+
+    def test_the_pair_of_the_game_makes_a_float_of_an_integer(self):
+        cpu = self.machine(bytes_of("db 00", "d9 59 2a"))
+        cpu.set32(CPU.AX, DATA)
+        cpu.set32(CPU.CX, DATA + 0x100)
+        cpu.mem[DATA:DATA + 4] = struct.pack("<i", -300)
+        cpu.step()
+        cpu.step()
+        self.assertEqual(cpu.mem[DATA + 0x12A:DATA + 0x12E], struct.pack("<f", -300.0))
+        self.assertEqual(cpu.ftop, 0)
+
+
+class TestTheArithmeticWithSingles(FpuMachine):
+    """What UFO2P.EXE does at 11F3D6: fild word, the arithmetic of the top with a single in memory, and fistp dword
+    after the rounding toward zero of the Watcom runtime (__CHP at 1B15AA)."""
+
+    def single_at(self, real, *code):
+        """A machine with the single at [00600000] and the code ready."""
+        cpu = self.machine(bytes_of(*code))
+        cpu.mem[0x00600000:0x00600004] = struct.pack("<f", real)
+        return cpu
+
+    def test_fild_word_pushes_the_signed_integer_of_16_bits(self):
+        for integer, real in ((0x0007, 7.0), (0xFFFF, -1.0), (0x8000, -32768.0)):
+            cpu = self.machine(bytes_of("df 05 00 00 60 00"))  # fild word [00600000]
+            cpu.mem[0x00600000:0x00600002] = struct.pack("<H", integer)
+            cpu.step()
+            self.assertEqual(cpu.st(0), real, hex(integer))
+
+    def test_the_top_with_a_single_in_memory(self):
+        for code, top, real, result in (("d8 05 00 00 60 00", 3.0, 0.5, 3.5),  # fadd dword
+                                        ("d8 0d 00 00 60 00", 3.0, 0.5, 1.5),  # fmul dword
+                                        ("d8 25 00 00 60 00", 3.0, 0.5, 2.5),  # fsub dword: the top less memory
+                                        ("d8 3d 00 00 60 00", 4.0, 2.0, 0.5)):  # fdivr dword: memory by the top
+            cpu = self.single_at(real, code)
+            cpu.fpu_push(top)
+            cpu.step()
+            self.assertEqual((cpu.st(0), cpu.ftop, cpu.fsw), (result, 7, 0), code)
+
+    def test_fsubr_dword_is_memory_less_the_top(self):
+        cpu = self.single_at(10.0, "d8 2d 00 00 60 00")  # fsubr dword [00600000]
+        cpu.fpu_push(3.0)
+        cpu.step()
+        self.assertEqual((cpu.st(0), cpu.ftop), (7.0, 7))
+
+    def test_fld_dword_pushes_the_single(self):
+        cpu = self.single_at(-0.75, "d9 05 00 00 60 00")  # fld dword [00600000]
+        cpu.step()
+        self.assertEqual((cpu.st(0), cpu.ftop), (-0.75, 7))
+
+    def test_fadd_qword_adds_the_double(self):
+        cpu = self.machine(bytes_of("dc 05 00 00 60 00"))  # fadd qword [00600000]: UFO2P.EXE adds 0.5 so
+        cpu.mem[0x00600000:0x00600008] = struct.pack("<d", 0.5)  # that the chop rounds half up
+        cpu.fpu_push(2.25)
+        cpu.step()
+        self.assertEqual((cpu.st(0), cpu.ftop), (2.75, 7))
+
+    def test_fcomp_dword_compares_the_top_with_a_single_and_takes_it_off(self):
+        for top, real, codes in ((1.0, 2.0, fpu.C0), (2.0, 2.0, fpu.C3), (3.0, 2.0, 0), (1.0, math.nan, 0x4500)):
+            cpu = self.single_at(real, "d8 1d 00 00 60 00")  # fcomp dword [00600000]
+            cpu.fpu_push(top)
+            cpu.step()
+            self.assertEqual((cpu.fsw & fpu.CONDITIONS, cpu.ftop), (codes, 0), (top, real))
+
+    def test_the_minimum_of_the_game_with_fcomp_dword_fnstsw_and_sahf(self):
+        """11F32F: fld dword [esp+28] / fcomp dword [esp+14] / fnstsw ax / sahf / jae: the jump is taken when the
+        first is not below the second."""
+        code = bytes_of("d9 44 24 28", "d8 5c 24 14", FNSTSW_AX, "9e", "73 06")
+        for first, second, taken in ((1.0, 2.0, False), (2.0, 2.0, True), (3.0, 2.0, True)):
+            cpu = self.machine(code, esp=DATA)
+            cpu.mem[DATA + 0x28:DATA + 0x2C] = struct.pack("<f", first)
+            cpu.mem[DATA + 0x14:DATA + 0x18] = struct.pack("<f", second)
+            for _ in range(5):
+                cpu.step()
+            self.assertEqual(cpu.ip, AT + len(code) + (6 if taken else 0), (first, second))
+
+    def test_their_special_cases_raise_the_flags(self):
+        for code, top, real, flag in (("d8 05 00 00 60 00", math.inf, -math.inf, fpu.INVALID_OPERATION),
+                                      ("d8 0d 00 00 60 00", 0.0, math.inf, fpu.INVALID_OPERATION),
+                                      ("d8 25 00 00 60 00", math.inf, math.inf, fpu.INVALID_OPERATION),
+                                      ("d8 3d 00 00 60 00", 0.0, 1.0, fpu.ZERO_DIVIDE),
+                                      ("d8 2d 00 00 60 00", math.inf, math.inf, fpu.INVALID_OPERATION),
+                                      ("d8 1d 00 00 60 00", 1.0, math.nan, fpu.INVALID_OPERATION)):
+            cpu = self.single_at(real, code)
+            cpu.fpu_push(top)
+            cpu.step()
+            self.assertEqual(cpu.fsw & flag, flag, code)
+
+    def test_frndint_rounds_by_the_rounding_control(self):
+        for control, results in ((0x037F, (2.0, 2.0, -2.0, 4.0)), (0x077F, (2.0, 1.0, -3.0, 3.0)),
+                                 (0x0B7F, (3.0, 2.0, -2.0, 4.0)), (0x0F7F, (2.0, 1.0, -2.0, 3.0))):
+            for value, result in zip((2.5, 1.5, -2.5, 3.5), results):
+                cpu = self.machine(bytes_of("d9 fc"))
+                cpu.fcw = control
+                cpu.fpu_push(value)
+                cpu.step()
+                self.assertEqual(cpu.st(0), result, (hex(control), value))
+
+    def test_frndint_keeps_the_sign_of_a_zero_and_leaves_an_infinity(self):
+        cpu = self.pushed_and_run("d9 fc", -0.25)
+        self.assertEqual(math.copysign(1, cpu.st(0)), -1.0)
+        self.assertEqual(self.pushed_and_run("d9 fc", -math.inf).st(0), -math.inf)
+
+    def pushed_and_run(self, code, value):
+        cpu = self.machine(bytes_of(code))
+        cpu.fpu_push(value)
+        cpu.step()
+        return cpu
+
+    def test_fistp_dword_writes_the_integer_by_the_rounding_control_and_takes_the_top_off(self):
+        cpu = self.machine(bytes_of("db 1d 00 00 60 00"))  # fistp dword [00600000]
+        cpu.fpu_push(-2.5)
+        cpu.step()
+        self.assertEqual((struct.unpack("<i", cpu.mem[0x00600000:0x00600004])[0], cpu.ftop), (-2, 0))
+        cpu = self.machine(bytes_of("db 1d 00 00 60 00"))
+        cpu.fcw = 0x077F  # down
+        cpu.fpu_push(-2.5)
+        cpu.step()
+        self.assertEqual(struct.unpack("<i", cpu.mem[0x00600000:0x00600004])[0], -3)
+
+    def test_fistp_dword_of_what_does_not_fit_is_the_integer_indefinite(self):
+        for value in (2147483648.0, -2147483649.0, math.inf, math.nan):
+            cpu = self.pushed_and_run("db 1d 00 00 60 00", value)
+            self.assertEqual(cpu.mem[0x00600000:0x00600004], b"\0\0\0\x80", value)
+            self.assertEqual(cpu.fsw & fpu.INVALID_OPERATION, fpu.INVALID_OPERATION)
+        self.assertEqual(self.pushed_and_run("db 1d 00 00 60 00", -2147483648.0).fsw, 0)
+
+    def test_the_chop_of_the_runtime_then_fistp_gives_the_integer_toward_zero(self):
+        """__CHP of UFO2P.EXE (1B15AA): the control word with the rounding toward zero, frndint, the old word back."""
+        chp = ("50 9b d9 3c 24 9b ff 34 24 c6 44 24 01 1f d9 2c 24 d9 fc d9 6c 24 04 9b 8d 64 24 08 c3")
+        code = bytes_of("e8 06 00 00 00", "db 1d 00 00 60 00", chp)  # call +6 / fistp dword [00600000] / __CHP
+        for value, integer in ((-2.75, -2), (2.75, 2), (0.5, 0)):
+            cpu = self.machine(code)
+            cpu.fpu_push(value)
+            for _ in range(14):  # the call, the 12 of __CHP, fistp
+                cpu.step()
+            self.assertEqual(struct.unpack("<i", cpu.mem[0x00600000:0x00600004])[0], integer, value)
+            self.assertEqual((cpu.fcw, cpu.ftop, cpu.ip, cpu.get32(CPU.SP)), (0x037F, 0, AT + 11, STACK))
+
+
 class TestTheDisassembler(FpuMachine):
     def text(self, *instruction):
         cpu = self.machine(bytes_of(*instruction))
@@ -388,7 +568,14 @@ class TestTheDisassembler(FpuMachine):
                                (FNSTSW_MEM, "fnstsw word [00500000]"), ("d9 7c 24 04", "fnstcw word [esp+4]"),
                                ("dd 44 24 08", "fld qword [esp+8]"), ("d9 c9", "fxch st(1)"),
                                ("d8 f1", "fdiv st, st(1)"), ("de c9", "fmulp st(1), st"),
-                               ("de e9", "fsubp st(1), st"), ("dc 1d 18 4a 1c 00", "fcomp qword [001C4A18]")):
+                               ("de e9", "fsubp st(1), st"), ("dc 1d 18 4a 1c 00", "fcomp qword [001C4A18]"),
+                               ("db 00", "fild dword [eax]"), ("d9 59 2a", "fstp dword [ecx+2A]"),
+                               ("df 40 1e", "fild word [eax+1E]"), ("d8 48 2a", "fmul dword [eax+2A]"),
+                               ("d8 7c 24 08", "fdivr dword [esp+8]"), ("d8 44 24 08", "fadd dword [esp+8]"),
+                               ("d8 64 24 08", "fsub dword [esp+8]"), ("db 5c 24 04", "fistp dword [esp+4]"),
+                               ("d9 fc", "frndint"), ("d8 6c 24 28", "fsubr dword [esp+28]"),
+                               ("d9 44 24 28", "fld dword [esp+28]"), ("d8 5c 24 14", "fcomp dword [esp+14]"),
+                               ("dc 05 4e 21 1c 00", "fadd qword [001C214E]")):
             length, shown = self.text(hexbytes)
             self.assertEqual((length, shown), (len(bytes.fromhex(hexbytes)), text), hexbytes)
 
